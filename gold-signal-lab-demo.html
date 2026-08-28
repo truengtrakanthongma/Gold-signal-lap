@@ -495,6 +495,46 @@ body.simple .narr p { font-size: 13.8px; }
 .spot-steps li { margin-bottom: 5px; }
 @media (max-width: 720px) { .instrument-line { font-size: 12.5px; } .spot-steps { font-size: 13.5px; } }
 
+/* ══ ขั้นตอนเข้าไม้ ═══════════════════════════════════════ */
+.entry-guide { background: var(--panel-2); border-radius: 9px; padding: 12px 13px; }
+.entry-guide h3 { margin: 0 0 10px; font-size: 13px; color: var(--gold); }
+.step { display: grid; grid-template-columns: 26px 1fr; gap: 10px; margin-bottom: 13px; }
+.step-n {
+  width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #04121e;
+  font-weight: 700; font-size: 13px; display: grid; place-items: center;
+}
+.step > div > b { display: block; font-size: 13px; margin-bottom: 6px; }
+.opt {
+  background: rgba(2,6,23,.45); border-radius: 7px; padding: 8px 10px; margin-bottom: 6px;
+  font-size: 12.8px; line-height: 1.6; border-left: 3px solid var(--line);
+}
+.opt.best { border-left-color: var(--up); }
+.opt.stop { border-left-color: var(--down); }
+.opt .num { font-family: 'JetBrains Mono', monospace; font-size: 14.5px; color: #fff; }
+.opt-tag {
+  display: inline-block; font-size: 10.5px; padding: 1px 8px; border-radius: 20px;
+  background: var(--up); color: #04180c; font-weight: 700; margin-right: 6px; vertical-align: 1px;
+}
+.opt-tag.alt { background: var(--muted); color: #0b1020; }
+.opt-tag.no { background: var(--down); color: #fff; }
+.opt-why { display: block; color: var(--muted); font-size: 11.8px; margin-top: 3px; }
+.order-table { margin: 2px 0 0; }
+.order-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.order-table td:first-child { color: var(--muted); }
+.order-table td.num { font-family: 'JetBrains Mono', monospace; font-size: 15px; color: #fff; text-align: left; }
+.order-table td.hint { color: var(--muted); font-size: 11.5px; text-align: right; }
+.invalidate {
+  border-top: 1px dashed var(--line); padding-top: 9px; font-size: 12.5px;
+}
+.invalidate b { color: var(--gold); font-size: 12.5px; }
+.invalidate ul { margin: 5px 0 0; padding-left: 18px; color: #cbd5e1; }
+.invalidate li { margin-bottom: 3px; line-height: 1.6; }
+@media (max-width: 720px) {
+  .opt, .invalidate, .order-table td { font-size: 13.5px; }
+  .opt .num, .order-table td.num { font-size: 16px; }
+  .opt-why { font-size: 12.5px; }
+}
+
 </style>
 </head>
 <body>
@@ -1502,6 +1542,7 @@ const DEFAULT_CFG = {
   zoneAtrMult: 0.4,   // ความกว้างของโซนแนวรับ/ต้าน เทียบกับ ATR (แคบ = โซนคมชัดขึ้น)
   slAtrMult: 1.5,
   maxSlAtrMult: 3.0,
+  minEntryRR: 1.2,     // ได้:เสีย ต่ำกว่านี้ = ไม่คุ้มเข้า แม้สัญญาณจะยังดี
   threshold: 35,       // คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ
   adxTrendMin: 22,     // ADX เกินนี้ = โหมดเทรนด์, ต่ำกว่า = โหมดกรอบ
   minAtrPct: 0.02,     // ผันผวนต่ำกว่านี้ = ตลาดตาย ไม่คุ้มค่าสเปรด (%)
@@ -1858,8 +1899,39 @@ function buildSetup(ctx, i, scored, opts = {}) {
   const mainR = targetR || 2;
   const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
 
+  /*
+   * โซนราคาที่ "เข้าได้" ไม่ใช่ราคาเดียว
+   *
+   * ราคาที่ดีที่สุดคือรอให้ย่อกลับมาที่แนวใกล้ ๆ (เส้นค่าเฉลี่ย/แนวรับ) เพราะได้ระยะ SL สั้นลง
+   * ส่วนราคาที่แย่ที่สุดที่ยังพอเข้าได้ คือจุดที่อัตราส่วนได้:เสีย ตกลงมาถึงขั้นต่ำที่ยอมรับได้
+   *
+   * คำนวณจาก: (เป้า − เข้า) ÷ (เข้า − ตัดขาดทุน) = อัตราส่วนขั้นต่ำ
+   * แก้สมการหา "เข้า" ได้เป็น (เป้า + ขั้นต่ำ×ตัดขาดทุน) ÷ (1 + ขั้นต่ำ)
+   * ใช้สูตรเดียวกันทั้งฝั่งซื้อและฝั่งขาย
+   */
+  const minRR = cfg.minEntryRR || 1.2;
+  const entryLimit = (tpMain + minRR * sl) / (1 + minRR);
+
+  // ราคาในอุดมคติ = ย่อกลับมาแตะแนวที่ใกล้ที่สุดที่ยังอยู่ระหว่างจุดเข้ากับจุดตัดขาดทุน
+  const pullbackCandidates = [];
+  const e20 = ctx.ema20[i];
+  if (e20 !== null) pullbackCandidates.push({ price: e20, why: 'เส้นค่าเฉลี่ย 20 แท่ง' });
+  if (side > 0 && support) pullbackCandidates.push({ price: support.price, why: `แนวรับที่ถูกทดสอบมา ${support.touches} ครั้ง` });
+  if (side < 0 && resistance) pullbackCandidates.push({ price: resistance.price, why: `แนวต้านที่ถูกทดสอบมา ${resistance.touches} ครั้ง` });
+  const valid = pullbackCandidates.filter((c) => (side > 0
+    ? c.price < entryPrice && c.price > sl
+    : c.price > entryPrice && c.price < sl));
+  valid.sort((a, b) => (side > 0 ? b.price - a.price : a.price - b.price));
+  const ideal = valid[0] || null;
+
+  // ตอนนี้ราคาอยู่ตรงไหนของโซน — ตัดสินว่าเข้าได้เลยหรือควรตั้งรอ
+  const stillOk = side > 0 ? entryPrice <= entryLimit : entryPrice >= entryLimit;
+  const rrNow = Math.abs(tpMain - entryPrice) / slDist;
+
   return {
     side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
+    entryLimit, entryIdeal: ideal ? ideal.price : null, entryIdealWhy: ideal ? ideal.why : null,
+    entryOk: stillOk, rrNow, minRR,
     slDist, slAtr: slDist / atrVal, atr: atrVal,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, oz: lots * contractSize,
@@ -4581,31 +4653,72 @@ function renderPlan() {
   const reach = opt ? opt.reachRates.find((x) => Math.abs(x.targetR - s.mainR) < 1e-9) : null;
 
   box.className = 'plan-v2';
+  const orderType = s.side > 0 ? 'Buy' : 'Sell';
+  const hasPullback = s.entryIdeal !== null;
+  const gapToIdeal = hasPullback ? Math.abs(s.entry - s.entryIdeal) : 0;
+  const idealIsClose = hasPullback && gapToIdeal < s.slDist * 0.25;
+
   box.innerHTML = `
     ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
     <div class="plan-main">
-      <div class="pm-row entry">
-        <span class="pm-label">เข้า${dir}ที่</span>
-        <span class="pm-val">${s.entry.toFixed(2)}</span>
-        <span class="pm-note">ตั้งเป็นคำสั่งรอได้</span>
-      </div>
-      <div class="pm-row sl">
-        <span class="pm-label">ตัดขาดทุน</span>
+      <div class="pm-row entry"><span class="pm-label">เข้า${dir}ที่</span>
+        <span class="pm-val">${s.entry.toFixed(2)}</span><span class="pm-note">ราคาตลาดตอนนี้</span></div>
+      <div class="pm-row sl"><span class="pm-label">ตัดขาดทุน</span>
         <span class="pm-val">${s.sl.toFixed(2)}</span>
-        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย ${riskMoney.toFixed(0)}</span>
-      </div>
-      <div class="pm-row tp">
-        <span class="pm-label">เป้าทำกำไร</span>
+        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย ${riskMoney.toFixed(0)}</span></div>
+      <div class="pm-row tp"><span class="pm-label">เป้าทำกำไร</span>
         <span class="pm-val">${s.tpMain.toFixed(2)}</span>
-        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ ${(riskMoney * rr).toFixed(0)}</span>
+        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ ${(riskMoney * rr).toFixed(0)}</span></div>
+    </div>
+
+    <div class="entry-guide">
+      <h3>วิธีเข้าไม้ — ทำตามทีละขั้น</h3>
+
+      <div class="step"><span class="step-n">1</span><div>
+        <b>ตั้งคำสั่งที่ราคาไหน</b>
+        ${hasPullback && !idealIsClose ? `
+          <div class="opt best"><span class="opt-tag">ดีที่สุด</span>
+            ตั้ง <b>${orderType} Limit</b> ที่ <b class="num">${s.entryIdeal.toFixed(2)}</b> — รอราคาย่อกลับมาที่${s.entryIdealWhy}
+            <span class="opt-why">ได้ระยะดีกว่า แต่ถ้าราคาไม่ย่อกลับมาก็อดเข้า ซึ่งไม่เสียหายอะไร</span></div>
+          <div class="opt"><span class="opt-tag alt">หรือ</span>
+            เข้าเลยที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
+            <span class="opt-why">ได้เข้าแน่นอน แต่ระยะแย่กว่าประมาณ ${gapToIdeal.toFixed(2)} ดอลลาร์</span></div>` : `
+          <div class="opt best"><span class="opt-tag">เข้าได้เลย</span>
+            ตั้ง <b>${orderType}</b> ที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
+            <span class="opt-why">${hasPullback ? 'ราคาอยู่ในโซนที่ดีอยู่แล้ว ไม่ต้องรอย่อ' : 'ไม่มีแนวใกล้ ๆ ให้รอย่อ เข้าที่ราคาตลาดได้'}</span></div>`}
+        <div class="opt stop"><span class="opt-tag no">ห้ามเข้า</span>
+          ถ้าราคา${s.side > 0 ? 'วิ่งขึ้นเกิน' : 'วิ่งลงต่ำกว่า'} <b class="num">${s.entryLimit.toFixed(2)}</b>
+          <span class="opt-why">เลยจุดนี้ไป ได้:เสีย จะต่ำกว่า ${s.minRR} : 1 — ไม่คุ้มเสี่ยงแล้ว ปล่อยไม้นี้ผ่านไป</span></div>
+      </div></div>
+
+      <div class="step"><span class="step-n">2</span><div>
+        <b>ใส่ตัวเลขให้ครบก่อนกดยืนยัน</b>
+        <table class="order-table"><tbody>
+          <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">ห้ามข้ามเด็ดขาด</td></tr>
+          <tr><td>Take Profit</td><td class="num">${s.tpMain.toFixed(2)}</td><td class="hint">${s.mainR} เท่าของความเสี่ยง</td></tr>
+          <tr><td>ขนาด (Lot)</td><td class="num">${lots.toFixed(3)}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์</td></tr>
+        </tbody></table>
+      </div></div>
+
+      <div class="step"><span class="step-n">3</span><div>
+        <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
+        <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
+        ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>
+      </div></div>
+
+      <div class="invalidate"><b>แผนนี้ยกเลิกเมื่อไร</b>
+        <ul>
+          <li>ราคา${s.side > 0 ? 'ขึ้นเกิน' : 'ลงต่ำกว่า'} <b>${s.entryLimit.toFixed(2)}</b> ก่อนที่คุณจะได้เข้า</li>
+          <li>ราคา${s.side > 0 ? 'หลุด' : 'ทะลุ'} <b>${s.sl.toFixed(2)}</b> — สัญญาณนี้ผิดแล้ว ยอมรับแล้วไปไม้ถัดไป</li>
+          <li>สัญญาณบนหน้าจอเปลี่ยนทิศ หรือกลับไปเป็น "รอจังหวะ"</li>
+        </ul>
       </div>
     </div>
+
     <div class="plan-size">
-      ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (${(lots * 100).toFixed(1)} ออนซ์)
-      · ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
+      ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
       ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
       ${(() => {
-        // จุดคุ้มทุน: ที่อัตราส่วนได้:เสีย R ต้องชนะ 1/(1+R) ถึงจะเสมอตัว
         const be = (1 / (1 + rr)) * 100;
         const p = reach && reach.outSample !== null ? reach.outSample : null;
         return `<br><span class="be-line">ที่อัตราส่วนนี้ <b>ชนะเกิน ${be.toFixed(0)}% ก็กำไรแล้ว</b>`
@@ -4615,7 +4728,6 @@ function renderPlan() {
           + '</span>';
       })()}
     </div>
-
     <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
       <summary>ดูที่มาของตัวเลขทั้งหมด</summary>
       <div class="why-body">

@@ -702,31 +702,72 @@ function renderPlan() {
   const reach = opt ? opt.reachRates.find((x) => Math.abs(x.targetR - s.mainR) < 1e-9) : null;
 
   box.className = 'plan-v2';
+  const orderType = s.side > 0 ? 'Buy' : 'Sell';
+  const hasPullback = s.entryIdeal !== null;
+  const gapToIdeal = hasPullback ? Math.abs(s.entry - s.entryIdeal) : 0;
+  const idealIsClose = hasPullback && gapToIdeal < s.slDist * 0.25;
+
   box.innerHTML = `
     ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
     <div class="plan-main">
-      <div class="pm-row entry">
-        <span class="pm-label">เข้า${dir}ที่</span>
-        <span class="pm-val">${s.entry.toFixed(2)}</span>
-        <span class="pm-note">ตั้งเป็นคำสั่งรอได้</span>
-      </div>
-      <div class="pm-row sl">
-        <span class="pm-label">ตัดขาดทุน</span>
+      <div class="pm-row entry"><span class="pm-label">เข้า${dir}ที่</span>
+        <span class="pm-val">${s.entry.toFixed(2)}</span><span class="pm-note">ราคาตลาดตอนนี้</span></div>
+      <div class="pm-row sl"><span class="pm-label">ตัดขาดทุน</span>
         <span class="pm-val">${s.sl.toFixed(2)}</span>
-        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(0)}</span>
-      </div>
-      <div class="pm-row tp">
-        <span class="pm-label">เป้าทำกำไร</span>
+        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(0)}</span></div>
+      <div class="pm-row tp"><span class="pm-label">เป้าทำกำไร</span>
         <span class="pm-val">${s.tpMain.toFixed(2)}</span>
-        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${(riskMoney * rr).toFixed(0)}</span>
+        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${(riskMoney * rr).toFixed(0)}</span></div>
+    </div>
+
+    <div class="entry-guide">
+      <h3>วิธีเข้าไม้ — ทำตามทีละขั้น</h3>
+
+      <div class="step"><span class="step-n">1</span><div>
+        <b>ตั้งคำสั่งที่ราคาไหน</b>
+        ${hasPullback && !idealIsClose ? `
+          <div class="opt best"><span class="opt-tag">ดีที่สุด</span>
+            ตั้ง <b>${orderType} Limit</b> ที่ <b class="num">${s.entryIdeal.toFixed(2)}</b> — รอราคาย่อกลับมาที่${s.entryIdealWhy}
+            <span class="opt-why">ได้ระยะดีกว่า แต่ถ้าราคาไม่ย่อกลับมาก็อดเข้า ซึ่งไม่เสียหายอะไร</span></div>
+          <div class="opt"><span class="opt-tag alt">หรือ</span>
+            เข้าเลยที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
+            <span class="opt-why">ได้เข้าแน่นอน แต่ระยะแย่กว่าประมาณ ${gapToIdeal.toFixed(2)} ดอลลาร์</span></div>` : `
+          <div class="opt best"><span class="opt-tag">เข้าได้เลย</span>
+            ตั้ง <b>${orderType}</b> ที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
+            <span class="opt-why">${hasPullback ? 'ราคาอยู่ในโซนที่ดีอยู่แล้ว ไม่ต้องรอย่อ' : 'ไม่มีแนวใกล้ ๆ ให้รอย่อ เข้าที่ราคาตลาดได้'}</span></div>`}
+        <div class="opt stop"><span class="opt-tag no">ห้ามเข้า</span>
+          ถ้าราคา${s.side > 0 ? 'วิ่งขึ้นเกิน' : 'วิ่งลงต่ำกว่า'} <b class="num">${s.entryLimit.toFixed(2)}</b>
+          <span class="opt-why">เลยจุดนี้ไป ได้:เสีย จะต่ำกว่า ${s.minRR} : 1 — ไม่คุ้มเสี่ยงแล้ว ปล่อยไม้นี้ผ่านไป</span></div>
+      </div></div>
+
+      <div class="step"><span class="step-n">2</span><div>
+        <b>ใส่ตัวเลขให้ครบก่อนกดยืนยัน</b>
+        <table class="order-table"><tbody>
+          <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">ห้ามข้ามเด็ดขาด</td></tr>
+          <tr><td>Take Profit</td><td class="num">${s.tpMain.toFixed(2)}</td><td class="hint">${s.mainR} เท่าของความเสี่ยง</td></tr>
+          <tr><td>ขนาด (Lot)</td><td class="num">${lots.toFixed(3)}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์</td></tr>
+        </tbody></table>
+      </div></div>
+
+      <div class="step"><span class="step-n">3</span><div>
+        <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
+        <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
+        ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>
+      </div></div>
+
+      <div class="invalidate"><b>แผนนี้ยกเลิกเมื่อไร</b>
+        <ul>
+          <li>ราคา${s.side > 0 ? 'ขึ้นเกิน' : 'ลงต่ำกว่า'} <b>${s.entryLimit.toFixed(2)}</b> ก่อนที่คุณจะได้เข้า</li>
+          <li>ราคา${s.side > 0 ? 'หลุด' : 'ทะลุ'} <b>${s.sl.toFixed(2)}</b> — สัญญาณนี้ผิดแล้ว ยอมรับแล้วไปไม้ถัดไป</li>
+          <li>สัญญาณบนหน้าจอเปลี่ยนทิศ หรือกลับไปเป็น "รอจังหวะ"</li>
+        </ul>
       </div>
     </div>
+
     <div class="plan-size">
-      ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (${(lots * 100).toFixed(1)} ออนซ์)
-      · ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
+      ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
       ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
       ${(() => {
-        // จุดคุ้มทุน: ที่อัตราส่วนได้:เสีย R ต้องชนะ 1/(1+R) ถึงจะเสมอตัว
         const be = (1 / (1 + rr)) * 100;
         const p = reach && reach.outSample !== null ? reach.outSample : null;
         return `<br><span class="be-line">ที่อัตราส่วนนี้ <b>ชนะเกิน ${be.toFixed(0)}% ก็กำไรแล้ว</b>`
@@ -736,7 +777,6 @@ function renderPlan() {
           + '</span>';
       })()}
     </div>
-
     <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
       <summary>ดูที่มาของตัวเลขทั้งหมด</summary>
       <div class="why-body">

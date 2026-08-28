@@ -22,6 +22,7 @@ export const DEFAULT_CFG = {
   zoneAtrMult: 0.4,   // ความกว้างของโซนแนวรับ/ต้าน เทียบกับ ATR (แคบ = โซนคมชัดขึ้น)
   slAtrMult: 1.5,
   maxSlAtrMult: 3.0,
+  minEntryRR: 1.2,     // ได้:เสีย ต่ำกว่านี้ = ไม่คุ้มเข้า แม้สัญญาณจะยังดี
   threshold: 35,       // คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ
   adxTrendMin: 22,     // ADX เกินนี้ = โหมดเทรนด์, ต่ำกว่า = โหมดกรอบ
   minAtrPct: 0.02,     // ผันผวนต่ำกว่านี้ = ตลาดตาย ไม่คุ้มค่าสเปรด (%)
@@ -378,8 +379,39 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   const mainR = targetR || 2;
   const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
 
+  /*
+   * โซนราคาที่ "เข้าได้" ไม่ใช่ราคาเดียว
+   *
+   * ราคาที่ดีที่สุดคือรอให้ย่อกลับมาที่แนวใกล้ ๆ (เส้นค่าเฉลี่ย/แนวรับ) เพราะได้ระยะ SL สั้นลง
+   * ส่วนราคาที่แย่ที่สุดที่ยังพอเข้าได้ คือจุดที่อัตราส่วนได้:เสีย ตกลงมาถึงขั้นต่ำที่ยอมรับได้
+   *
+   * คำนวณจาก: (เป้า − เข้า) ÷ (เข้า − ตัดขาดทุน) = อัตราส่วนขั้นต่ำ
+   * แก้สมการหา "เข้า" ได้เป็น (เป้า + ขั้นต่ำ×ตัดขาดทุน) ÷ (1 + ขั้นต่ำ)
+   * ใช้สูตรเดียวกันทั้งฝั่งซื้อและฝั่งขาย
+   */
+  const minRR = cfg.minEntryRR || 1.2;
+  const entryLimit = (tpMain + minRR * sl) / (1 + minRR);
+
+  // ราคาในอุดมคติ = ย่อกลับมาแตะแนวที่ใกล้ที่สุดที่ยังอยู่ระหว่างจุดเข้ากับจุดตัดขาดทุน
+  const pullbackCandidates = [];
+  const e20 = ctx.ema20[i];
+  if (e20 !== null) pullbackCandidates.push({ price: e20, why: 'เส้นค่าเฉลี่ย 20 แท่ง' });
+  if (side > 0 && support) pullbackCandidates.push({ price: support.price, why: `แนวรับที่ถูกทดสอบมา ${support.touches} ครั้ง` });
+  if (side < 0 && resistance) pullbackCandidates.push({ price: resistance.price, why: `แนวต้านที่ถูกทดสอบมา ${resistance.touches} ครั้ง` });
+  const valid = pullbackCandidates.filter((c) => (side > 0
+    ? c.price < entryPrice && c.price > sl
+    : c.price > entryPrice && c.price < sl));
+  valid.sort((a, b) => (side > 0 ? b.price - a.price : a.price - b.price));
+  const ideal = valid[0] || null;
+
+  // ตอนนี้ราคาอยู่ตรงไหนของโซน — ตัดสินว่าเข้าได้เลยหรือควรตั้งรอ
+  const stillOk = side > 0 ? entryPrice <= entryLimit : entryPrice >= entryLimit;
+  const rrNow = Math.abs(tpMain - entryPrice) / slDist;
+
   return {
     side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
+    entryLimit, entryIdeal: ideal ? ideal.price : null, entryIdealWhy: ideal ? ideal.why : null,
+    entryOk: stillOk, rrNow, minRR,
     slDist, slAtr: slDist / atrVal, atr: atrVal,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, oz: lots * contractSize,
