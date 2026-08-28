@@ -414,3 +414,60 @@ body.simple .narr p { font-size: 13.8px; }
   .tiny-btn { min-height: 34px; padding: 4px 12px; }
   .tour-btns .btn { min-height: 40px; }
 }
+
+/* ══ แผนเข้า-ออก: ตัวเลขหลักอ่านง่าย รายละเอียดกางออกได้ ══════════ */
+.plan-v2 { display: flex; flex-direction: column; gap: 10px; }
+.plan-gate {
+  background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
+  color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: 12.5px;
+}
+.plan-main { display: flex; flex-direction: column; gap: 1px; border-radius: 9px; overflow: hidden; }
+.pm-row {
+  display: grid; grid-template-columns: 92px 1fr auto; align-items: baseline; gap: 10px;
+  background: var(--panel-2); padding: 11px 13px; border-left: 3px solid var(--line);
+}
+.pm-row.entry { border-left-color: #e2e8f0; }
+.pm-row.sl { border-left-color: var(--down); }
+.pm-row.tp { border-left-color: var(--up); }
+.pm-label { font-size: 12.5px; color: var(--muted); }
+.pm-val {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 21px;
+  font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.3px;
+}
+.pm-row.sl .pm-val { color: #fca5a5; }
+.pm-row.tp .pm-val { color: #86efac; }
+.pm-note { font-size: 11.5px; color: var(--muted); text-align: right; white-space: nowrap; }
+.plan-size {
+  font-size: 12.5px; color: #cbd5e1; background: rgba(240,180,41,.07);
+  border: 1px solid rgba(240,180,41,.22); border-radius: 7px; padding: 8px 11px;
+}
+.plan-size b { color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+
+.plan-why { border-top: 1px dashed var(--line); padding-top: 8px; }
+.plan-why > summary {
+  cursor: pointer; font-size: 12.5px; color: var(--accent); list-style: none;
+  padding: 4px 0; user-select: none;
+}
+.plan-why > summary::-webkit-details-marker { display: none; }
+.plan-why > summary::before { content: '▸ '; }
+.plan-why[open] > summary::before { content: '▾ '; }
+.plan-why > summary:hover { color: #7dd3fc; }
+.plan-why > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.why-body { padding: 4px 0 2px; }
+.why-body h4 { margin: 12px 0 5px; font-size: 12.5px; color: var(--gold); }
+.why-body h4:first-child { margin-top: 4px; }
+.why-body p { margin: 0 0 7px; font-size: 12.5px; line-height: 1.7; color: #cbd5e1; }
+.why-stat { background: rgba(2,6,23,.5); border-radius: 6px; padding: 8px 10px; }
+.why-hint { color: var(--muted); font-size: 11.8px; }
+.why-table { margin: 5px 0 8px; }
+.why-table th { font-size: 11px; }
+.why-table td { font-size: 12px; padding: 4px 7px; }
+.why-table tr.chosen td { background: rgba(34,197,94,.12); color: #86efac; font-weight: 600; }
+
+@media (max-width: 720px) {
+  .pm-row { grid-template-columns: 1fr auto; }
+  .pm-note { grid-column: 1 / -1; text-align: left; }
+  .pm-val { font-size: 23px; }
+  .plan-why > summary { font-size: 14px; padding: 10px 0; }
+  .why-body p, .why-table td { font-size: 13.5px; }
+}

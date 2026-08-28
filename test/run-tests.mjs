@@ -282,6 +282,61 @@ section('4b) walk-forward — วัดผลบนข้อมูลที่�
     bt.factors.every((f, i) => i === 0 || f.edge === null || bt.factors[i - 1].edge === null || bt.factors[i - 1].edge >= f.edge));
 }
 
+// ── 4c. หาจุดเข้า-ออกที่ดีที่สุดจากสถิติ ───────────────────────────────
+section('4c) หาจุดตัดขาดทุนและเป้าหมายจากสถิติจริง');
+{
+  const { optimizeExits, evaluateTarget } = await import('../js/backtest.js');
+  const ctx = buildContext(makeCandles(1600, 313), DEFAULT_CFG);
+  const bt = runBacktest(ctx, { threshold: 30, maxHold: 40, spread: 0.3 });
+
+  ok('ทุกไม้บันทึกระยะที่วิ่งไปได้ก่อนโดน SL',
+    bt.trades.every((t) => typeof t.favBeforeStop === 'number' && t.favBeforeStop >= 0));
+  ok('ระยะก่อนโดน SL ต้องไม่เกินระยะสูงสุดที่เคยไปถึง',
+    bt.trades.every((t) => t.favBeforeStop <= t.maxFav + 1e-9));
+  ok('ไม้ที่โดน SL ต้องไปไม่ถึงเป้า 1R (ไม่งั้นคงปิดกำไรไปแล้ว)',
+    bt.trades.filter((t) => t.result === 'loss').every((t) => t.favBeforeStop < 1));
+  // ไม้ที่ปิดที่เป้า 2 เท่า ต้องบันทึกว่าไปถึง 2 เท่าจริง ไม่ใช่ค่าต่ำกว่านั้น
+  const won2R = bt.trades.filter((t) => t.result === 'win2R');
+  ok('ไม้ที่ปิดกำไรที่ 2 เท่า บันทึกระยะไว้ถึง 2 เท่าจริง',
+    won2R.length === 0 || won2R.every((t) => t.favBeforeStop >= 2 - 1e-6),
+    won2R.length ? `ต่ำสุดที่บันทึกได้ ${Math.min(...won2R.map((t) => t.favBeforeStop)).toFixed(3)} จาก ${won2R.length} ไม้` : 'ไม่มีไม้ประเภทนี้');
+  ok('อัตราถึงเป้า 2 เท่า ต้องไม่เป็นศูนย์ถ้ามีไม้ที่ปิดที่ 2 เท่า',
+    won2R.length === 0 || bt.trades.filter((t) => t.favBeforeStop >= 2).length > 0);
+
+  const e1 = evaluateTarget(bt.trades, 1);
+  const e2 = evaluateTarget(bt.trades, 2);
+  const e4 = evaluateTarget(bt.trades, 4);
+  ok('เป้ายิ่งไกล โอกาสถึงยิ่งน้อย', e1.hitRate >= e2.hitRate && e2.hitRate >= e4.hitRate,
+    `${e1.hitRate.toFixed(0)}% → ${e2.hitRate.toFixed(0)}% → ${e4.hitRate.toFixed(0)}%`);
+  ok('จำนวนไม้เท่ากันทุกเป้า (ประเมินจากข้อมูลชุดเดียวกัน)', e1.n === e2.n && e2.n === e4.n);
+  ok('เป้า 0 ไม้ → คืน null ไม่พัง', evaluateTarget([], 1) === null);
+
+  const opt = optimizeExits(ctx, { maxHold: 40, spread: 0.3 });
+  ok('หาค่าที่ดีที่สุดได้', opt.ok === true, opt.reason || '');
+  if (opt.ok) {
+    ok('ค่าที่เลือกอยู่ในรายการที่กวาดหาจริง',
+      opt.grid.some((g) => g.slAtrMult === opt.best.slAtrMult && g.threshold === opt.best.threshold && g.targetR === opt.best.targetR));
+    ok('ค่าที่เลือกมีไม้อย่างน้อย 20 ไม้ (ไม่ใช่ความบังเอิญจากไม้ไม่กี่ไม้)', opt.best.n >= 20, `${opt.best.n} ไม้`);
+    ok('เลือกจุดที่มีเพื่อนบ้านดีด้วย ไม่ใช่ยอดแหลมโดด ๆ', opt.best.neighbours >= 3, `${opt.best.neighbours} จุดข้างเคียง`);
+    ok('คะแนนความทนทานไม่สูงเกินค่าคาดหวังดิบของจุดที่ดีที่สุดในตาราง',
+      opt.grid.every((g) => g.robust <= Math.max(...opt.grid.map((x) => x.expectancy)) + 1e-9));
+    ok('อัตราถึงเป้าลดลงเมื่อเป้าไกลขึ้น (ทั้งสองช่วง)', (() => {
+      const rr = opt.reachRates;
+      return rr.every((x, i) => i === 0 || rr[i - 1].inSample >= x.inSample - 1e-9);
+    })());
+    ok('มีสถิติระยะที่ราคาวิ่งไป (MFE) เรียงจากน้อยไปมาก',
+      opt.mfe.p25 <= opt.mfe.p50 && opt.mfe.p50 <= opt.mfe.p75 && opt.mfe.p75 <= opt.mfe.p90);
+    ok('มีคำแนะนำเรื่องความกว้างจุดตัดขาดทุน',
+      opt.slAdvice && ['tighten', 'widen', 'ok', 'unknown'].includes(opt.slAdvice.level), JSON.stringify(opt.slAdvice).slice(0, 70));
+    ok('ผลช่วงสอบจริงมีอยู่จริงและนับไม้ได้', opt.outOfSample !== null && opt.outOfSample.n >= 0);
+    console.log(`     ↳ เลือก: SL ${opt.best.slAtrMult}×ATR · เกณฑ์ ${opt.best.threshold} · เป้า ${opt.best.targetR}R`);
+    console.log(`     ↳ เรียนรู้ ${opt.best.expectancy.toFixed(3)}R → สอบจริง ${opt.outOfSample ? opt.outOfSample.expectancy.toFixed(3) + 'R' : '-'}`);
+  }
+
+  const small = optimizeExits(buildContext(makeCandles(300, 8), DEFAULT_CFG), {});
+  ok('ข้อมูลน้อย → บอกเหตุผล ไม่ใช่ให้ค่ามั่ว', small.ok === false && small.reason.length > 10);
+}
+
 // ── 5. เวลาและการแปลงหน่วย ────────────────────────────────────────────
 section('5) เวลาตลาดและการแปลงราคา');
 {

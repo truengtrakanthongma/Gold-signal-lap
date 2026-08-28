@@ -45,8 +45,12 @@ export function runBacktest(ctx, opts = {}) {
     let exitIdx = null, result = null, rMultiple = 0, hit1R = false;
     let maxFav = 0, maxAdv = 0;
 
+    // ไปได้ไกลสุดกี่ R "ก่อน" จะโดน SL — ตัวเลขนี้ทำให้ประเมินเป้าหมายทุกระดับได้
+    // โดยไม่ต้องจำลองใหม่: เป้า T จะถึงก็ต่อเมื่อ favBeforeStop >= T
+    let favBeforeStop = 0;
     for (let j = i + 1; j <= Math.min(i + o.maxHold, n - 1); j++) {
       const b = candles[j];
+      const favPrev = maxFav;   // ค่าก่อนนับแท่งนี้ ใช้ตอนแท่งนี้เป็นแท่งที่โดน SL
       const fav = side > 0 ? (b.h - entry) / slDist : (entry - b.l) / slDist;
       const adv = side > 0 ? (entry - b.l) / slDist : (b.h - entry) / slDist;
       if (fav > maxFav) maxFav = fav;
@@ -59,9 +63,15 @@ export function runBacktest(ctx, opts = {}) {
       // แท่งเดียวแตะทั้งคู่ = นับแพ้ (ไม่รู้ลำดับจริงจากข้อมูลแท่งเทียน)
       if (hitSL && !hit1R) {
         exitIdx = j; result = 'loss';
+        // แท่งที่โดน SL ไม่นับระยะกำไรของแท่งนั้น เพราะไม่รู้ว่าแตะจุดไหนก่อน
+        favBeforeStop = favPrev;
         rMultiple = -1 - o.slippage / slDist;
         break;
       }
+      // ผ่านด่าน SL ของแท่งนี้มาได้ = ระยะกำไรของแท่งนี้นับได้เต็ม
+      // ต้องบันทึกก่อนเส้นทาง break อื่น ๆ ไม่งั้นไม้ที่ปิดกำไรจะถูกบันทึกค่าต่ำกว่าจริง
+      // (บั๊กนี้ทำให้ตารางบอกว่าเป้าไกล ๆ ไปไม่ถึงเลยสักไม้)
+      favBeforeStop = maxFav;
       if (hitTP1 && !hit1R) {
         hit1R = true;
         // แผนบริหารไม้: ปิดครึ่งที่ 1R แล้วเลื่อน SL มาที่ทุน
@@ -102,7 +112,7 @@ export function runBacktest(ctx, opts = {}) {
       agree, against,
       index: i, entryIndex: i + 1, exitIndex: exitIdx, t: candles[i + 1].t,
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
-      entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv,
+      entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv, favBeforeStop,
       bars: exitIdx - i, hourTh: (d.getUTCHours() + 7) % 24,
     });
     i = exitIdx + 1; // ไม้เดียวต่อครั้ง (ไม่ซ้อนไม้ = ใกล้เคียงการเทรดจริง)
@@ -192,6 +202,159 @@ function summarize(trades, o) {
     },
     opts: o,
   };
+}
+
+/**
+ * ประเมินว่า "ถ้าตั้งเป้าที่ T เท่าของความเสี่ยง" ผลจะเป็นยังไง
+ *
+ * ใช้ค่า favBeforeStop ที่บันทึกไว้ตอนจำลอง จึงประเมินได้ทุกระดับเป้าหมาย
+ * โดยไม่ต้องจำลองใหม่ — เร็วพอที่จะกวาดหาเป้าที่ดีที่สุดได้จริง
+ *
+ * แบบจำลอง: เป้าเดียว ตัดขาดทุนเดียว ไม่ปิดบางส่วน (ตรงไปตรงมา อธิบายง่าย)
+ */
+export function evaluateTarget(trades, targetR, costR = 0) {
+  if (!trades.length) return null;
+  let wins = 0, total = 0;
+  for (const t of trades) {
+    const reached = (t.favBeforeStop || 0) >= targetR;
+    if (reached) { wins++; total += targetR - costR; }
+    else if (t.result === 'loss') total += -1 - costR;
+    else {
+      // หมดเวลาถือ: ปิดที่ราคาตลาด ใช้ผลจริงที่บันทึกไว้เป็นค่าประมาณ
+      total += Math.max(-1, Math.min(targetR, t.rMultiple)) - costR;
+    }
+  }
+  return {
+    targetR, n: trades.length, hitRate: (wins / trades.length) * 100,
+    expectancy: total / trades.length, totalR: total,
+  };
+}
+
+/** เปอร์เซ็นไทล์ของชุดตัวเลข (ใช้กับ MFE/MAE) */
+function pct(values, p) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const idx = Math.min(s.length - 1, Math.max(0, Math.round((p / 100) * (s.length - 1))));
+  return s[idx];
+}
+
+/**
+ * หาจุดตัดขาดทุนและเป้าหมายที่ "ดีที่สุดตามสถิติ" แทนการตั้งเอาเอง
+ *
+ * กวาดหาความกว้างของ SL หลายค่า × เกณฑ์คะแนนหลายค่า แล้วในแต่ละคู่
+ * ประเมินเป้าหมายทุกระดับจากข้อมูลที่บันทึกไว้ เลือกชุดที่ค่าคาดหวังสูงสุด
+ *
+ * ***หาจากช่วงเรียนรู้เท่านั้น*** แล้วไปพิสูจน์กับช่วงสอบจริง
+ * ไม่งั้นก็แค่จูนตัวเลขให้พอดีกับอดีต ซึ่งไม่มีประโยชน์กับอนาคต
+ */
+export function optimizeExits(ctx, opts = {}) {
+  const o = { ...DEFAULT_BT, ...opts };
+  const n = ctx.candles.length;
+  const splitAt = Math.floor(n * (o.splitRatio || 0.6));
+  if (splitAt - o.warmup < 80) return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับหาค่าที่ดีที่สุด' };
+
+  const slMults = o.slMults || [1.0, 1.25, 1.5, 2.0, 2.5];
+  const thresholds = o.thresholds || [20, 25, 30, 35, 40, 45, 50];
+  const targets = o.targets || [0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
+  // จำนวนไม้ขั้นต่ำต้องปรับตามข้อมูลที่มี — ถ้าตั้งไว้ตายตัวสูงเกินไป
+  // ระบบจะหาไม่เจอเลยแล้วถอยไปใช้ค่าตั้งต้นเงียบ ๆ ซึ่งเสียประโยชน์ทั้งหมด
+  const usableBars = splitAt - o.warmup;
+  const minTrades = o.minTrades || Math.max(10, Math.round(usableBars / 30));
+
+  const grid = [];
+  for (const slAtrMult of slMults) {
+    const tuned = { ...ctx, cfg: { ...ctx.cfg, slAtrMult } };
+    for (const threshold of thresholds) {
+      const r = runBacktest(tuned, { ...o, threshold, toIndex: splitAt });
+      if (r.stats.n < minTrades) continue;
+      const costR = 0;   // ต้นทุนถูกคิดไปแล้วตอนจำลอง (สเปรด+สลิปเพจ)
+      for (const targetR of targets) {
+        const ev = evaluateTarget(r.trades, targetR, costR);
+        if (ev) grid.push({ slAtrMult, threshold, ...ev });
+      }
+    }
+  }
+  if (!grid.length) {
+    return { ok: false, minTrades,
+      reason: `ในช่วงเรียนรู้ (${usableBars} แท่ง) ไม่มีชุดค่าไหนสร้างไม้ได้ถึง ${minTrades} ไม้ `
+        + 'ซึ่งเป็นจำนวนขั้นต่ำที่จะสรุปอะไรได้ — ลองเปลี่ยนไปกรอบเวลาที่เล็กลง (5 นาที/15 นาที) จะมีสัญญาณถี่กว่า' };
+  }
+
+  /*
+   * เลือกยังไงไม่ให้ได้ "ค่าที่บังเอิญดี"
+   *
+   * ถ้าเลือกจุดที่ค่าคาดหวังสูงสุดตรง ๆ มักได้จุดโดด ๆ ที่ดีเพราะบังเอิญ
+   * พอเปลี่ยนพารามิเตอร์นิดเดียวผลก็พังทันที = ใช้กับอนาคตไม่ได้
+   *
+   * จึงให้คะแนนแต่ละจุดด้วยค่าเฉลี่ยของตัวมันเองกับจุดข้าง ๆ (ที่ SL/เกณฑ์/เป้า ใกล้เคียงกัน)
+   * จุดที่ชนะคือจุดที่อยู่บน "ที่ราบสูง" ไม่ใช่ยอดแหลม — ทนต่อการที่ตลาดเปลี่ยนไปเล็กน้อย
+   */
+  const near = (a, b, list) => {
+    const idxA = list.indexOf(a), idxB = list.indexOf(b);
+    return idxA >= 0 && idxB >= 0 && Math.abs(idxA - idxB) <= 1;
+  };
+  for (const g of grid) {
+    const neighbours = grid.filter((x) =>
+      near(x.slAtrMult, g.slAtrMult, slMults)
+      && near(x.threshold, g.threshold, thresholds)
+      && near(x.targetR, g.targetR, targets));
+    g.robust = neighbours.reduce((a, x) => a + x.expectancy, 0) / neighbours.length;
+    g.neighbours = neighbours.length;
+  }
+  grid.sort((a, b) => b.robust - a.robust);
+  const best = grid[0];
+
+  // พิสูจน์กับช่วงสอบจริง ด้วยค่าที่เลือกมาโดยไม่เคยเห็นข้อมูลส่วนนี้
+  const tunedCtx = { ...ctx, cfg: { ...ctx.cfg, slAtrMult: best.slAtrMult } };
+  const outRun = runBacktest(tunedCtx, { ...o, threshold: best.threshold, fromIndex: splitAt });
+  const outEval = evaluateTarget(outRun.trades, best.targetR, 0);
+
+  // การกระจายของระยะที่ราคาวิ่งไป และระยะที่ต้องทนติดลบ
+  const inRun = runBacktest(tunedCtx, { ...o, threshold: best.threshold, toIndex: splitAt });
+  const all = [...inRun.trades, ...outRun.trades];
+  const winners = all.filter((t) => (t.favBeforeStop || 0) >= best.targetR);
+  const mfe = all.map((t) => t.favBeforeStop || 0);
+  const maeWinners = winners.map((t) => t.maxAdv || 0);
+
+  return {
+    ok: true, splitAt, best, grid: grid.slice(0, 40),
+    outOfSample: outEval,
+    reachRates: targets.map((T) => ({
+      targetR: T,
+      inSample: (inRun.trades.filter((t) => (t.favBeforeStop || 0) >= T).length / Math.max(1, inRun.trades.length)) * 100,
+      outSample: outRun.trades.length ? (outRun.trades.filter((t) => (t.favBeforeStop || 0) >= T).length / outRun.trades.length) * 100 : null,
+    })),
+    mfe: { p25: pct(mfe, 25), p50: pct(mfe, 50), p75: pct(mfe, 75), p90: pct(mfe, 90), n: mfe.length },
+    maeWinners: { p50: pct(maeWinners, 50), p75: pct(maeWinners, 75), p90: pct(maeWinners, 90), max: maeWinners.length ? Math.max(...maeWinners) : null, n: maeWinners.length },
+    slAdvice: slAdvice(maeWinners),
+  };
+}
+
+/**
+ * จุดตัดขาดทุนควรกว้างแค่ไหน — ตอบจากสถิติ ไม่ใช่ความรู้สึก
+ * ดูว่า "ไม้ที่สุดท้ายชนะ" เคยติดลบลึกสุดแค่ไหน ถ้า 95% ไม่เคยเกิน X
+ * แปลว่าตั้ง SL กว้างกว่า X ไปก็เปลืองเปล่า ๆ — ทำให้ขนาดไม้เล็กลงโดยไม่จำเป็น
+ */
+function slAdvice(maeWinners) {
+  if (maeWinners.length < 10) {
+    return { text: 'ไม้ที่ชนะยังน้อยเกินกว่าจะสรุปว่าจุดตัดขาดทุนควรกว้างแค่ไหน', level: 'unknown' };
+  }
+  const p95 = pct(maeWinners, 95);
+  if (p95 < 0.7) {
+    return {
+      level: 'tighten', p95,
+      text: `ไม้ที่ชนะ 95% ไม่เคยติดลบเกิน ${p95.toFixed(2)} เท่าของระยะ SL ปัจจุบัน — `
+        + `แปลว่า SL ตั้งกว้างเกินความจำเป็น ถ้าแคบลงจะเสี่ยงเงินเท่าเดิมแต่ได้ขนาดไม้ใหญ่ขึ้น กำไรต่อไม้จึงมากขึ้น`,
+    };
+  }
+  if (p95 > 0.95) {
+    return {
+      level: 'widen', p95,
+      text: `ไม้ที่ชนะบางไม้ติดลบลึกถึง ${p95.toFixed(2)} เท่าของระยะ SL — เฉียดโดนเขี่ยออกก่อนราคาจะไปตามทาง `
+        + `ควรเผื่อ SL ให้กว้างขึ้นอีกเล็กน้อย`,
+    };
+  }
+  return { level: 'ok', p95, text: `ความกว้างของ SL พอดีแล้ว — ไม้ที่ชนะ 95% ติดลบไม่เกิน ${p95.toFixed(2)} เท่าของระยะ SL` };
 }
 
 /**

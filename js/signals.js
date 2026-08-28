@@ -323,13 +323,15 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   const {
     account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
     side = scored.side, entryPrice = ctx.candles[i].c,
+    targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
+    slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
   } = opts;
   if (!side) return null;
   const atrVal = scored.atr || ctx.atr[i];
   const notes = [];
 
   // SL: ใช้ค่าที่กว้างกว่าระหว่าง ATR กับใต้/เหนือ swing ล่าสุด แต่ไม่เกินเพดาน
-  let slDist = atrVal * cfg.slAtrMult;
+  let slDist = atrVal * (slAtrMult || cfg.slAtrMult);
   const usable = ctx.pivots.filter((p) => p.confirmedAt <= i && i - p.index < 40);
   const lastLow = [...usable].reverse().find((p) => p.type === 'low');
   const lastHigh = [...usable].reverse().find((p) => p.type === 'high');
@@ -372,15 +374,18 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   const riskMoney = account * (riskPct / 100);
   const lots = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
 
+  // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี ไม่งั้นใช้ 2R ตามค่าเริ่มต้น
+  const mainR = targetR || 2;
+  const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
+
   return {
-    side, entry: entryPrice, sl, tp1, tp2, tp3,
+    side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
     slDist, slAtr: slDist / atrVal, atr: atrVal,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, oz: lots * contractSize,
     notes,
-    plan: side > 0
-      ? `เข้าซื้อ (Buy) ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} (-${slDist.toFixed(2)}) · เป้า 1R ${tp1.toFixed(2)} / 2R ${tp2.toFixed(2)} / สุดท้าย ${tp3.toFixed(2)}`
-      : `เข้าขาย (Sell) ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} (+${slDist.toFixed(2)}) · เป้า 1R ${tp1.toFixed(2)} / 2R ${tp2.toFixed(2)} / สุดท้าย ${tp3.toFixed(2)}`,
+    plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `
+      + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`,
   };
 }
 

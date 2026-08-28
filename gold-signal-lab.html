@@ -427,6 +427,63 @@ body.simple .narr p { font-size: 13.8px; }
   .tour-btns .btn { min-height: 40px; }
 }
 
+/* ══ แผนเข้า-ออก: ตัวเลขหลักอ่านง่าย รายละเอียดกางออกได้ ══════════ */
+.plan-v2 { display: flex; flex-direction: column; gap: 10px; }
+.plan-gate {
+  background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
+  color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: 12.5px;
+}
+.plan-main { display: flex; flex-direction: column; gap: 1px; border-radius: 9px; overflow: hidden; }
+.pm-row {
+  display: grid; grid-template-columns: 92px 1fr auto; align-items: baseline; gap: 10px;
+  background: var(--panel-2); padding: 11px 13px; border-left: 3px solid var(--line);
+}
+.pm-row.entry { border-left-color: #e2e8f0; }
+.pm-row.sl { border-left-color: var(--down); }
+.pm-row.tp { border-left-color: var(--up); }
+.pm-label { font-size: 12.5px; color: var(--muted); }
+.pm-val {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 21px;
+  font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.3px;
+}
+.pm-row.sl .pm-val { color: #fca5a5; }
+.pm-row.tp .pm-val { color: #86efac; }
+.pm-note { font-size: 11.5px; color: var(--muted); text-align: right; white-space: nowrap; }
+.plan-size {
+  font-size: 12.5px; color: #cbd5e1; background: rgba(240,180,41,.07);
+  border: 1px solid rgba(240,180,41,.22); border-radius: 7px; padding: 8px 11px;
+}
+.plan-size b { color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+
+.plan-why { border-top: 1px dashed var(--line); padding-top: 8px; }
+.plan-why > summary {
+  cursor: pointer; font-size: 12.5px; color: var(--accent); list-style: none;
+  padding: 4px 0; user-select: none;
+}
+.plan-why > summary::-webkit-details-marker { display: none; }
+.plan-why > summary::before { content: '▸ '; }
+.plan-why[open] > summary::before { content: '▾ '; }
+.plan-why > summary:hover { color: #7dd3fc; }
+.plan-why > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.why-body { padding: 4px 0 2px; }
+.why-body h4 { margin: 12px 0 5px; font-size: 12.5px; color: var(--gold); }
+.why-body h4:first-child { margin-top: 4px; }
+.why-body p { margin: 0 0 7px; font-size: 12.5px; line-height: 1.7; color: #cbd5e1; }
+.why-stat { background: rgba(2,6,23,.5); border-radius: 6px; padding: 8px 10px; }
+.why-hint { color: var(--muted); font-size: 11.8px; }
+.why-table { margin: 5px 0 8px; }
+.why-table th { font-size: 11px; }
+.why-table td { font-size: 12px; padding: 4px 7px; }
+.why-table tr.chosen td { background: rgba(34,197,94,.12); color: #86efac; font-weight: 600; }
+
+@media (max-width: 720px) {
+  .pm-row { grid-template-columns: 1fr auto; }
+  .pm-note { grid-column: 1 / -1; text-align: left; }
+  .pm-val { font-size: 23px; }
+  .plan-why > summary { font-size: 14px; padding: 10px 0; }
+  .why-body p, .why-table td { font-size: 13.5px; }
+}
+
 </style>
 </head>
 <body>
@@ -1674,13 +1731,15 @@ function buildSetup(ctx, i, scored, opts = {}) {
   const {
     account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
     side = scored.side, entryPrice = ctx.candles[i].c,
+    targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
+    slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
   } = opts;
   if (!side) return null;
   const atrVal = scored.atr || ctx.atr[i];
   const notes = [];
 
   // SL: ใช้ค่าที่กว้างกว่าระหว่าง ATR กับใต้/เหนือ swing ล่าสุด แต่ไม่เกินเพดาน
-  let slDist = atrVal * cfg.slAtrMult;
+  let slDist = atrVal * (slAtrMult || cfg.slAtrMult);
   const usable = ctx.pivots.filter((p) => p.confirmedAt <= i && i - p.index < 40);
   const lastLow = [...usable].reverse().find((p) => p.type === 'low');
   const lastHigh = [...usable].reverse().find((p) => p.type === 'high');
@@ -1723,15 +1782,18 @@ function buildSetup(ctx, i, scored, opts = {}) {
   const riskMoney = account * (riskPct / 100);
   const lots = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
 
+  // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี ไม่งั้นใช้ 2R ตามค่าเริ่มต้น
+  const mainR = targetR || 2;
+  const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
+
   return {
-    side, entry: entryPrice, sl, tp1, tp2, tp3,
+    side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
     slDist, slAtr: slDist / atrVal, atr: atrVal,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, oz: lots * contractSize,
     notes,
-    plan: side > 0
-      ? `เข้าซื้อ (Buy) ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} (-${slDist.toFixed(2)}) · เป้า 1R ${tp1.toFixed(2)} / 2R ${tp2.toFixed(2)} / สุดท้าย ${tp3.toFixed(2)}`
-      : `เข้าขาย (Sell) ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} (+${slDist.toFixed(2)}) · เป้า 1R ${tp1.toFixed(2)} / 2R ${tp2.toFixed(2)} / สุดท้าย ${tp3.toFixed(2)}`,
+    plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `
+      + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`,
   };
 }
 
@@ -2022,8 +2084,12 @@ function runBacktest(ctx, opts = {}) {
     let exitIdx = null, result = null, rMultiple = 0, hit1R = false;
     let maxFav = 0, maxAdv = 0;
 
+    // ไปได้ไกลสุดกี่ R "ก่อน" จะโดน SL — ตัวเลขนี้ทำให้ประเมินเป้าหมายทุกระดับได้
+    // โดยไม่ต้องจำลองใหม่: เป้า T จะถึงก็ต่อเมื่อ favBeforeStop >= T
+    let favBeforeStop = 0;
     for (let j = i + 1; j <= Math.min(i + o.maxHold, n - 1); j++) {
       const b = candles[j];
+      const favPrev = maxFav;   // ค่าก่อนนับแท่งนี้ ใช้ตอนแท่งนี้เป็นแท่งที่โดน SL
       const fav = side > 0 ? (b.h - entry) / slDist : (entry - b.l) / slDist;
       const adv = side > 0 ? (entry - b.l) / slDist : (b.h - entry) / slDist;
       if (fav > maxFav) maxFav = fav;
@@ -2036,9 +2102,15 @@ function runBacktest(ctx, opts = {}) {
       // แท่งเดียวแตะทั้งคู่ = นับแพ้ (ไม่รู้ลำดับจริงจากข้อมูลแท่งเทียน)
       if (hitSL && !hit1R) {
         exitIdx = j; result = 'loss';
+        // แท่งที่โดน SL ไม่นับระยะกำไรของแท่งนั้น เพราะไม่รู้ว่าแตะจุดไหนก่อน
+        favBeforeStop = favPrev;
         rMultiple = -1 - o.slippage / slDist;
         break;
       }
+      // ผ่านด่าน SL ของแท่งนี้มาได้ = ระยะกำไรของแท่งนี้นับได้เต็ม
+      // ต้องบันทึกก่อนเส้นทาง break อื่น ๆ ไม่งั้นไม้ที่ปิดกำไรจะถูกบันทึกค่าต่ำกว่าจริง
+      // (บั๊กนี้ทำให้ตารางบอกว่าเป้าไกล ๆ ไปไม่ถึงเลยสักไม้)
+      favBeforeStop = maxFav;
       if (hitTP1 && !hit1R) {
         hit1R = true;
         // แผนบริหารไม้: ปิดครึ่งที่ 1R แล้วเลื่อน SL มาที่ทุน
@@ -2079,7 +2151,7 @@ function runBacktest(ctx, opts = {}) {
       agree, against,
       index: i, entryIndex: i + 1, exitIndex: exitIdx, t: candles[i + 1].t,
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
-      entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv,
+      entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv, favBeforeStop,
       bars: exitIdx - i, hourTh: (d.getUTCHours() + 7) % 24,
     });
     i = exitIdx + 1; // ไม้เดียวต่อครั้ง (ไม่ซ้อนไม้ = ใกล้เคียงการเทรดจริง)
@@ -2172,6 +2244,159 @@ function summarize(trades, o) {
 }
 
 /**
+ * ประเมินว่า "ถ้าตั้งเป้าที่ T เท่าของความเสี่ยง" ผลจะเป็นยังไง
+ *
+ * ใช้ค่า favBeforeStop ที่บันทึกไว้ตอนจำลอง จึงประเมินได้ทุกระดับเป้าหมาย
+ * โดยไม่ต้องจำลองใหม่ — เร็วพอที่จะกวาดหาเป้าที่ดีที่สุดได้จริง
+ *
+ * แบบจำลอง: เป้าเดียว ตัดขาดทุนเดียว ไม่ปิดบางส่วน (ตรงไปตรงมา อธิบายง่าย)
+ */
+function evaluateTarget(trades, targetR, costR = 0) {
+  if (!trades.length) return null;
+  let wins = 0, total = 0;
+  for (const t of trades) {
+    const reached = (t.favBeforeStop || 0) >= targetR;
+    if (reached) { wins++; total += targetR - costR; }
+    else if (t.result === 'loss') total += -1 - costR;
+    else {
+      // หมดเวลาถือ: ปิดที่ราคาตลาด ใช้ผลจริงที่บันทึกไว้เป็นค่าประมาณ
+      total += Math.max(-1, Math.min(targetR, t.rMultiple)) - costR;
+    }
+  }
+  return {
+    targetR, n: trades.length, hitRate: (wins / trades.length) * 100,
+    expectancy: total / trades.length, totalR: total,
+  };
+}
+
+/** เปอร์เซ็นไทล์ของชุดตัวเลข (ใช้กับ MFE/MAE) */
+function pct(values, p) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const idx = Math.min(s.length - 1, Math.max(0, Math.round((p / 100) * (s.length - 1))));
+  return s[idx];
+}
+
+/**
+ * หาจุดตัดขาดทุนและเป้าหมายที่ "ดีที่สุดตามสถิติ" แทนการตั้งเอาเอง
+ *
+ * กวาดหาความกว้างของ SL หลายค่า × เกณฑ์คะแนนหลายค่า แล้วในแต่ละคู่
+ * ประเมินเป้าหมายทุกระดับจากข้อมูลที่บันทึกไว้ เลือกชุดที่ค่าคาดหวังสูงสุด
+ *
+ * ***หาจากช่วงเรียนรู้เท่านั้น*** แล้วไปพิสูจน์กับช่วงสอบจริง
+ * ไม่งั้นก็แค่จูนตัวเลขให้พอดีกับอดีต ซึ่งไม่มีประโยชน์กับอนาคต
+ */
+function optimizeExits(ctx, opts = {}) {
+  const o = { ...DEFAULT_BT, ...opts };
+  const n = ctx.candles.length;
+  const splitAt = Math.floor(n * (o.splitRatio || 0.6));
+  if (splitAt - o.warmup < 80) return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับหาค่าที่ดีที่สุด' };
+
+  const slMults = o.slMults || [1.0, 1.25, 1.5, 2.0, 2.5];
+  const thresholds = o.thresholds || [20, 25, 30, 35, 40, 45, 50];
+  const targets = o.targets || [0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
+  // จำนวนไม้ขั้นต่ำต้องปรับตามข้อมูลที่มี — ถ้าตั้งไว้ตายตัวสูงเกินไป
+  // ระบบจะหาไม่เจอเลยแล้วถอยไปใช้ค่าตั้งต้นเงียบ ๆ ซึ่งเสียประโยชน์ทั้งหมด
+  const usableBars = splitAt - o.warmup;
+  const minTrades = o.minTrades || Math.max(10, Math.round(usableBars / 30));
+
+  const grid = [];
+  for (const slAtrMult of slMults) {
+    const tuned = { ...ctx, cfg: { ...ctx.cfg, slAtrMult } };
+    for (const threshold of thresholds) {
+      const r = runBacktest(tuned, { ...o, threshold, toIndex: splitAt });
+      if (r.stats.n < minTrades) continue;
+      const costR = 0;   // ต้นทุนถูกคิดไปแล้วตอนจำลอง (สเปรด+สลิปเพจ)
+      for (const targetR of targets) {
+        const ev = evaluateTarget(r.trades, targetR, costR);
+        if (ev) grid.push({ slAtrMult, threshold, ...ev });
+      }
+    }
+  }
+  if (!grid.length) {
+    return { ok: false, minTrades,
+      reason: `ในช่วงเรียนรู้ (${usableBars} แท่ง) ไม่มีชุดค่าไหนสร้างไม้ได้ถึง ${minTrades} ไม้ `
+        + 'ซึ่งเป็นจำนวนขั้นต่ำที่จะสรุปอะไรได้ — ลองเปลี่ยนไปกรอบเวลาที่เล็กลง (5 นาที/15 นาที) จะมีสัญญาณถี่กว่า' };
+  }
+
+  /*
+   * เลือกยังไงไม่ให้ได้ "ค่าที่บังเอิญดี"
+   *
+   * ถ้าเลือกจุดที่ค่าคาดหวังสูงสุดตรง ๆ มักได้จุดโดด ๆ ที่ดีเพราะบังเอิญ
+   * พอเปลี่ยนพารามิเตอร์นิดเดียวผลก็พังทันที = ใช้กับอนาคตไม่ได้
+   *
+   * จึงให้คะแนนแต่ละจุดด้วยค่าเฉลี่ยของตัวมันเองกับจุดข้าง ๆ (ที่ SL/เกณฑ์/เป้า ใกล้เคียงกัน)
+   * จุดที่ชนะคือจุดที่อยู่บน "ที่ราบสูง" ไม่ใช่ยอดแหลม — ทนต่อการที่ตลาดเปลี่ยนไปเล็กน้อย
+   */
+  const near = (a, b, list) => {
+    const idxA = list.indexOf(a), idxB = list.indexOf(b);
+    return idxA >= 0 && idxB >= 0 && Math.abs(idxA - idxB) <= 1;
+  };
+  for (const g of grid) {
+    const neighbours = grid.filter((x) =>
+      near(x.slAtrMult, g.slAtrMult, slMults)
+      && near(x.threshold, g.threshold, thresholds)
+      && near(x.targetR, g.targetR, targets));
+    g.robust = neighbours.reduce((a, x) => a + x.expectancy, 0) / neighbours.length;
+    g.neighbours = neighbours.length;
+  }
+  grid.sort((a, b) => b.robust - a.robust);
+  const best = grid[0];
+
+  // พิสูจน์กับช่วงสอบจริง ด้วยค่าที่เลือกมาโดยไม่เคยเห็นข้อมูลส่วนนี้
+  const tunedCtx = { ...ctx, cfg: { ...ctx.cfg, slAtrMult: best.slAtrMult } };
+  const outRun = runBacktest(tunedCtx, { ...o, threshold: best.threshold, fromIndex: splitAt });
+  const outEval = evaluateTarget(outRun.trades, best.targetR, 0);
+
+  // การกระจายของระยะที่ราคาวิ่งไป และระยะที่ต้องทนติดลบ
+  const inRun = runBacktest(tunedCtx, { ...o, threshold: best.threshold, toIndex: splitAt });
+  const all = [...inRun.trades, ...outRun.trades];
+  const winners = all.filter((t) => (t.favBeforeStop || 0) >= best.targetR);
+  const mfe = all.map((t) => t.favBeforeStop || 0);
+  const maeWinners = winners.map((t) => t.maxAdv || 0);
+
+  return {
+    ok: true, splitAt, best, grid: grid.slice(0, 40),
+    outOfSample: outEval,
+    reachRates: targets.map((T) => ({
+      targetR: T,
+      inSample: (inRun.trades.filter((t) => (t.favBeforeStop || 0) >= T).length / Math.max(1, inRun.trades.length)) * 100,
+      outSample: outRun.trades.length ? (outRun.trades.filter((t) => (t.favBeforeStop || 0) >= T).length / outRun.trades.length) * 100 : null,
+    })),
+    mfe: { p25: pct(mfe, 25), p50: pct(mfe, 50), p75: pct(mfe, 75), p90: pct(mfe, 90), n: mfe.length },
+    maeWinners: { p50: pct(maeWinners, 50), p75: pct(maeWinners, 75), p90: pct(maeWinners, 90), max: maeWinners.length ? Math.max(...maeWinners) : null, n: maeWinners.length },
+    slAdvice: slAdvice(maeWinners),
+  };
+}
+
+/**
+ * จุดตัดขาดทุนควรกว้างแค่ไหน — ตอบจากสถิติ ไม่ใช่ความรู้สึก
+ * ดูว่า "ไม้ที่สุดท้ายชนะ" เคยติดลบลึกสุดแค่ไหน ถ้า 95% ไม่เคยเกิน X
+ * แปลว่าตั้ง SL กว้างกว่า X ไปก็เปลืองเปล่า ๆ — ทำให้ขนาดไม้เล็กลงโดยไม่จำเป็น
+ */
+function slAdvice(maeWinners) {
+  if (maeWinners.length < 10) {
+    return { text: 'ไม้ที่ชนะยังน้อยเกินกว่าจะสรุปว่าจุดตัดขาดทุนควรกว้างแค่ไหน', level: 'unknown' };
+  }
+  const p95 = pct(maeWinners, 95);
+  if (p95 < 0.7) {
+    return {
+      level: 'tighten', p95,
+      text: `ไม้ที่ชนะ 95% ไม่เคยติดลบเกิน ${p95.toFixed(2)} เท่าของระยะ SL ปัจจุบัน — `
+        + `แปลว่า SL ตั้งกว้างเกินความจำเป็น ถ้าแคบลงจะเสี่ยงเงินเท่าเดิมแต่ได้ขนาดไม้ใหญ่ขึ้น กำไรต่อไม้จึงมากขึ้น`,
+    };
+  }
+  if (p95 > 0.95) {
+    return {
+      level: 'widen', p95,
+      text: `ไม้ที่ชนะบางไม้ติดลบลึกถึง ${p95.toFixed(2)} เท่าของระยะ SL — เฉียดโดนเขี่ยออกก่อนราคาจะไปตามทาง `
+        + `ควรเผื่อ SL ให้กว้างขึ้นอีกเล็กน้อย`,
+    };
+  }
+  return { level: 'ok', p95, text: `ความกว้างของ SL พอดีแล้ว — ไม้ที่ชนะ 95% ติดลบไม่เกิน ${p95.toFixed(2)} เท่าของระยะ SL` };
+}
+
+/**
  * ตรวจสอบแบบแบ่งข้อมูล (walk-forward)
  *
  * ปัญหาของ backtest ธรรมดา: เราเลือกเกณฑ์จากข้อมูลชุดไหน แล้ววัดผลบนชุดนั้น
@@ -2257,7 +2482,7 @@ function wilsonInterval(wins, n, z = 1.96) {
   return { low: ((centre - margin) / denom) * 100, high: ((centre + margin) / denom) * 100 };
 }
 
-  return {DEFAULT_BT, runBacktest, walkForward, probabilityFor, wilsonInterval};
+  return {DEFAULT_BT, runBacktest, evaluateTarget, optimizeExits, walkForward, probabilityFor, wilsonInterval};
 })();
 
 __m.chart = (function () {
@@ -3440,7 +3665,7 @@ function toThai(name) {
 __m.app = (function () {
   const {MarketFeed, TF, mergeCandle} = __m.feed;
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS} = __m.signals;
-  const {runBacktest, walkForward, probabilityFor, wilsonInterval} = __m.backtest;
+  const {runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval} = __m.backtest;
   const {Chart} = __m.chart;
   const {AlertCenter} = __m.alerts;
   const {sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht} = __m.macro;
@@ -3481,6 +3706,7 @@ const state = {
   warnedAt: 0,          // เตือนล่วงหน้าครั้งล่าสุดเมื่อไร
   warnedSide: 0,
   narrationOpen: true,
+  planDetailsOpen: false,
   analyzeTimer: null,
   events: [],
   prevClose: null,
@@ -3810,6 +4036,8 @@ function analyze(candleClosed, allowAlert = true) {
   state.setup = state.scored.ready && Math.abs(score) >= settings.threshold
     ? buildSetup(state.ctx, last, { ...state.scored, side: Math.sign(score) }, {
         account: settings.account, riskPct: settings.riskPct, entryPrice: livePrice, side: Math.sign(score),
+        targetR: state.opt && state.opt.ok ? state.opt.best.targetR : null,
+        slAtrMult: state.opt && state.opt.ok ? state.opt.best.slAtrMult : null,
       })
     : null;
 
@@ -4106,25 +4334,101 @@ function renderPlan() {
     return;
   }
   const s = state.setup;
-  // คำนวณใหม่ตามทุน/ความเสี่ยงล่าสุด
   const riskMoney = settings.account * (settings.riskPct / 100);
   const lots = s.slDist > 0 ? riskMoney / (s.slDist * 100) : 0;
-  box.className = 'plan-rows';
-  const gate = state.action === 'wait'
-    ? `<div class="plan-row" style="border-left:3px solid var(--gold)"><span style="color:var(--gold)">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</span><span></span></div>`
-    : '';
-  box.innerHTML = gate + `
-    <div class="plan-row tp"><span>เป้าที่ 3 (${(Math.abs(s.tp3 - s.entry) / s.slDist).toFixed(1)}R)</span><span>${s.tp3.toFixed(2)}</span></div>
-    <div class="plan-row tp"><span>เป้าที่ 2 (2R)</span><span>${s.tp2.toFixed(2)}</span></div>
-    <div class="plan-row tp"><span>เป้าที่ 1 (1R) — ปิดครึ่ง</span><span>${s.tp1.toFixed(2)}</span></div>
-    <div class="plan-row entry"><span>${s.side > 0 ? 'จุดเข้าซื้อ' : 'จุดเข้าขาย'}</span><span>${s.entry.toFixed(2)}</span></div>
-    <div class="plan-row sl"><span>ตัดขาดทุน (${s.slAtr.toFixed(1)}× ATR)</span><span>${s.sl.toFixed(2)}</span></div>
-    ${s.notes.length ? `<ul class="plan-notes">${s.notes.map((n) => `<li>${n}</li>`).join('')}</ul>` : ''}`;
-  sizeBox.style.display = '';
-  sizeBox.innerHTML = `
-    เสี่ยงไม้นี้ <b>${riskMoney.toFixed(2)}</b> (${settings.riskPct}% ของ ${settings.account})<br>
-    ระยะ SL <b>${s.slDist.toFixed(2)} USD</b> → ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (≈ ${(lots * 100).toFixed(1)} ออนซ์)<br>
-    ถึงเป้า 2R = กำไร <b>${(riskMoney * 2).toFixed(2)}</b> · แผนบริหาร: ปิดครึ่งที่ 1R แล้วเลื่อน SL มาที่ทุน`;
+  const opt = state.opt && state.opt.ok ? state.opt : null;
+  const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
+  const sign = s.side > 0 ? '+' : '-';
+  const rr = Math.abs(s.tpMain - s.entry) / s.slDist;
+  const reach = opt ? opt.reachRates.find((x) => Math.abs(x.targetR - s.mainR) < 1e-9) : null;
+
+  box.className = 'plan-v2';
+  box.innerHTML = `
+    ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
+    <div class="plan-main">
+      <div class="pm-row entry">
+        <span class="pm-label">เข้า${dir}ที่</span>
+        <span class="pm-val">${s.entry.toFixed(2)}</span>
+        <span class="pm-note">ตั้งเป็นคำสั่งรอได้</span>
+      </div>
+      <div class="pm-row sl">
+        <span class="pm-label">ตัดขาดทุน</span>
+        <span class="pm-val">${s.sl.toFixed(2)}</span>
+        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย ${riskMoney.toFixed(0)}</span>
+      </div>
+      <div class="pm-row tp">
+        <span class="pm-label">เป้าทำกำไร</span>
+        <span class="pm-val">${s.tpMain.toFixed(2)}</span>
+        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ ${(riskMoney * rr).toFixed(0)}</span>
+      </div>
+    </div>
+    <div class="plan-size">
+      ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (${(lots * 100).toFixed(1)} ออนซ์)
+      · ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
+      ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
+    </div>
+
+    <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
+      <summary>ดูที่มาของตัวเลขทั้งหมด</summary>
+      <div class="why-body">
+        ${opt ? `
+        <h4>ทำไมตัดขาดทุนตรงนี้</h4>
+        <p>ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b>
+          ให้ผลดีที่สุดในบรรดาค่าที่ลอง</p>
+        ${opt.slAdvice && opt.slAdvice.level !== 'unknown'
+          ? `<p class="why-hint"><b>หมายเหตุจากข้อมูลทั้งหมด:</b> ${opt.slAdvice.text}</p>` : ''}
+        ${opt.maeWinners.n >= 10 ? `<p class="why-stat">ไม้ที่สุดท้ายชนะ เคยติดลบลึกสุดเท่าไร (เทียบกับระยะ SL):
+          ครึ่งหนึ่งไม่เกิน <b>${opt.maeWinners.p50.toFixed(2)}</b> ·
+          90% ไม่เกิน <b>${opt.maeWinners.p90.toFixed(2)}</b> ·
+          ลึกสุดที่เคยเจอ <b>${opt.maeWinners.max.toFixed(2)}</b>
+          <span class="why-hint">(ถ้าเกิน 1.00 แปลว่าไม้นั้นเกือบโดนเขี่ยออกก่อนวิ่ง)</span></p>` : ''}
+
+        <h4>ทำไมเป้าอยู่ตรงนี้</h4>
+        <p>ไม่ได้ตั้งเป็น 2 เท่าตายตัว แต่ลองทุกระยะแล้วเลือกระยะที่ให้ผลตอบแทนคาดหวังดีที่สุด
+          — ได้ <b>${s.mainR} เท่าของความเสี่ยง</b></p>
+        ${(() => {
+          const inE = opt.best.expectancy, outE = opt.outOfSample ? opt.outOfSample.expectancy : null;
+          const bad = outE !== null ? outE <= 0 : inE <= 0;
+          return `<p class="why-stat" style="${bad ? 'border-left:3px solid var(--down)' : 'border-left:3px solid var(--up)'}">
+            ผลตอบแทนคาดหวังต่อไม้ของชุดค่านี้: ช่วงเรียนรู้ <b>${inE >= 0 ? '+' : ''}${inE.toFixed(3)}</b> เท่าของเงินที่เสี่ยง
+            ${outE !== null ? `· ช่วงสอบจริง <b style="color:${outE > 0 ? 'var(--up)' : 'var(--down)'}">${outE >= 0 ? '+' : ''}${outE.toFixed(3)}</b>` : ''}
+            ${bad ? `<br><b style="color:var(--down)">⚠ ติดลบ = แม้จะเป็นชุดค่าที่ดีที่สุดเท่าที่หาได้ แต่ยังไม่มีชุดไหนทำกำไรได้กับข้อมูลช่วงนี้
+              — ตัวเลขในแผนใช้เรียนรู้ได้ แต่ยังไม่ควรเอาเงินจริงเข้าไป</b>` : ''}</p>`;
+        })()}
+        <table class="why-table"><thead><tr><th>ถ้าตั้งเป้าที่</th><th>ช่วงเรียนรู้</th><th>ช่วงสอบจริง</th></tr></thead><tbody>
+          ${opt.reachRates.map((x) => `<tr class="${Math.abs(x.targetR - s.mainR) < 1e-9 ? 'chosen' : ''}">
+            <td>${x.targetR} เท่า</td>
+            <td class="num">${x.inSample.toFixed(0)}%</td>
+            <td class="num">${x.outSample === null ? '—' : x.outSample.toFixed(0) + '%'}</td></tr>`).join('')}
+        </tbody></table>
+        <p class="why-hint">ตัวเลขคือ "กี่ % ของไม้ที่ราคาวิ่งไปถึงระยะนั้นก่อนโดนตัดขาดทุน"
+          เป้าใกล้ถึงบ่อยแต่ได้น้อย เป้าไกลได้เยอะแต่ถึงยาก — จุดที่คุ้มที่สุดคือจุดที่คูณกันแล้วสูงสุด</p>
+
+        <p class="why-stat">ระยะที่ราคาวิ่งไปได้จริง: ครึ่งหนึ่งของไม้ไปถึง <b>${opt.mfe.p50.toFixed(2)} เท่า</b> ·
+          หนึ่งในสี่ไปได้เกิน <b>${opt.mfe.p75.toFixed(2)} เท่า</b> ·
+          ไม้ที่วิ่งไกลสุด 10% ไปได้เกิน <b>${opt.mfe.p90.toFixed(2)} เท่า</b> (จาก ${opt.mfe.n} ไม้)</p>
+        ` : `<h4>ตัวเลขนี้มาจากไหน</h4>
+          <p>ยังหาค่าที่ดีที่สุดจากสถิติไม่ได้ จึงใช้ค่าตั้งต้น (จุดตัดขาดทุน 1.5 เท่าของระยะแกว่ง · เป้า 2 เท่าของความเสี่ยง)</p>
+          <p class="why-hint"><b>เหตุผล:</b> ${state.opt && state.opt.reason ? state.opt.reason : 'ยังไม่ได้ทดสอบย้อนหลัง'}</p>`}
+
+        <h4>บันไดเป้าหมายแบบอื่น</h4>
+        <table class="why-table"><tbody>
+          <tr><td>เป้าที่ 1 (1 เท่า)</td><td class="num">${s.tp1.toFixed(2)}</td></tr>
+          <tr><td>เป้าที่ 2 (2 เท่า)</td><td class="num">${s.tp2.toFixed(2)}</td></tr>
+          <tr><td>เป้าที่ 3 (${(Math.abs(s.tp3 - s.entry) / s.slDist).toFixed(1)} เท่า)</td><td class="num">${s.tp3.toFixed(2)}</td></tr>
+        </tbody></table>
+        <p class="why-hint">ถ้าชอบทยอยปิด: ปิดครึ่งที่เป้าที่ 1 แล้วเลื่อนจุดตัดขาดทุนมาที่ราคาเข้า
+          ที่เหลือปล่อยไปเป้าที่ 2</p>
+
+        ${s.notes.length ? `<h4>ข้อสังเกตของไม้นี้</h4><ul class="plan-notes">${s.notes.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
+      </div>
+    </details>`;
+
+  sizeBox.style.display = 'none';
+
+  // การ์ดนี้ถูกวาดใหม่ทุกรอบวิเคราะห์ ถ้าไม่จำไว้ รายละเอียดที่ผู้ใช้กางอ่านอยู่จะหุบเอง
+  const det = box.querySelector('.plan-why');
+  if (det) det.addEventListener('toggle', () => { state.planDetailsOpen = det.open; });
 }
 
 function renderReasons() {
@@ -4186,6 +4490,9 @@ function doBacktest() {
   $('btStatus').textContent = 'กำลังคำนวณ…';
   setTimeout(() => {
     const t0 = performance.now();
+    state.opt = optimizeExits(state.ctx, {
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+    });
     state.wf = walkForward(state.ctx, {
       maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
     });
@@ -4197,6 +4504,7 @@ function doBacktest() {
     renderBacktest();
     renderWalkForward();
     renderSignal();
+    renderPlan();   // แผนต้องใช้ค่าที่เพิ่งหาได้ ไม่ใช่รอรอบวิเคราะห์ถัดไป
     if ($('togMarkers').checked) {
       chart.setData({ markers: state.bt.trades.map((t) => ({ index: t.index, side: t.side })) });
       chart.render();

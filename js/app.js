@@ -4,7 +4,7 @@
 
 import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS } from './signals.js';
-import { runBacktest, walkForward, probabilityFor, wilsonInterval } from './backtest.js';
+import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval } from './backtest.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -31,6 +31,7 @@ const state = {
   warnedAt: 0,          // เตือนล่วงหน้าครั้งล่าสุดเมื่อไร
   warnedSide: 0,
   narrationOpen: true,
+  planDetailsOpen: false,
   analyzeTimer: null,
   events: [],
   prevClose: null,
@@ -360,6 +361,8 @@ function analyze(candleClosed, allowAlert = true) {
   state.setup = state.scored.ready && Math.abs(score) >= settings.threshold
     ? buildSetup(state.ctx, last, { ...state.scored, side: Math.sign(score) }, {
         account: settings.account, riskPct: settings.riskPct, entryPrice: livePrice, side: Math.sign(score),
+        targetR: state.opt && state.opt.ok ? state.opt.best.targetR : null,
+        slAtrMult: state.opt && state.opt.ok ? state.opt.best.slAtrMult : null,
       })
     : null;
 
@@ -656,25 +659,101 @@ function renderPlan() {
     return;
   }
   const s = state.setup;
-  // คำนวณใหม่ตามทุน/ความเสี่ยงล่าสุด
   const riskMoney = settings.account * (settings.riskPct / 100);
   const lots = s.slDist > 0 ? riskMoney / (s.slDist * 100) : 0;
-  box.className = 'plan-rows';
-  const gate = state.action === 'wait'
-    ? `<div class="plan-row" style="border-left:3px solid var(--gold)"><span style="color:var(--gold)">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</span><span></span></div>`
-    : '';
-  box.innerHTML = gate + `
-    <div class="plan-row tp"><span>เป้าที่ 3 (${(Math.abs(s.tp3 - s.entry) / s.slDist).toFixed(1)}R)</span><span>${s.tp3.toFixed(2)}</span></div>
-    <div class="plan-row tp"><span>เป้าที่ 2 (2R)</span><span>${s.tp2.toFixed(2)}</span></div>
-    <div class="plan-row tp"><span>เป้าที่ 1 (1R) — ปิดครึ่ง</span><span>${s.tp1.toFixed(2)}</span></div>
-    <div class="plan-row entry"><span>${s.side > 0 ? 'จุดเข้าซื้อ' : 'จุดเข้าขาย'}</span><span>${s.entry.toFixed(2)}</span></div>
-    <div class="plan-row sl"><span>ตัดขาดทุน (${s.slAtr.toFixed(1)}× ATR)</span><span>${s.sl.toFixed(2)}</span></div>
-    ${s.notes.length ? `<ul class="plan-notes">${s.notes.map((n) => `<li>${n}</li>`).join('')}</ul>` : ''}`;
-  sizeBox.style.display = '';
-  sizeBox.innerHTML = `
-    เสี่ยงไม้นี้ <b>$${riskMoney.toFixed(2)}</b> (${settings.riskPct}% ของ $${settings.account})<br>
-    ระยะ SL <b>${s.slDist.toFixed(2)} USD</b> → ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (≈ ${(lots * 100).toFixed(1)} ออนซ์)<br>
-    ถึงเป้า 2R = กำไร <b>$${(riskMoney * 2).toFixed(2)}</b> · แผนบริหาร: ปิดครึ่งที่ 1R แล้วเลื่อน SL มาที่ทุน`;
+  const opt = state.opt && state.opt.ok ? state.opt : null;
+  const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
+  const sign = s.side > 0 ? '+' : '-';
+  const rr = Math.abs(s.tpMain - s.entry) / s.slDist;
+  const reach = opt ? opt.reachRates.find((x) => Math.abs(x.targetR - s.mainR) < 1e-9) : null;
+
+  box.className = 'plan-v2';
+  box.innerHTML = `
+    ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
+    <div class="plan-main">
+      <div class="pm-row entry">
+        <span class="pm-label">เข้า${dir}ที่</span>
+        <span class="pm-val">${s.entry.toFixed(2)}</span>
+        <span class="pm-note">ตั้งเป็นคำสั่งรอได้</span>
+      </div>
+      <div class="pm-row sl">
+        <span class="pm-label">ตัดขาดทุน</span>
+        <span class="pm-val">${s.sl.toFixed(2)}</span>
+        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(0)}</span>
+      </div>
+      <div class="pm-row tp">
+        <span class="pm-label">เป้าทำกำไร</span>
+        <span class="pm-val">${s.tpMain.toFixed(2)}</span>
+        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${(riskMoney * rr).toFixed(0)}</span>
+      </div>
+    </div>
+    <div class="plan-size">
+      ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (${(lots * 100).toFixed(1)} ออนซ์)
+      · ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
+      ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
+    </div>
+
+    <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
+      <summary>ดูที่มาของตัวเลขทั้งหมด</summary>
+      <div class="why-body">
+        ${opt ? `
+        <h4>ทำไมตัดขาดทุนตรงนี้</h4>
+        <p>ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b>
+          ให้ผลดีที่สุดในบรรดาค่าที่ลอง</p>
+        ${opt.slAdvice && opt.slAdvice.level !== 'unknown'
+          ? `<p class="why-hint"><b>หมายเหตุจากข้อมูลทั้งหมด:</b> ${opt.slAdvice.text}</p>` : ''}
+        ${opt.maeWinners.n >= 10 ? `<p class="why-stat">ไม้ที่สุดท้ายชนะ เคยติดลบลึกสุดเท่าไร (เทียบกับระยะ SL):
+          ครึ่งหนึ่งไม่เกิน <b>${opt.maeWinners.p50.toFixed(2)}</b> ·
+          90% ไม่เกิน <b>${opt.maeWinners.p90.toFixed(2)}</b> ·
+          ลึกสุดที่เคยเจอ <b>${opt.maeWinners.max.toFixed(2)}</b>
+          <span class="why-hint">(ถ้าเกิน 1.00 แปลว่าไม้นั้นเกือบโดนเขี่ยออกก่อนวิ่ง)</span></p>` : ''}
+
+        <h4>ทำไมเป้าอยู่ตรงนี้</h4>
+        <p>ไม่ได้ตั้งเป็น 2 เท่าตายตัว แต่ลองทุกระยะแล้วเลือกระยะที่ให้ผลตอบแทนคาดหวังดีที่สุด
+          — ได้ <b>${s.mainR} เท่าของความเสี่ยง</b></p>
+        ${(() => {
+          const inE = opt.best.expectancy, outE = opt.outOfSample ? opt.outOfSample.expectancy : null;
+          const bad = outE !== null ? outE <= 0 : inE <= 0;
+          return `<p class="why-stat" style="${bad ? 'border-left:3px solid var(--down)' : 'border-left:3px solid var(--up)'}">
+            ผลตอบแทนคาดหวังต่อไม้ของชุดค่านี้: ช่วงเรียนรู้ <b>${inE >= 0 ? '+' : ''}${inE.toFixed(3)}</b> เท่าของเงินที่เสี่ยง
+            ${outE !== null ? `· ช่วงสอบจริง <b style="color:${outE > 0 ? 'var(--up)' : 'var(--down)'}">${outE >= 0 ? '+' : ''}${outE.toFixed(3)}</b>` : ''}
+            ${bad ? `<br><b style="color:var(--down)">⚠ ติดลบ = แม้จะเป็นชุดค่าที่ดีที่สุดเท่าที่หาได้ แต่ยังไม่มีชุดไหนทำกำไรได้กับข้อมูลช่วงนี้
+              — ตัวเลขในแผนใช้เรียนรู้ได้ แต่ยังไม่ควรเอาเงินจริงเข้าไป</b>` : ''}</p>`;
+        })()}
+        <table class="why-table"><thead><tr><th>ถ้าตั้งเป้าที่</th><th>ช่วงเรียนรู้</th><th>ช่วงสอบจริง</th></tr></thead><tbody>
+          ${opt.reachRates.map((x) => `<tr class="${Math.abs(x.targetR - s.mainR) < 1e-9 ? 'chosen' : ''}">
+            <td>${x.targetR} เท่า</td>
+            <td class="num">${x.inSample.toFixed(0)}%</td>
+            <td class="num">${x.outSample === null ? '—' : x.outSample.toFixed(0) + '%'}</td></tr>`).join('')}
+        </tbody></table>
+        <p class="why-hint">ตัวเลขคือ "กี่ % ของไม้ที่ราคาวิ่งไปถึงระยะนั้นก่อนโดนตัดขาดทุน"
+          เป้าใกล้ถึงบ่อยแต่ได้น้อย เป้าไกลได้เยอะแต่ถึงยาก — จุดที่คุ้มที่สุดคือจุดที่คูณกันแล้วสูงสุด</p>
+
+        <p class="why-stat">ระยะที่ราคาวิ่งไปได้จริง: ครึ่งหนึ่งของไม้ไปถึง <b>${opt.mfe.p50.toFixed(2)} เท่า</b> ·
+          หนึ่งในสี่ไปได้เกิน <b>${opt.mfe.p75.toFixed(2)} เท่า</b> ·
+          ไม้ที่วิ่งไกลสุด 10% ไปได้เกิน <b>${opt.mfe.p90.toFixed(2)} เท่า</b> (จาก ${opt.mfe.n} ไม้)</p>
+        ` : `<h4>ตัวเลขนี้มาจากไหน</h4>
+          <p>ยังหาค่าที่ดีที่สุดจากสถิติไม่ได้ จึงใช้ค่าตั้งต้น (จุดตัดขาดทุน 1.5 เท่าของระยะแกว่ง · เป้า 2 เท่าของความเสี่ยง)</p>
+          <p class="why-hint"><b>เหตุผล:</b> ${state.opt && state.opt.reason ? state.opt.reason : 'ยังไม่ได้ทดสอบย้อนหลัง'}</p>`}
+
+        <h4>บันไดเป้าหมายแบบอื่น</h4>
+        <table class="why-table"><tbody>
+          <tr><td>เป้าที่ 1 (1 เท่า)</td><td class="num">${s.tp1.toFixed(2)}</td></tr>
+          <tr><td>เป้าที่ 2 (2 เท่า)</td><td class="num">${s.tp2.toFixed(2)}</td></tr>
+          <tr><td>เป้าที่ 3 (${(Math.abs(s.tp3 - s.entry) / s.slDist).toFixed(1)} เท่า)</td><td class="num">${s.tp3.toFixed(2)}</td></tr>
+        </tbody></table>
+        <p class="why-hint">ถ้าชอบทยอยปิด: ปิดครึ่งที่เป้าที่ 1 แล้วเลื่อนจุดตัดขาดทุนมาที่ราคาเข้า
+          ที่เหลือปล่อยไปเป้าที่ 2</p>
+
+        ${s.notes.length ? `<h4>ข้อสังเกตของไม้นี้</h4><ul class="plan-notes">${s.notes.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
+      </div>
+    </details>`;
+
+  sizeBox.style.display = 'none';
+
+  // การ์ดนี้ถูกวาดใหม่ทุกรอบวิเคราะห์ ถ้าไม่จำไว้ รายละเอียดที่ผู้ใช้กางอ่านอยู่จะหุบเอง
+  const det = box.querySelector('.plan-why');
+  if (det) det.addEventListener('toggle', () => { state.planDetailsOpen = det.open; });
 }
 
 function renderReasons() {
@@ -736,6 +815,9 @@ function doBacktest() {
   $('btStatus').textContent = 'กำลังคำนวณ…';
   setTimeout(() => {
     const t0 = performance.now();
+    state.opt = optimizeExits(state.ctx, {
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+    });
     state.wf = walkForward(state.ctx, {
       maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
     });
@@ -747,6 +829,7 @@ function doBacktest() {
     renderBacktest();
     renderWalkForward();
     renderSignal();
+    renderPlan();   // แผนต้องใช้ค่าที่เพิ่งหาได้ ไม่ใช่รอรอบวิเคราะห์ถัดไป
     if ($('togMarkers').checked) {
       chart.setData({ markers: state.bt.trades.map((t) => ({ index: t.index, side: t.side })) });
       chart.render();
