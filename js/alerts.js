@@ -59,8 +59,12 @@ export class AlertCenter {
       this.audioCtx = this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
       const ctx = this.audioCtx;
       if (ctx.state === 'suspended') ctx.resume();
-      const seq = kind === 'buy' ? [523, 659, 784] : kind === 'sell' ? [784, 659, 440] : [880, 880];
+      const seq = kind === 'buy' ? [523, 659, 784]
+        : kind === 'sell' ? [784, 659, 440]
+        : kind === 'warn' ? [660, 0, 660]        // ปี๊บ-หยุด-ปี๊บ = "เตรียมตัว" ยังไม่ใช่สัญญาณจริง
+        : [880, 880];
       seq.forEach((f, i) => {
+        if (!f) return; // 0 = เว้นจังหวะเงียบ
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
@@ -102,7 +106,7 @@ export class AlertCenter {
     this.log.unshift(entry);
     this.log = this.log.slice(0, 200);
     this.save();
-    this.playSound(kind === 'buy' || kind === 'sell' ? kind : 'info');
+    this.playSound(['buy', 'sell', 'warn'].includes(kind) ? kind : 'info');
     if (kind === 'buy') this.saySomething('สัญญาณซื้อทองคำ');
     if (kind === 'sell') this.saySomething('สัญญาณขายทองคำ');
     if (this.desktop && 'Notification' in window && Notification.permission === 'granted') {

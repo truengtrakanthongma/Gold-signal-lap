@@ -98,6 +98,23 @@ function rollingMin(values, period) {
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 /**
+ * ปริมาณซื้อขายของ "แท่งที่ยังไม่ปิด" เอาไปเทียบกับค่าเฉลี่ยของแท่งที่ปิดแล้วตรง ๆ ไม่ได้
+ * เพราะแท่งที่เพิ่งเปิดมีเวลาสะสมปริมาณน้อยกว่ามาก (ต้นแท่งจะดู "เบาผิดปกติ" เสมอ)
+ * จึงต้องเทียบบัญญัติไตรยางศ์เป็น "ถ้าแท่งนี้ปิด จะมีปริมาณประมาณเท่าไร" ก่อน
+ *
+ * ใช้เฉพาะกับแท่งที่ closed === false เท่านั้น backtest จึงยังคงให้ผลเดิมทุกครั้ง
+ */
+export function projectedVolume(candles, i, now = Date.now()) {
+  const c = candles[i];
+  if (!c || c.closed !== false || i === 0) return { v: c ? c.v : 0, partial: false, frac: 1 };
+  const step = c.t - candles[i - 1].t;
+  if (!(step > 0)) return { v: c.v, partial: false, frac: 1 };
+  const elapsed = Math.min(step, Math.max(1, now - c.t));
+  const frac = Math.max(0.08, elapsed / step);
+  return { v: c.v / frac, partial: true, frac };
+}
+
+/**
  * ให้คะแนนที่แท่ง i (ใช้ข้อมูล 0..i เท่านั้น)
  * @returns {{score:number, side:number, factors:Array, regime:string, atrPct:number}}
  */
@@ -189,14 +206,16 @@ export function scoreAt(ctx, i) {
   }
 
   // ── 7) ปริมาณการซื้อขายยืนยัน ───────────────────────────────────────────
-  if (ctx.volSma[i] && ctx.vol[i] > 0) {
-    const ratio = ctx.vol[i] / ctx.volSma[i];
+  const pv = projectedVolume(candles, i);
+  if (ctx.volSma[i] && pv.v > 0) {
+    const ratio = pv.v / ctx.volSma[i];
+    const suffix = pv.partial ? ' (ประมาณการทั้งแท่ง เพราะแท่งนี้ยังไม่ปิด)' : '';
     const dir = Math.sign(c.c - c.o);
     if (ratio > 1.25 && dir !== 0) {
-      push('volume', 'Volume Confirm', dir, clamp((ratio - 1) / 1.5, 0.3, 1), `ปริมาณซื้อขายแท่งนี้สูงกว่าค่าเฉลี่ย 20 แท่ง ${ratio.toFixed(2)} เท่า และแท่งปิด${dir > 0 ? 'บวก' : 'ลบ'} = มีเงินจริงหนุนการเคลื่อนไหว ไม่ใช่การแกว่งลอย ๆ`);
+      push('volume', 'Volume Confirm', dir, clamp((ratio - 1) / 1.5, 0.3, 1), `ปริมาณซื้อขายแท่งนี้สูงกว่าค่าเฉลี่ย 20 แท่ง ${ratio.toFixed(2)} เท่า${suffix} และแท่ง${dir > 0 ? 'เป็นบวก' : 'เป็นลบ'} = มีเงินจริงหนุนการเคลื่อนไหว ไม่ใช่การแกว่งลอย ๆ`);
     } else if (ratio < 0.6) {
       factors.push({ key: 'volume', name: 'Volume Warning', side: 0, strength: 0, weight: 0, contribution: 0,
-        reason: `ปริมาณซื้อขายเบาบาง (${(ratio * 100).toFixed(0)}% ของค่าเฉลี่ย) = การเคลื่อนไหวนี้ขาดแรงยืนยัน ระวังสัญญาณหลอก` });
+        reason: `ปริมาณซื้อขายเบาบาง (${(ratio * 100).toFixed(0)}% ของค่าเฉลี่ย${suffix}) = การเคลื่อนไหวนี้ขาดแรงยืนยัน ระวังสัญญาณหลอก` });
     }
   }
 

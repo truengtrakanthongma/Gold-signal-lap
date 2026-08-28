@@ -9,6 +9,7 @@ import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
 import { levelsAt, fibLevels } from './levels.js';
+import { narrate, narrateShort } from './narrate.js';
 
 const $ = (id) => document.getElementById(id);
 const LS_SETTINGS = 'goldtrader.settings.v1';
@@ -25,6 +26,9 @@ const state = {
   bt: null,
   lastAnalyze: 0,
   lastClosedT: null,
+  warnedAt: 0,          // เตือนล่วงหน้าครั้งล่าสุดเมื่อไร
+  warnedSide: 0,
+  narrationOpen: true,
   analyzeTimer: null,
   events: [],
   prevClose: null,
@@ -37,7 +41,7 @@ const settings = {
   account: 1000, riskPct: 1,
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
-  closedOnly: true, maxHold: 60, spread: 0.30,
+  alertMode: 'early', maxHold: 60, spread: 0.30,
 };
 
 const feed = new MarketFeed();
@@ -74,6 +78,7 @@ async function init() {
   renderWeights();
   renderContextTab();
   setInterval(renderContextTab, 30000);
+  setInterval(tickCountdown, 1000);
   await reload();
 }
 
@@ -98,7 +103,7 @@ function buildStaticUI() {
   $('setNewsFilter').checked = settings.newsFilter;
   $('setVolFilter').checked = settings.volFilter;
   $('setSessionFilter').checked = settings.sessionFilter;
-  $('togClosedOnly').checked = settings.closedOnly;
+  $('alertMode').value = settings.alertMode || 'early';
 }
 
 function bindEvents() {
@@ -183,7 +188,12 @@ function bindEvents() {
   });
   $('togSound').addEventListener('change', (e) => { alerts.sound = e.target.checked; alerts.save(); if (e.target.checked) alerts.playSound('info'); });
   $('togSpeak').addEventListener('change', (e) => { alerts.speak = e.target.checked; alerts.save(); });
-  $('togClosedOnly').addEventListener('change', (e) => { settings.closedOnly = e.target.checked; saveSettings(); });
+  $('alertMode').addEventListener('change', (e) => { settings.alertMode = e.target.value; saveSettings(); alerts.resetCooldown(); });
+  $('toggleNarration').addEventListener('click', () => {
+    state.narrationOpen = !state.narrationOpen;
+    $('narrationBody').style.display = state.narrationOpen ? '' : 'none';
+    $('toggleNarration').textContent = state.narrationOpen ? 'ย่อ' : 'ขยาย';
+  });
   $('cooldownInput').addEventListener('change', (e) => { alerts.cooldownMs = (+e.target.value || 0) * 60000; alerts.save(); });
   $('webhookInput').addEventListener('change', (e) => { alerts.webhookUrl = e.target.value.trim(); alerts.save(); });
   $('addRule').addEventListener('click', () => {
@@ -312,6 +322,7 @@ function analyze(candleClosed, allowAlert = true) {
     : null;
 
   renderAll();
+  renderNarration();
   if (candleClosed) renderContextTab();
   chart.setData({
     candles: state.candles, ind: state.ctx, setup: state.setup,
@@ -319,10 +330,109 @@ function analyze(candleClosed, allowAlert = true) {
   });
   chart.render();
 
-  if (state.action !== 'wait' && allowAlert) {
-    const readyToFire = settings.closedOnly ? candleClosed : true;
-    if (readyToFire && alerts.shouldFireSignal(state.action === 'buy' ? 1 : -1)) fireSignalAlert();
+  if (allowAlert) handleAlerting(candleClosed);
+}
+
+/**
+ * ตัดสินใจว่าจะเตือนเมื่อไร
+ *
+ * ปัญหาที่ต้องแก้: ถ้ารอให้แท่งปิดก่อนค่อยเตือน บนกรอบ 15 นาทีอาจช้าไป 15 นาที
+ * แต่ถ้าเตือนทุกครั้งที่คะแนนถึงเกณฑ์ระหว่างแท่งยังไม่ปิด สัญญาณจะกลับไปกลับมา
+ *
+ * ทางออก (โหมด early): เตือน 2 จังหวะ
+ *   1. "เตรียมตัว" — คะแนนเข้าใกล้เกณฑ์ระหว่างแท่งกำลังก่อตัว → ให้เวลาไปเปิดจอ ตั้งออเดอร์รอ
+ *   2. "ยืนยัน"   — แท่งปิดแล้วคะแนนยังถึงเกณฑ์จริง → สัญญาณที่เชื่อถือได้
+ */
+function handleAlerting(candleClosed) {
+  const mode = settings.alertMode || 'early';
+  const side = state.action === 'buy' ? 1 : state.action === 'sell' ? -1 : 0;
+
+  if (mode === 'instant') {
+    if (side && alerts.shouldFireSignal(side)) fireSignalAlert();
+    return;
   }
+  if (mode === 'closed') {
+    if (side && candleClosed && alerts.shouldFireSignal(side)) fireSignalAlert();
+    return;
+  }
+
+  // โหมด early
+  if (side && candleClosed && alerts.shouldFireSignal(side)) { fireSignalAlert(); return; }
+  if (candleClosed) return;
+
+  // ระหว่างแท่งกำลังก่อตัว: เตือนล่วงหน้าเมื่อคะแนนเข้าใกล้เกณฑ์แล้ว
+  if (!state.combined || !state.scored || !state.scored.ready) return;
+  const score = state.combined.score;
+  const near = settings.threshold * 0.8;
+  const warnSide = Math.abs(score) >= near ? Math.sign(score) : 0;
+  if (!warnSide) return;
+  if ((state.blocks || []).length) return;
+  const now = Date.now();
+  if (warnSide === state.warnedSide && now - state.warnedAt < Math.max(60000, alerts.cooldownMs)) return;
+  state.warnedSide = warnSide;
+  state.warnedAt = now;
+
+  const price = state.candles[state.candles.length - 1].c;
+  const remain = candleRemainMs();
+  alerts.fire({
+    kind: 'warn',
+    title: `⚡ เตรียมตัว: อาจมีสัญญาณ${warnSide > 0 ? 'ซื้อ' : 'ขาย'} ${settings.symbol}`,
+    body: `คะแนนตอนนี้ ${score.toFixed(1)} (เกณฑ์ ${settings.threshold}) ที่ราคา ${price.toFixed(2)}\n` +
+          `แท่งจะปิดในอีก ${remain !== null ? fmtRemain(remain) : '-'} — ถ้าปิดแล้วคะแนนยังถึงเกณฑ์ ระบบจะยืนยันอีกครั้ง\n` +
+          `นี่ยังไม่ใช่สัญญาณยืนยัน แต่ให้เวลาคุณเตรียมตั้งคำสั่งรอไว้ก่อน`,
+    price, score,
+  });
+}
+
+/** เหลืออีกกี่มิลลิวินาทีแท่งปัจจุบันจะปิด */
+function candleRemainMs() {
+  if (!state.candles.length) return null;
+  const last = state.candles[state.candles.length - 1];
+  const step = TF[state.tf].ms;
+  const closeAt = last.t + step;
+  return Math.max(0, closeAt - Date.now());
+}
+
+function fmtRemain(ms) {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h} ชม. ${String(m).padStart(2, '0')} น.`;
+  return `${m}:${String(sec).padStart(2, '0')} นาที`;
+}
+
+function tickCountdown() {
+  const el = $('countdown');
+  if (!el) return;
+  const remain = candleRemainMs();
+  if (remain === null) return;
+  const b = el.querySelector('b');
+  if (b) b.textContent = fmtRemain(remain);
+  el.classList.toggle('soon', remain < 60000);
+}
+
+/** อัปเดตคำบรรยายกราฟ */
+function renderNarration() {
+  if (!state.ctx || !state.scored) return;
+  const htfScores = [{ tf: state.tf, score: state.scored.ready ? state.scored.score : null }];
+  for (const tf of [settings.htf1, settings.htf2]) {
+    if (tf === state.tf) continue;
+    const h = state.htf[tf];
+    htfScores.push({ tf, score: h && h.scored && h.scored.ready ? h.scored.score : null });
+  }
+  const sections = narrate({
+    candles: state.candles, ctx: state.ctx, scored: state.scored, combined: state.combined,
+    setup: state.setup, action: state.action, blocks: state.blocks || [], tf: state.tf,
+    session: sessionInfo(new Date()), prob: probabilityFor(state.combined ? state.combined.score : 0, state.bt),
+    htfScores,
+  });
+  $('narrationBody').innerHTML = sections.map((sec) => `
+    <div class="narr ${sec.tone}">
+      <h3>${sec.title}</h3>
+      <p>${sec.text}</p>
+    </div>`).join('');
+  $('narrationTime').textContent = `อัปเดตล่าสุด ${new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })}`;
 }
 
 function buildLevelList() {
@@ -346,6 +456,8 @@ function fireSignalAlert() {
     `${state.action === 'buy' ? '🟢 สัญญาณซื้อ' : '🔴 สัญญาณขาย'} ${settings.symbol} ${state.tf}`,
     `คะแนน ${state.combined.score.toFixed(1)} · โอกาสถึง 1R ${prob.p !== null ? prob.p.toFixed(0) + '%' : 'ยังไม่มีสถิติ'}`,
     s ? s.plan : '',
+    s ? 'แนะนำ: ตั้งคำสั่งรอ (limit) ที่ราคาเข้า ไม่ต้องไล่ราคาตลาด' : '',
+    narrateShort({ scored: state.scored, combined: state.combined, action: state.action, candles: state.candles }),
     top,
   ].filter(Boolean).join('\n');
   alerts.fire({

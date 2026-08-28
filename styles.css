@@ -220,3 +220,48 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
   .price-block { margin-left: 0; text-align: left; }
   .price-sub { justify-content: flex-start; }
 }
+
+/* ── นับถอยหลังแท่งปิด ────────────────────────────────── */
+.countdown {
+  font-size: 11.5px; color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 5px; padding: 3px 9px;
+}
+.countdown b { color: var(--text); font-family: 'JetBrains Mono', monospace; }
+.countdown.soon { border-color: var(--gold); color: var(--gold); }
+.countdown.soon b { color: var(--gold); }
+
+/* ── แผงคำบรรยายกราฟสด ────────────────────────────────── */
+.narration {
+  margin: 0 12px 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 14px 16px;
+}
+.narration-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.narration-head h2 { margin: 0; font-size: 15px; }
+.narration-meta { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); }
+.narration-body {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 12px; margin: 12px 0 4px;
+}
+.narr {
+  background: var(--panel-2); border-radius: 8px; padding: 11px 13px;
+  border-left: 3px solid var(--line);
+}
+.narr.good { border-left-color: var(--up); }
+.narr.bad { border-left-color: var(--down); }
+.narr.warn { border-left-color: var(--gold); }
+.narr h3 { font-size: 12.5px; color: var(--gold); margin: 0 0 6px; }
+.narr p { margin: 0; font-size: 13.2px; line-height: 1.72; color: #d7dee9; }
+.narr p b { color: #fff; }
+.narr p i { color: var(--muted); font-size: 12.3px; }
+.narr.good h3 { color: #6ee7a0; }
+.narr.bad h3 { color: #fca5a5; }
+
+/* ── แจ้งเตือนแบบเตรียมตัว ─────────────────────────────── */
+.toast.warn { border-left-color: var(--gold); }
+.log-item.warn { border-left-color: var(--gold); }
+
+@media (max-width: 700px) {
+  .narration { margin: 0 8px 10px; padding: 12px; }
+  .narration-body { grid-template-columns: 1fr; }
+  .narr p { font-size: 13.6px; }
+}

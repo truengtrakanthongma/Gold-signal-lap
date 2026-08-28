@@ -187,7 +187,15 @@ export class MarketFeed {
     // ผูก state ของราคาสดกับ "กรอบเวลาที่กำลังแสดงอยู่" เท่านั้น
     // ไม่งั้นการโหลดข้อมูลกรอบใหญ่ (1h/4h) จะไปทับ แล้วแท่งสดจะมี timestamp ผิดกรอบ
     if (interval === this.interval) {
-      this.demoState = { price, step, lastT: out[out.length - 1].t, cur: null, vol };
+      // ปริมาณต่อ tick ต้องหารตามจำนวน tick ที่จะเกิดใน 1 แท่ง
+      // ไม่งั้นแท่งสดจะสะสมปริมาณจนสูงกว่าข้อมูลย้อนหลังหลายเท่า
+      const avgVol = out.reduce((a, k) => a + k.v, 0) / out.length;
+      const ticksPerCandle = Math.max(1, step / 900);
+      this.demoState = {
+        price, step, lastT: out[out.length - 1].t, cur: null, vol,
+        volPerTick: avgVol / ticksPerCandle,
+        lastBar: out[out.length - 1],   // แท่งที่กำลังก่อตัวอยู่ในประวัติ
+      };
     }
     return Promise.resolve(out);
   }
@@ -203,12 +211,18 @@ export class MarketFeed {
       st.price = Math.max(1, st.price + move);
       if (!st.cur || st.cur.t !== bucket) {
         if (st.cur) this.onCandle({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
-        st.cur = { t: bucket, o: st.price, h: st.price, l: st.price, c: st.price, v: 0, closed: false };
+        if (!st.cur && st.lastBar && st.lastBar.t === bucket) {
+          // แท่งสดแท่งแรกคือแท่งเดียวกับที่อยู่ท้ายประวัติ — ต้องสานต่อ ไม่ใช่เขียนทับ
+          // ถ้าสร้างใหม่ ราคาเปิดกับปริมาณที่สะสมมาแล้วจะหายไป เกิดช่องว่างราคาปลอม
+          st.cur = { ...st.lastBar, closed: false };
+        } else {
+          st.cur = { t: bucket, o: st.price, h: st.price, l: st.price, c: st.price, v: 0, closed: false };
+        }
       }
       st.cur.c = st.price;
       st.cur.h = Math.max(st.cur.h, st.price);
       st.cur.l = Math.min(st.cur.l, st.price);
-      st.cur.v += Math.abs(move) * 900 + 12;
+      st.cur.v += (st.volPerTick || 1) * (0.5 + Math.random() + Math.abs(move) / (st.price * st.vol + 1e-9) * 0.3);
       this.onCandle({ ...st.cur });
     }, 900);
   }

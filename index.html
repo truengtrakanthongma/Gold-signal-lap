@@ -54,6 +54,7 @@
   <section class="chart-area">
     <div class="chart-toolbar">
       <div class="tf-group" id="tfGroup"></div>
+      <div class="countdown" id="countdown" title="เวลาที่เหลือก่อนแท่งเทียนปัจจุบันจะปิด">แท่งนี้ปิดในอีก <b>—</b></div>
       <div class="spacer"></div>
       <label class="chk"><input type="checkbox" id="togBB" checked> Bollinger</label>
       <label class="chk"><input type="checkbox" id="togLevels" checked> แนวรับ-ต้าน</label>
@@ -124,6 +125,18 @@
   </aside>
 </main>
 
+<section class="narration">
+  <div class="narration-head">
+    <h2>📖 กราฟตอนนี้กำลังบอกอะไร</h2>
+    <div class="narration-meta">
+      <span id="narrationTime"></span>
+      <button id="toggleNarration" class="btn small">ย่อ</button>
+    </div>
+  </div>
+  <div id="narrationBody" class="narration-body"></div>
+  <p class="tiny">คำอธิบายนี้สร้างจากตัวเลขจริงบนกราฟ ณ วินาทีนี้ และอัปเดตตัวเองตลอดเวลา — ใช้สำหรับเรียนรู้ว่าแต่ละตัวชี้วัดกำลังบอกอะไร ไม่ใช่คำแนะนำให้ซื้อขาย</p>
+</section>
+
 <section class="tabs-section">
   <div class="tabbar">
     <button class="tab active" data-tab="backtest">📊 ผลทดสอบย้อนหลัง</button>
@@ -155,7 +168,13 @@
       <button id="enableNotif" class="btn">เปิดแจ้งเตือนหน้าจอ</button>
       <label class="chk"><input type="checkbox" id="togSound" checked> เสียงเตือน</label>
       <label class="chk"><input type="checkbox" id="togSpeak"> อ่านออกเสียงไทย</label>
-      <label class="chk"><input type="checkbox" id="togClosedOnly" checked> ยืนยันเมื่อแท่งปิดเท่านั้น</label>
+      <label>จังหวะแจ้งเตือน
+        <select id="alertMode">
+          <option value="early">เตือนล่วงหน้า + ยืนยันตอนแท่งปิด (แนะนำ)</option>
+          <option value="instant">ทันทีที่คะแนนถึงเกณฑ์ (เร็วสุด)</option>
+          <option value="closed">เฉพาะตอนแท่งปิด (นิ่งสุด)</option>
+        </select>
+      </label>
       <label>เว้นระยะเตือน (นาที) <input type="number" id="cooldownInput" value="5" min="0" max="120"></label>
       <label class="wide">Webhook (Discord) <input type="text" id="webhookInput" placeholder="https://discord.com/api/webhooks/..."></label>
     </div>

@@ -128,6 +128,27 @@ section('2) การป้องกันการมองอนาคต (loo
   const pivotsAfter = pv.filter((p) => p.confirmedAt <= 400 && p.index > 400);
   ok('ไม่มี pivot ที่ "ยืนยันแล้ว" ก่อนที่มันจะเกิดขึ้นจริง', pivotsAfter.length === 0);
 
+  // ปริมาณของแท่งที่ยังไม่ปิด ต้องถูกประมาณการก่อนเทียบกับค่าเฉลี่ย
+  const { projectedVolume } = await import('../js/signals.js');
+  const step = 900000;
+  const t0 = 1700000000000;
+  const pair = [
+    { t: t0, o: 1, h: 2, l: 0.5, c: 1.5, v: 1000, closed: true },
+    { t: t0 + step, o: 1.5, h: 2, l: 1, c: 1.8, v: 250, closed: false },
+  ];
+  const half = projectedVolume(pair, 1, t0 + step + step / 2);
+  ok('แท่งที่ผ่านไปครึ่งเดียว → ประมาณการเป็น 2 เท่าของที่เห็น',
+    near(half.v, 500, 1e-6) && half.partial === true, `ได้ ${half.v}`);
+  const quarter = projectedVolume(pair, 1, t0 + step + step / 4);
+  ok('แท่งที่ผ่านไป 1 ใน 4 → ประมาณการเป็น 4 เท่า', near(quarter.v, 1000, 1e-6), `ได้ ${quarter.v}`);
+  const closedBar = projectedVolume([pair[0], { ...pair[1], closed: true }], 1, t0 + step + step / 2);
+  ok('แท่งที่ปิดแล้ว → ใช้ปริมาณจริง ไม่ประมาณการ (backtest จึงไม่เปลี่ยน)',
+    closedBar.v === 250 && closedBar.partial === false);
+  ok('แท่งแรกสุด (ไม่มีแท่งก่อนหน้าให้วัดความยาวกรอบ) → ไม่พัง',
+    projectedVolume(pair, 0).partial === false);
+  const capped = projectedVolume(pair, 1, t0 + step + 1);
+  ok('เพิ่งเปิดแท่งไม่กี่มิลลิวินาที → มีเพดานกันตัวเลขระเบิด', capped.v <= 250 / 0.08 + 1e-6, `ได้ ${capped.v}`);
+
   const s1 = scoreAt(full, 500), s2 = scoreAt(full, 500);
   ok('ผลลัพธ์คงที่ (deterministic) เรียกซ้ำได้ค่าเดิม', s1.score === s2.score);
 
@@ -342,6 +363,75 @@ section('7) การแปลงข้อมูลจาก Binance / Twelve Da
 
   globalThis.fetch = realFetch;
   globalThis.WebSocket = realWS;
+}
+
+// ── 8. คำบรรยายกราฟ ───────────────────────────────────────────────────
+section('8) คำบรรยายกราฟสด (ภาษาไทย)');
+{
+  const { narrate, narrateShort } = await import('../js/narrate.js');
+  const { sessionInfo } = await import('../js/macro.js');
+
+  const warm = narrate({ candles: [], ctx: null, scored: null, combined: null, action: 'wait' });
+  ok('ข้อมูลยังไม่พอ → ไม่พัง และบอกผู้ใช้ว่ากำลังรอ', warm.length === 1 && warm[0].text.includes('รอ'));
+
+  const candles = makeCandles(700, 77);
+  const ctx = buildContext(candles, DEFAULT_CFG);
+  const i = candles.length - 1;
+  const sc = scoreAt(ctx, i);
+  const combined = { score: sc.score, parts: [sc.score, 0, 0], notes: [] };
+  const setup = buildSetup(ctx, i, { ...sc, side: 1 }, { entryPrice: candles[i].c, side: 1 });
+
+  const secs = narrate({
+    candles, ctx, scored: sc, combined, setup, action: 'buy', blocks: [], tf: '15m',
+    session: sessionInfo(new Date()), prob: { p: 55, n: 40 },
+    htfScores: [{ tf: '15m', score: 40 }, { tf: '1h', score: 30 }],
+  });
+  ok('สร้างคำบรรยายได้หลายหัวข้อ', secs.length >= 6, `ได้ ${secs.length} หัวข้อ`);
+  ok('ทุกหัวข้อมีชื่อและเนื้อหา', secs.every((x) => x.title && x.text && x.text.length > 20));
+  ok('อ้างอิงราคาจริงจากกราฟ ไม่ใช่ข้อความสำเร็จรูป',
+    secs[0].text.includes(candles[i].c.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
+  ok('มีคำแนะนำให้ตั้งคำสั่งรอ แทนการไล่ราคา',
+    secs.some((x) => x.text.includes('limit') || x.text.includes('คำสั่งรอ')));
+
+  // จุดที่โค้ดแบบ template พังบ่อยที่สุด: ตัวแปรว่างแล้วหลุด undefined/NaN ออกหน้าจอ
+  let dirty = '';
+  for (let k = 260; k < 700; k += 7) {
+    const s2 = scoreAt(ctx, k);
+    const partial = candles.slice(0, k + 1);
+    for (const act of ['buy', 'sell', 'wait']) {
+      const sub = narrate({
+        candles: partial, ctx, scored: s2, combined: { score: s2.score, notes: [] },
+        setup: act === 'wait' ? null : buildSetup(ctx, k, { ...s2, side: act === 'buy' ? 1 : -1 }, { entryPrice: partial[k].c, side: act === 'buy' ? 1 : -1 }),
+        action: act, blocks: act === 'wait' ? ['ทดสอบเหตุผลระงับ'] : [], tf: '15m',
+        session: sessionInfo(new Date()), prob: { p: null, n: 0 },
+        htfScores: [{ tf: '15m', score: s2.score }, { tf: '1h', score: null }],
+      });
+      for (const x of sub) {
+        if (/undefined|NaN|\[object/.test(x.text) || /undefined|NaN/.test(x.title)) {
+          dirty = `แท่ง ${k} (${act}) หัวข้อ "${x.title}": ${x.text.slice(0, 90)}`;
+        }
+      }
+    }
+  }
+  ok('ไม่มี undefined / NaN หลุดออกมาให้ผู้ใช้เห็นเลยสักจุด (ทดสอบ 190 สถานการณ์)', dirty === '', dirty);
+
+  const waitSecs = narrate({
+    candles, ctx, scored: sc, combined, setup: null, action: 'wait', blocks: [], tf: '15m',
+    session: sessionInfo(new Date()), prob: { p: null, n: 0 }, htfScores: [],
+  });
+  const lastWait = waitSecs[waitSecs.length - 1];
+  ok('ตอนไม่มีสัญญาณ ต้องบอกว่า "ควรจับตาอะไร" ไม่ใช่ปล่อยว่าง',
+    lastWait.text.includes('จับตา'), lastWait.text.slice(0, 80));
+
+  const blocked = narrate({
+    candles, ctx, scored: sc, combined, setup, action: 'wait', blocks: ['อยู่ในช่วงข่าว NFP'], tf: '15m',
+    session: sessionInfo(new Date()), prob: { p: 55, n: 40 }, htfScores: [],
+  });
+  ok('ถ้าถูกระงับสัญญาณ ต้องบอกเหตุผลให้ชัด',
+    blocked[blocked.length - 1].text.includes('NFP'));
+
+  const short = narrateShort({ scored: sc, combined, action: 'buy', candles });
+  ok('สรุปสั้นบรรทัดเดียวใช้ได้ ไม่มีค่าว่าง', short.length > 20 && !/undefined|NaN/.test(short), short);
 }
 
 console.log(`\n${'─'.repeat(52)}`);
