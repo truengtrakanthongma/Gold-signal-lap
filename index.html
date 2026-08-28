@@ -238,6 +238,15 @@
         <label class="chk"><input type="checkbox" id="setNewsFilter" checked> ระงับสัญญาณช่วง ±30 นาทีรอบข่าวแรง</label>
         <label class="chk"><input type="checkbox" id="setVolFilter" checked> ระงับเมื่อผันผวนต่ำ/สูงผิดปกติ</label>
         <label class="chk"><input type="checkbox" id="setSessionFilter"> เตือนเมื่ออยู่นอกช่วงตลาดหลัก</label>
+        <label class="chk"><input type="checkbox" id="setSmartSession" checked> เทรดเฉพาะช่วงเวลาที่สถิติของระบบเองบอกว่าทำกำไรได้</label>
+        <label>โหลดข้อมูลย้อนหลัง
+          <select id="historyBars">
+            <option value="1000">1,000 แท่ง (เร็ว · สถิติน้อย)</option>
+            <option value="3000" selected>3,000 แท่ง (แนะนำ)</option>
+            <option value="6000">6,000 แท่ง</option>
+            <option value="10000">10,000 แท่ง (ช้า · สถิติแน่นสุด)</option>
+          </select>
+        </label>
         <label>อัตราแลกเปลี่ยน USD/THB <input type="number" id="setUsdThb" value="36.5" step="0.05"></label>
         <label>API key (Twelve Data) <input type="password" id="setApiKey" placeholder="ไม่บังคับ"></label>
       </div>

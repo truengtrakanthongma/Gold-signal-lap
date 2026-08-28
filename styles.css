@@ -471,3 +471,6 @@ body.simple .narr p { font-size: 13.8px; }
   .plan-why > summary { font-size: 14px; padding: 10px 0; }
   .why-body p, .why-table td { font-size: 13.5px; }
 }
+
+.be-line { display: inline-block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.be-line b { color: #e2e8f0; }

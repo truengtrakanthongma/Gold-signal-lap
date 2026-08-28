@@ -4,7 +4,7 @@
 
 import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS } from './signals.js';
-import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval } from './backtest.js';
+import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -45,6 +45,7 @@ const settings = {
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
+  smartSession: true, historyBars: 3000,
 };
 
 const feed = new MarketFeed();
@@ -109,6 +110,8 @@ function buildStaticUI() {
   $('setNewsFilter').checked = settings.newsFilter;
   $('setVolFilter').checked = settings.volFilter;
   $('setSessionFilter').checked = settings.sessionFilter;
+  $('setSmartSession').checked = settings.smartSession !== false;
+  $('historyBars').value = String(settings.historyBars || 3000);
   $('alertMode').value = settings.alertMode || 'early';
   setMode(settings.simpleMode !== false);
 }
@@ -188,6 +191,8 @@ function bindEvents() {
   }));
   $('setHtf1').addEventListener('change', (e) => { settings.htf1 = e.target.value; saveSettings(); reload(); });
   $('setHtf2').addEventListener('change', (e) => { settings.htf2 = e.target.value; saveSettings(); reload(); });
+  $('setSmartSession').addEventListener('change', (e) => { settings.smartSession = e.target.checked; saveSettings(); analyze(true, false); });
+  $('historyBars').addEventListener('change', (e) => { settings.historyBars = +e.target.value || 3000; saveSettings(); reload(); });
   ['setNewsFilter', 'setVolFilter', 'setSessionFilter'].forEach((id) => $(id).addEventListener('change', () => {
     settings.newsFilter = $('setNewsFilter').checked;
     settings.volFilter = $('setVolFilter').checked;
@@ -251,7 +256,7 @@ async function reload() {
   feed.configure({ source: settings.source, symbol: settings.symbol, interval: state.tf, apiKey: settings.apiKey });
   setStatus('loading', `กำลังโหลด ${settings.symbol} ${state.tf}…`);
   try {
-    state.candles = await feed.loadHistory(state.tf, 1000);
+    state.candles = await feed.loadHistory(state.tf, settings.historyBars || 3000);
     if (!state.candles.length) throw new Error('ไม่มีข้อมูลย้อนหลัง');
     state.htf = {};
     for (const tf of [settings.htf1, settings.htf2]) {
@@ -350,6 +355,15 @@ function analyze(candleClosed, allowAlert = true) {
   }
   if (settings.sessionFilter && sess.quality < 0.6) {
     blocks.push(`อยู่นอกช่วงตลาดหลัก (${sess.label}) — สภาพคล่องบาง สัญญาณเบรกหลอกบ่อย`);
+  }
+  // เอาสถิติที่ระบบวัดได้เองมาใช้จริง ไม่ใช่แค่แสดงให้ดู
+  // ถ้าช่วงเวลานี้เคยขาดทุนซ้ำ ๆ ในอดีต ก็ไม่มีเหตุผลจะเทรดในช่วงนี้
+  if (settings.smartSession !== false && state.bt && state.bt.stats.n) {
+    const now = sessionBucketAt(new Date());
+    const stat = now ? state.bt.sessions.find((x) => x.key === now.key) : null;
+    if (stat && stat.n >= 8 && stat.avgR !== null && stat.avgR < 0) {
+      blocks.push(`ช่วง${stat.label} เคยขาดทุนในอดีต (${stat.n} ไม้ · เฉลี่ย ${stat.avgR.toFixed(2)} เท่าของความเสี่ยงต่อไม้) — ระบบจึงข้ามช่วงนี้`);
+    }
   }
   state.blocks = blocks;
 
@@ -691,6 +705,16 @@ function renderPlan() {
       ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (${(lots * 100).toFixed(1)} ออนซ์)
       · ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
       ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
+      ${(() => {
+        // จุดคุ้มทุน: ที่อัตราส่วนได้:เสีย R ต้องชนะ 1/(1+R) ถึงจะเสมอตัว
+        const be = (1 / (1 + rr)) * 100;
+        const p = reach && reach.outSample !== null ? reach.outSample : null;
+        return `<br><span class="be-line">ที่อัตราส่วนนี้ <b>ชนะเกิน ${be.toFixed(0)}% ก็กำไรแล้ว</b>`
+          + (p === null ? ''
+            : p > be ? ` — ตอนนี้ ${p.toFixed(0)}% <b style="color:var(--up)">ผ่านจุดคุ้มทุน</b>`
+                     : ` — ตอนนี้ ${p.toFixed(0)}% <b style="color:var(--down)">ยังไม่ถึงจุดคุ้มทุน</b>`)
+          + '</span>';
+      })()}
     </div>
 
     <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
@@ -919,7 +943,7 @@ function renderBacktest() {
   const stat = (label, value, cls = '') => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
   $('btSummary').innerHTML = [
     stat('จำนวนไม้ที่ระบบเข้า', s.n),
-    stat('อัตราถึงเป้า 1R', `${s.winRate.toFixed(1)}%`, s.winRate >= 50 ? 'good' : 'bad'),
+    stat('อัตราถึงเป้า 1R', `${s.winRate.toFixed(1)}%`, s.expectancy > 0 ? 'good' : 'bad'),
     stat('ช่วงเชื่อมั่น 95%', ci ? `${ci.low.toFixed(0)}–${ci.high.toFixed(0)}%` : '—'),
     stat('ค่าคาดหวังต่อไม้', `${s.expectancy.toFixed(3)}R`, s.expectancy > 0 ? 'good' : 'bad'),
     stat('กำไรรวม', `${s.totalR.toFixed(1)}R`, s.totalR > 0 ? 'good' : 'bad'),
@@ -930,10 +954,16 @@ function renderBacktest() {
     stat('ไม้ที่ชนะวิ่งไปเฉลี่ย', s.avgMaxFavWinners ? `${s.avgMaxFavWinners.toFixed(2)}R` : '—'),
   ].join('');
 
+  const beNote = `<p class="tiny" style="grid-column:1/-1;margin-top:2px">
+    <b>อัตราชนะต่ำไม่ได้แปลว่าแย่</b> — สิ่งที่ตัดสินว่ากำไรหรือขาดทุนคือ "ค่าคาดหวังต่อไม้"
+    ที่อัตราส่วนได้:เสีย 1:1 ต้องชนะเกิน 50% · ที่ 2:1 ชนะแค่ 34% ก็กำไร · ที่ 3:1 ชนะแค่ 25% ก็พอ
+    ระบบนี้ชนะ ${s.winRate.toFixed(0)}% และค่าคาดหวัง ${s.expectancy >= 0 ? '+' : ''}${s.expectancy.toFixed(3)} เท่าของเงินที่เสี่ยง —
+    <b style="color:${s.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${s.expectancy > 0 ? 'เป็นบวก คือใช้ได้' : 'ติดลบ คือยังไม่ได้'}</b></p>`;
+
   const expl = s.expectancy > 0.05
     ? `<p class="tiny" style="color:var(--up)">ค่าคาดหวัง +${s.expectancy.toFixed(3)}R ต่อไม้ หมายความว่าถ้าเสี่ยง $${(settings.account * settings.riskPct / 100).toFixed(0)} ต่อไม้ ระบบนี้ให้ผลเฉลี่ย ~$${(settings.account * settings.riskPct / 100 * s.expectancy).toFixed(2)} ต่อไม้ในข้อมูลชุดนี้ — และเคยขาดทุนติดกันสูงสุด ${s.maxLossStreak} ไม้ ต้องมีทุนและใจพอทนช่วงนั้น</p>`
     : `<p class="tiny" style="color:var(--down)">ค่าคาดหวังติดลบในข้อมูลชุดนี้ — ยังไม่ควรเทรดตามเกณฑ์ปัจจุบัน ลองเพิ่มคะแนนขั้นต่ำ เปลี่ยนกรอบเวลา หรือดูตารางช่วงเวลาว่าควรเลี่ยงชั่วโมงไหน</p>`;
-  $('btSummary').innerHTML += `<div style="grid-column:1/-1">${expl}</div>`;
+  $('btSummary').innerHTML += beNote + `<div style="grid-column:1/-1">${expl}</div>`;
 
   const maxN = Math.max(...bt.bands.map((b) => b.n), 1);
   $('btBands').innerHTML = `<table><thead><tr><th>ช่วงคะแนน</th><th>จำนวนไม้</th><th>อัตราชนะ</th><th>ค่าคาดหวัง</th></tr></thead><tbody>

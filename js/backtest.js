@@ -13,6 +13,23 @@
 
 import { scoreAt, buildSetup } from './signals.js';
 
+/**
+ * ช่วงเวลาที่ใช้แบ่งสถิติ (เวลาไทย)
+ * ต้องเป็นชุดเดียวกับที่ตัวกรองสดใช้ ไม่งั้นตัวเลขที่เห็นกับกฎที่ใช้จะคนละเรื่องกัน
+ */
+export const SESSION_BUCKETS = [
+  { key: 'asia', label: 'เอเชีย (07:00-14:00 น.)', from: 7, to: 14 },
+  { key: 'london', label: 'ลอนดอน (14:00-20:00 น.)', from: 14, to: 20 },
+  { key: 'overlap', label: 'ลอนดอน×นิวยอร์ก (20:00-24:00 น.)', from: 20, to: 24 },
+  { key: 'late', label: 'ดึก-เช้ามืด (00:00-07:00 น.)', from: 0, to: 7 },
+];
+
+/** ตอนนี้อยู่ช่วงไหน (เวลาไทย) */
+export function sessionBucketAt(date = new Date()) {
+  const h = (date.getUTCHours() + 7) % 24;
+  return SESSION_BUCKETS.find((s) => h >= s.from && h < s.to) || null;
+}
+
 export const DEFAULT_BT = {
   threshold: 35,
   maxHold: 60,        // ถือไม้ได้สูงสุดกี่แท่ง ก่อนตัดออกที่ราคาตลาด
@@ -151,12 +168,7 @@ function summarize(trades, o) {
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
 
-  const sessions = [
-    { key: 'asia', label: 'เอเชีย (07:00-14:00 น.)', from: 7, to: 14 },
-    { key: 'london', label: 'ลอนดอน (14:00-20:00 น.)', from: 14, to: 20 },
-    { key: 'overlap', label: 'ลอนดอน×นิวยอร์ก (20:00-24:00 น.)', from: 20, to: 24 },
-    { key: 'late', label: 'ดึก-เช้ามืด (00:00-07:00 น.)', from: 0, to: 7 },
-  ].map((s) => {
+  const sessions = SESSION_BUCKETS.map((s) => {
     const list = trades.filter((t) => t.hourTh >= s.from && t.hourTh < s.to);
     const w = list.filter((t) => t.hit1R).length;
     return { ...s, n: list.length, winRate: list.length ? (w / list.length) * 100 : null,

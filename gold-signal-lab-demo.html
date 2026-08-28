@@ -484,6 +484,9 @@ body.simple .narr p { font-size: 13.8px; }
   .why-body p, .why-table td { font-size: 13.5px; }
 }
 
+.be-line { display: inline-block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.be-line b { color: #e2e8f0; }
+
 </style>
 </head>
 <body>
@@ -738,6 +741,15 @@ body.simple .narr p { font-size: 13.8px; }
         <label class="chk"><input type="checkbox" id="setNewsFilter" checked> ระงับสัญญาณช่วง ±30 นาทีรอบข่าวแรง</label>
         <label class="chk"><input type="checkbox" id="setVolFilter" checked> ระงับเมื่อผันผวนต่ำ/สูงผิดปกติ</label>
         <label class="chk"><input type="checkbox" id="setSessionFilter"> เตือนเมื่ออยู่นอกช่วงตลาดหลัก</label>
+        <label class="chk"><input type="checkbox" id="setSmartSession" checked> เทรดเฉพาะช่วงเวลาที่สถิติของระบบเองบอกว่าทำกำไรได้</label>
+        <label>โหลดข้อมูลย้อนหลัง
+          <select id="historyBars">
+            <option value="1000">1,000 แท่ง (เร็ว · สถิติน้อย)</option>
+            <option value="3000" selected>3,000 แท่ง (แนะนำ)</option>
+            <option value="6000">6,000 แท่ง</option>
+            <option value="10000">10,000 แท่ง (ช้า · สถิติแน่นสุด)</option>
+          </select>
+        </label>
         <label>อัตราแลกเปลี่ยน USD/THB <input type="number" id="setUsdThb" value="36.5" step="0.05"></label>
         <label>API key (Twelve Data) <input type="password" id="setApiKey" placeholder="ไม่บังคับ"></label>
       </div>
@@ -2091,6 +2103,23 @@ __m.backtest = (function () {
 
 
 
+/**
+ * ช่วงเวลาที่ใช้แบ่งสถิติ (เวลาไทย)
+ * ต้องเป็นชุดเดียวกับที่ตัวกรองสดใช้ ไม่งั้นตัวเลขที่เห็นกับกฎที่ใช้จะคนละเรื่องกัน
+ */
+const SESSION_BUCKETS = [
+  { key: 'asia', label: 'เอเชีย (07:00-14:00 น.)', from: 7, to: 14 },
+  { key: 'london', label: 'ลอนดอน (14:00-20:00 น.)', from: 14, to: 20 },
+  { key: 'overlap', label: 'ลอนดอน×นิวยอร์ก (20:00-24:00 น.)', from: 20, to: 24 },
+  { key: 'late', label: 'ดึก-เช้ามืด (00:00-07:00 น.)', from: 0, to: 7 },
+];
+
+/** ตอนนี้อยู่ช่วงไหน (เวลาไทย) */
+function sessionBucketAt(date = new Date()) {
+  const h = (date.getUTCHours() + 7) % 24;
+  return SESSION_BUCKETS.find((s) => h >= s.from && h < s.to) || null;
+}
+
 const DEFAULT_BT = {
   threshold: 35,
   maxHold: 60,        // ถือไม้ได้สูงสุดกี่แท่ง ก่อนตัดออกที่ราคาตลาด
@@ -2229,12 +2258,7 @@ function summarize(trades, o) {
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
 
-  const sessions = [
-    { key: 'asia', label: 'เอเชีย (07:00-14:00 น.)', from: 7, to: 14 },
-    { key: 'london', label: 'ลอนดอน (14:00-20:00 น.)', from: 14, to: 20 },
-    { key: 'overlap', label: 'ลอนดอน×นิวยอร์ก (20:00-24:00 น.)', from: 20, to: 24 },
-    { key: 'late', label: 'ดึก-เช้ามืด (00:00-07:00 น.)', from: 0, to: 7 },
-  ].map((s) => {
+  const sessions = SESSION_BUCKETS.map((s) => {
     const list = trades.filter((t) => t.hourTh >= s.from && t.hourTh < s.to);
     const w = list.filter((t) => t.hit1R).length;
     return { ...s, n: list.length, winRate: list.length ? (w / list.length) * 100 : null,
@@ -2521,7 +2545,7 @@ function wilsonInterval(wins, n, z = 1.96) {
   return { low: ((centre - margin) / denom) * 100, high: ((centre + margin) / denom) * 100 };
 }
 
-  return {DEFAULT_BT, runBacktest, evaluateTarget, optimizeExits, walkForward, probabilityFor, wilsonInterval};
+  return {SESSION_BUCKETS, sessionBucketAt, DEFAULT_BT, runBacktest, evaluateTarget, optimizeExits, walkForward, probabilityFor, wilsonInterval};
 })();
 
 __m.chart = (function () {
@@ -3291,20 +3315,56 @@ class MarketFeed {
     return this._binanceHistory(interval, limit);
   }
 
-  async _binanceHistory(interval, limit) {
+  /** ยิงคำขอไป Binance โดยสลับโฮสต์อัตโนมัติถ้าโฮสต์แรกใช้ไม่ได้ */
+  async _binanceGet(path) {
     let lastErr;
     for (let attempt = 0; attempt < BINANCE_HOSTS.length; attempt++) {
-      const host = BINANCE_HOSTS[(this.hostIdx + attempt) % BINANCE_HOSTS.length];
+      const idx = (this.hostIdx + attempt) % BINANCE_HOSTS.length;
       try {
-        const url = `${host}/api/v3/klines?symbol=${this.symbol}&interval=${TF[interval].binance}&limit=${Math.min(limit, 1000)}`;
-        const raw = await fetchJson(url);
-        this.hostIdx = (this.hostIdx + attempt) % BINANCE_HOSTS.length;
-        return raw.map((k) => ({
-          t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5], closed: true,
-        }));
+        const data = await fetchJson(`${BINANCE_HOSTS[idx]}${path}`);
+        this.hostIdx = idx;   // จำโฮสต์ที่ใช้ได้ไว้ ครั้งต่อไปจะได้ไม่ต้องลองใหม่
+        return data;
       } catch (e) { lastErr = e; }
     }
     throw new Error(`โหลดข้อมูลจาก Binance ไม่สำเร็จ (${lastErr && lastErr.message})`);
+  }
+
+  /**
+   * โหลดแท่งเทียนย้อนหลัง — ขอได้เกิน 1,000 แท่ง
+   *
+   * Binance ให้ครั้งละไม่เกิน 1,000 แท่ง ถ้าอยากได้มากกว่านั้นต้องไล่ขอเป็นชุด
+   * โดยเลื่อน endTime ถอยหลังไปทีละชุด
+   *
+   * ทำไมต้องได้เยอะ: สถิติจาก 1,000 แท่งบนกรอบ 15 นาที = ข้อมูลแค่ 10 วัน
+   * ได้ไม้เทรดไม่กี่สิบไม้ ซึ่งน้อยเกินกว่าจะบอกได้ว่าระบบมีความได้เปรียบจริงหรือแค่บังเอิญ
+   */
+  async _binanceHistory(interval, limit) {
+    const perCall = 1000;
+    const tf = TF[interval].binance;
+    const out = [];
+    let endTime = null;
+    let remaining = Math.max(1, limit);
+
+    while (remaining > 0 && out.length < limit) {
+      const n = Math.min(perCall, remaining);
+      const q = `/api/v3/klines?symbol=${this.symbol}&interval=${tf}&limit=${n}`
+        + (endTime ? `&endTime=${endTime}` : '');
+      const raw = await this._binanceGet(q);
+      if (!raw || !raw.length) break;
+      out.unshift(...raw);
+      endTime = raw[0][0] - 1;      // ขยับไปก่อนแท่งเก่าสุดที่เพิ่งได้มา
+      remaining -= raw.length;
+      if (raw.length < n) break;     // ไม่มีข้อมูลเก่ากว่านี้อีกแล้ว
+      this.onStatus({ state: 'loading', message: `กำลังโหลดประวัติราคา ${out.length.toLocaleString('th-TH')} แท่ง…` });
+    }
+    if (!out.length) throw new Error('Binance ไม่ส่งข้อมูลแท่งเทียนกลับมา');
+
+    // ชุดที่ต่อกันอาจมีแท่งซ้ำตรงรอยต่อ ต้องกรองออกและเรียงตามเวลาให้แน่ใจ
+    const seen = new Set();
+    return out
+      .filter((k) => { if (seen.has(k[0])) return false; seen.add(k[0]); return true; })
+      .sort((a, b) => a[0] - b[0])
+      .map((k) => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5], closed: true }));
   }
 
   async _tdHistory(interval, limit) {
@@ -3704,7 +3764,7 @@ function toThai(name) {
 __m.app = (function () {
   const {MarketFeed, TF, mergeCandle} = __m.feed;
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS} = __m.signals;
-  const {runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval} = __m.backtest;
+  const {runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt} = __m.backtest;
   const {Chart} = __m.chart;
   const {AlertCenter} = __m.alerts;
   const {sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht} = __m.macro;
@@ -3759,6 +3819,7 @@ const settings = {
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
+  smartSession: true, historyBars: 3000,
 };
 
 const feed = new MarketFeed();
@@ -3823,6 +3884,8 @@ function buildStaticUI() {
   $('setNewsFilter').checked = settings.newsFilter;
   $('setVolFilter').checked = settings.volFilter;
   $('setSessionFilter').checked = settings.sessionFilter;
+  $('setSmartSession').checked = settings.smartSession !== false;
+  $('historyBars').value = String(settings.historyBars || 3000);
   $('alertMode').value = settings.alertMode || 'early';
   setMode(settings.simpleMode !== false);
 }
@@ -3902,6 +3965,8 @@ function bindEvents() {
   }));
   $('setHtf1').addEventListener('change', (e) => { settings.htf1 = e.target.value; saveSettings(); reload(); });
   $('setHtf2').addEventListener('change', (e) => { settings.htf2 = e.target.value; saveSettings(); reload(); });
+  $('setSmartSession').addEventListener('change', (e) => { settings.smartSession = e.target.checked; saveSettings(); analyze(true, false); });
+  $('historyBars').addEventListener('change', (e) => { settings.historyBars = +e.target.value || 3000; saveSettings(); reload(); });
   ['setNewsFilter', 'setVolFilter', 'setSessionFilter'].forEach((id) => $(id).addEventListener('change', () => {
     settings.newsFilter = $('setNewsFilter').checked;
     settings.volFilter = $('setVolFilter').checked;
@@ -3965,7 +4030,7 @@ async function reload() {
   feed.configure({ source: settings.source, symbol: settings.symbol, interval: state.tf, apiKey: settings.apiKey });
   setStatus('loading', `กำลังโหลด ${settings.symbol} ${state.tf}…`);
   try {
-    state.candles = await feed.loadHistory(state.tf, 1000);
+    state.candles = await feed.loadHistory(state.tf, settings.historyBars || 3000);
     if (!state.candles.length) throw new Error('ไม่มีข้อมูลย้อนหลัง');
     state.htf = {};
     for (const tf of [settings.htf1, settings.htf2]) {
@@ -4064,6 +4129,15 @@ function analyze(candleClosed, allowAlert = true) {
   }
   if (settings.sessionFilter && sess.quality < 0.6) {
     blocks.push(`อยู่นอกช่วงตลาดหลัก (${sess.label}) — สภาพคล่องบาง สัญญาณเบรกหลอกบ่อย`);
+  }
+  // เอาสถิติที่ระบบวัดได้เองมาใช้จริง ไม่ใช่แค่แสดงให้ดู
+  // ถ้าช่วงเวลานี้เคยขาดทุนซ้ำ ๆ ในอดีต ก็ไม่มีเหตุผลจะเทรดในช่วงนี้
+  if (settings.smartSession !== false && state.bt && state.bt.stats.n) {
+    const now = sessionBucketAt(new Date());
+    const stat = now ? state.bt.sessions.find((x) => x.key === now.key) : null;
+    if (stat && stat.n >= 8 && stat.avgR !== null && stat.avgR < 0) {
+      blocks.push(`ช่วง${stat.label} เคยขาดทุนในอดีต (${stat.n} ไม้ · เฉลี่ย ${stat.avgR.toFixed(2)} เท่าของความเสี่ยงต่อไม้) — ระบบจึงข้ามช่วงนี้`);
+    }
   }
   state.blocks = blocks;
 
@@ -4405,6 +4479,16 @@ function renderPlan() {
       ขนาดไม้ <b>${lots.toFixed(3)} lot</b> (${(lots * 100).toFixed(1)} ออนซ์)
       · ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
       ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
+      ${(() => {
+        // จุดคุ้มทุน: ที่อัตราส่วนได้:เสีย R ต้องชนะ 1/(1+R) ถึงจะเสมอตัว
+        const be = (1 / (1 + rr)) * 100;
+        const p = reach && reach.outSample !== null ? reach.outSample : null;
+        return `<br><span class="be-line">ที่อัตราส่วนนี้ <b>ชนะเกิน ${be.toFixed(0)}% ก็กำไรแล้ว</b>`
+          + (p === null ? ''
+            : p > be ? ` — ตอนนี้ ${p.toFixed(0)}% <b style="color:var(--up)">ผ่านจุดคุ้มทุน</b>`
+                     : ` — ตอนนี้ ${p.toFixed(0)}% <b style="color:var(--down)">ยังไม่ถึงจุดคุ้มทุน</b>`)
+          + '</span>';
+      })()}
     </div>
 
     <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
@@ -4633,7 +4717,7 @@ function renderBacktest() {
   const stat = (label, value, cls = '') => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
   $('btSummary').innerHTML = [
     stat('จำนวนไม้ที่ระบบเข้า', s.n),
-    stat('อัตราถึงเป้า 1R', `${s.winRate.toFixed(1)}%`, s.winRate >= 50 ? 'good' : 'bad'),
+    stat('อัตราถึงเป้า 1R', `${s.winRate.toFixed(1)}%`, s.expectancy > 0 ? 'good' : 'bad'),
     stat('ช่วงเชื่อมั่น 95%', ci ? `${ci.low.toFixed(0)}–${ci.high.toFixed(0)}%` : '—'),
     stat('ค่าคาดหวังต่อไม้', `${s.expectancy.toFixed(3)}R`, s.expectancy > 0 ? 'good' : 'bad'),
     stat('กำไรรวม', `${s.totalR.toFixed(1)}R`, s.totalR > 0 ? 'good' : 'bad'),
@@ -4644,10 +4728,16 @@ function renderBacktest() {
     stat('ไม้ที่ชนะวิ่งไปเฉลี่ย', s.avgMaxFavWinners ? `${s.avgMaxFavWinners.toFixed(2)}R` : '—'),
   ].join('');
 
+  const beNote = `<p class="tiny" style="grid-column:1/-1;margin-top:2px">
+    <b>อัตราชนะต่ำไม่ได้แปลว่าแย่</b> — สิ่งที่ตัดสินว่ากำไรหรือขาดทุนคือ "ค่าคาดหวังต่อไม้"
+    ที่อัตราส่วนได้:เสีย 1:1 ต้องชนะเกิน 50% · ที่ 2:1 ชนะแค่ 34% ก็กำไร · ที่ 3:1 ชนะแค่ 25% ก็พอ
+    ระบบนี้ชนะ ${s.winRate.toFixed(0)}% และค่าคาดหวัง ${s.expectancy >= 0 ? '+' : ''}${s.expectancy.toFixed(3)} เท่าของเงินที่เสี่ยง —
+    <b style="color:${s.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${s.expectancy > 0 ? 'เป็นบวก คือใช้ได้' : 'ติดลบ คือยังไม่ได้'}</b></p>`;
+
   const expl = s.expectancy > 0.05
     ? `<p class="tiny" style="color:var(--up)">ค่าคาดหวัง +${s.expectancy.toFixed(3)}R ต่อไม้ หมายความว่าถ้าเสี่ยง ${(settings.account * settings.riskPct / 100).toFixed(0)} ต่อไม้ ระบบนี้ให้ผลเฉลี่ย ~${(settings.account * settings.riskPct / 100 * s.expectancy).toFixed(2)} ต่อไม้ในข้อมูลชุดนี้ — และเคยขาดทุนติดกันสูงสุด ${s.maxLossStreak} ไม้ ต้องมีทุนและใจพอทนช่วงนั้น</p>`
     : `<p class="tiny" style="color:var(--down)">ค่าคาดหวังติดลบในข้อมูลชุดนี้ — ยังไม่ควรเทรดตามเกณฑ์ปัจจุบัน ลองเพิ่มคะแนนขั้นต่ำ เปลี่ยนกรอบเวลา หรือดูตารางช่วงเวลาว่าควรเลี่ยงชั่วโมงไหน</p>`;
-  $('btSummary').innerHTML += `<div style="grid-column:1/-1">${expl}</div>`;
+  $('btSummary').innerHTML += beNote + `<div style="grid-column:1/-1">${expl}</div>`;
 
   const maxN = Math.max(...bt.bands.map((b) => b.n), 1);
   $('btBands').innerHTML = `<table><thead><tr><th>ช่วงคะแนน</th><th>จำนวนไม้</th><th>อัตราชนะ</th><th>ค่าคาดหวัง</th></tr></thead><tbody>

@@ -431,6 +431,44 @@ section('7) การแปลงข้อมูลจาก Binance / Twelve Da
   ok('URL มีสัญลักษณ์ กรอบเวลา และจำนวนแท่งครบ',
     calls[1].includes('symbol=PAXGUSDT') && calls[1].includes('interval=15m') && calls[1].includes('limit=2'), calls[1]);
 
+  // ขอเกิน 1000 แท่ง ต้องไล่ขอเป็นชุดและต่อกันให้ถูกต้อง
+  const madeCalls = [];
+  const bar = (t) => [t, '2650.00', '2655.00', '2645.00', '2652.00', '10', t + 899999, '0', 1, '0', '0', '0'];
+  globalThis.fetch = async (url) => {
+    madeCalls.push(url);
+    const m = url.match(/endTime=(\d+)/);
+    const step = 900000;
+    // ของจริง Binance ส่งแท่งที่ตรงกริดเวลาเสมอ ตัวจำลองต้องทำเหมือนกัน
+    // ไม่งั้นรอยต่อระหว่างชุดจะห่างผิดไป 1 มิลลิวินาที ซึ่งเป็นข้อบกพร่องของตัวจำลอง ไม่ใช่ของโค้ด
+    const end = Math.floor((m ? +m[1] : 3_000_000_000_000) / step) * step;
+    const rows = [];
+    for (let k = 999; k >= 0; k--) rows.push(bar(end - k * step));
+    return { ok: true, status: 200, json: async () => rows };
+  };
+  const big = new MarketFeed();
+  big.configure({ source: 'binance', symbol: 'PAXGUSDT', interval: '15m' });
+  const many = await big.loadHistory('15m', 2500);
+  ok('ขอ 2,500 แท่ง → ยิงคำขอหลายรอบ', madeCalls.length >= 3, `ยิง ${madeCalls.length} ครั้ง`);
+  ok('รอบแรกไม่ส่ง endTime รอบถัดไปส่ง (ไล่ย้อนหลัง)',
+    !madeCalls[0].includes('endTime') && madeCalls[1].includes('endTime'));
+  ok('ได้แท่งครบตามที่ขอ', many.length >= 2500, `ได้ ${many.length} แท่ง`);
+  ok('ไม่มีแท่งเวลาซ้ำกันตรงรอยต่อของแต่ละชุด',
+    new Set(many.map((c) => c.t)).size === many.length);
+  ok('เรียงจากเก่าไปใหม่ถูกต้อง', many.every((c, i) => i === 0 || c.t > many[i - 1].t));
+  ok('ระยะห่างระหว่างแท่งเท่ากันสม่ำเสมอ',
+    many.every((c, i) => i === 0 || c.t - many[i - 1].t === 900000));
+
+  // ผู้ให้บริการมีข้อมูลไม่ถึงที่ขอ → ต้องหยุดเอง ไม่วนไม่รู้จบ
+  let calls2 = 0;
+  globalThis.fetch = async () => {
+    calls2++;
+    return { ok: true, status: 200, json: async () => [bar(1700000000000), bar(1700000900000)] };
+  };
+  const short = new MarketFeed();
+  short.configure({ source: 'binance', symbol: 'PAXGUSDT', interval: '15m' });
+  const few = await short.loadHistory('15m', 5000);
+  ok('ถ้าข้อมูลหมดก่อน หยุดยิงคำขอทันที ไม่วนไม่รู้จบ', calls2 === 1 && few.length === 2, `ยิง ${calls2} ครั้ง ได้ ${few.length} แท่ง`);
+
   // ทุกโฮสต์ล่ม → ต้องโยน error ที่อ่านรู้เรื่อง ไม่ใช่พังเงียบ ๆ
   globalThis.fetch = async () => { throw new Error('offline'); };
   let msg = '';

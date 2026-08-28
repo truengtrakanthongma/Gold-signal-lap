@@ -73,20 +73,56 @@ export class MarketFeed {
     return this._binanceHistory(interval, limit);
   }
 
-  async _binanceHistory(interval, limit) {
+  /** ยิงคำขอไป Binance โดยสลับโฮสต์อัตโนมัติถ้าโฮสต์แรกใช้ไม่ได้ */
+  async _binanceGet(path) {
     let lastErr;
     for (let attempt = 0; attempt < BINANCE_HOSTS.length; attempt++) {
-      const host = BINANCE_HOSTS[(this.hostIdx + attempt) % BINANCE_HOSTS.length];
+      const idx = (this.hostIdx + attempt) % BINANCE_HOSTS.length;
       try {
-        const url = `${host}/api/v3/klines?symbol=${this.symbol}&interval=${TF[interval].binance}&limit=${Math.min(limit, 1000)}`;
-        const raw = await fetchJson(url);
-        this.hostIdx = (this.hostIdx + attempt) % BINANCE_HOSTS.length;
-        return raw.map((k) => ({
-          t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5], closed: true,
-        }));
+        const data = await fetchJson(`${BINANCE_HOSTS[idx]}${path}`);
+        this.hostIdx = idx;   // จำโฮสต์ที่ใช้ได้ไว้ ครั้งต่อไปจะได้ไม่ต้องลองใหม่
+        return data;
       } catch (e) { lastErr = e; }
     }
     throw new Error(`โหลดข้อมูลจาก Binance ไม่สำเร็จ (${lastErr && lastErr.message})`);
+  }
+
+  /**
+   * โหลดแท่งเทียนย้อนหลัง — ขอได้เกิน 1,000 แท่ง
+   *
+   * Binance ให้ครั้งละไม่เกิน 1,000 แท่ง ถ้าอยากได้มากกว่านั้นต้องไล่ขอเป็นชุด
+   * โดยเลื่อน endTime ถอยหลังไปทีละชุด
+   *
+   * ทำไมต้องได้เยอะ: สถิติจาก 1,000 แท่งบนกรอบ 15 นาที = ข้อมูลแค่ 10 วัน
+   * ได้ไม้เทรดไม่กี่สิบไม้ ซึ่งน้อยเกินกว่าจะบอกได้ว่าระบบมีความได้เปรียบจริงหรือแค่บังเอิญ
+   */
+  async _binanceHistory(interval, limit) {
+    const perCall = 1000;
+    const tf = TF[interval].binance;
+    const out = [];
+    let endTime = null;
+    let remaining = Math.max(1, limit);
+
+    while (remaining > 0 && out.length < limit) {
+      const n = Math.min(perCall, remaining);
+      const q = `/api/v3/klines?symbol=${this.symbol}&interval=${tf}&limit=${n}`
+        + (endTime ? `&endTime=${endTime}` : '');
+      const raw = await this._binanceGet(q);
+      if (!raw || !raw.length) break;
+      out.unshift(...raw);
+      endTime = raw[0][0] - 1;      // ขยับไปก่อนแท่งเก่าสุดที่เพิ่งได้มา
+      remaining -= raw.length;
+      if (raw.length < n) break;     // ไม่มีข้อมูลเก่ากว่านี้อีกแล้ว
+      this.onStatus({ state: 'loading', message: `กำลังโหลดประวัติราคา ${out.length.toLocaleString('th-TH')} แท่ง…` });
+    }
+    if (!out.length) throw new Error('Binance ไม่ส่งข้อมูลแท่งเทียนกลับมา');
+
+    // ชุดที่ต่อกันอาจมีแท่งซ้ำตรงรอยต่อ ต้องกรองออกและเรียงตามเวลาให้แน่ใจ
+    const seen = new Set();
+    return out
+      .filter((k) => { if (seen.has(k[0])) return false; seen.add(k[0]); return true; })
+      .sort((a, b) => a[0] - b[0])
+      .map((k) => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5], closed: true }));
   }
 
   async _tdHistory(interval, limit) {
