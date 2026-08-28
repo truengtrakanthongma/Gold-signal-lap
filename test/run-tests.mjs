@@ -646,6 +646,54 @@ section('9) บอกให้ชัดว่ากำลังดูราค�
   ok('ข้อมูลน้อยเกินไป → บอกเหตุผล ไม่พัง', dataHealth([clean[0]], step).ok === false);
 }
 
+// ── 10. เวอร์ชัน TradingView ต้องตรงกับเวอร์ชันเว็บ ────────────────────
+section('10) Pine Script (TradingView) ตรงกับเวอร์ชันเว็บไหม');
+{
+  const { readFileSync } = await import('node:fs');
+  let pine = '';
+  try { pine = readFileSync(new URL('../tradingview/gold-signal-lab.pine', import.meta.url), 'utf8'); }
+  catch (e) { pine = ''; }
+  ok('มีไฟล์ Pine Script อยู่จริง', pine.length > 1000, `${pine.length} ตัวอักษร`);
+
+  if (pine) {
+    ok('ประกาศเวอร์ชัน Pine ไว้', /\/\/@version=6/.test(pine));
+    ok('เป็น strategy (มีเครื่องทดสอบย้อนหลังในตัว)', /^strategy\(/m.test(pine));
+
+    // น้ำหนักปัจจัยต้องเท่ากันทั้งสองเวอร์ชัน ไม่งั้นสัญญาณจะไม่ตรงกัน
+    const pineW = {};
+    for (const m of pine.matchAll(/^(w\w+)\s*=\s*input\.float\((\d+(?:\.\d+)?)/gm)) pineW[m[1]] = +m[2];
+    const map = {
+      wEma: 'emaTrend', wAdx: 'adxTrend', wMacd: 'macdMom', wRsi: 'rsiMom', wStruct: 'structure',
+      wPat: 'patterns', wVolume: 'volume', wBands: 'bands', wLevels: 'levels',
+      wDiv: 'divergence', wVwap: 'vwap', wStoch: 'stoch',
+    };
+    ok('มีน้ำหนักครบทั้ง 12 ปัจจัยเท่าเวอร์ชันเว็บ',
+      Object.keys(pineW).length === Object.keys(WEIGHTS).length,
+      `Pine ${Object.keys(pineW).length} · เว็บ ${Object.keys(WEIGHTS).length}`);
+    const mismatched = Object.entries(map)
+      .filter(([pk, jk]) => pineW[pk] !== WEIGHTS[jk])
+      .map(([pk, jk]) => `${pk}=${pineW[pk]} แต่เว็บ ${jk}=${WEIGHTS[jk]}`);
+    ok('ค่าน้ำหนักทุกตัวตรงกับเวอร์ชันเว็บ', mismatched.length === 0, mismatched.join(' · '));
+
+    const totalPine = Object.values(pineW).reduce((a, b) => a + b, 0);
+    const totalJs = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
+    ok('น้ำหนักรวมเท่ากัน (120)', totalPine === totalJs, `Pine ${totalPine} · เว็บ ${totalJs}`);
+
+    // ค่าตั้งต้นสำคัญต้องตรงกัน
+    const num = (re) => { const m = pine.match(re); return m ? +m[1] : null; };
+    ok('คะแนนขั้นต่ำตรงกัน', num(/thresh\s*=\s*input\.float\((\d+(?:\.\d+)?)/) === DEFAULT_CFG.threshold);
+    ok('เกณฑ์ ADX ตรงกัน', num(/adxMin\s*=\s*input\.float\((\d+(?:\.\d+)?)/) === DEFAULT_CFG.adxTrendMin);
+    ok('ตัวคูณจุดตัดขาดทุนตรงกัน', num(/slMult\s*=\s*input\.float\((\d+(?:\.\d+)?)/) === DEFAULT_CFG.slAtrMult);
+    ok('เพดานจุดตัดขาดทุนตรงกัน', num(/maxSl\s*=\s*input\.float\((\d+(?:\.\d+)?)/) === DEFAULT_CFG.maxSlAtrMult);
+
+    ok('มีคำเตือนว่าเพื่อการศึกษา', /ไม่ใช่คำแนะนำการลงทุน/.test(pine));
+    ok('มีระบบแจ้งเตือน', /alertcondition|alert\(/.test(pine));
+    ok('ใช้ pivot แบบยืนยันช้า (ไม่มองอนาคต)', /ta\.pivothigh\(high, 3, 3\)/.test(pine));
+    ok('ปิด lookahead ตอนดึงกรอบเวลาใหญ่ (กันข้อมูลอนาคตรั่ว)',
+      /lookahead\s*=\s*barmerge\.lookahead_off/.test(pine));
+  }
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);
