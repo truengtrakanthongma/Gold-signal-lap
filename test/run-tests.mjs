@@ -318,7 +318,9 @@ section('7) การแปลงข้อมูลจาก Binance / Twelve Da
   globalThis.fetch = async () => { throw new Error('offline'); };
   let msg = '';
   try { await feed.loadHistory('15m', 2); } catch (e) { msg = e.message; }
-  ok('ถ้าโหลดไม่ได้ทุกโฮสต์ จะแจ้งข้อความภาษาไทยที่บอกทางแก้', msg.includes('Binance') && msg.includes('demo'), msg);
+  // ชั้น feed รายงาน "สาเหตุ" เป็นภาษาไทย ส่วน "ทางแก้" แอปจัดการเองด้วยการสลับโหมดจำลองอัตโนมัติ
+  ok('ถ้าโหลดไม่ได้ทุกโฮสต์ จะแจ้งเป็นภาษาไทย ระบุผู้ให้บริการและสาเหตุ',
+    /[ก-๙]/.test(msg) && msg.includes('Binance') && msg.includes('offline'), msg);
 
   // Twelve Data: JSON คนละรูปแบบ
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({

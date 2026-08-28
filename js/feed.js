@@ -79,7 +79,7 @@ export class MarketFeed {
         }));
       } catch (e) { lastErr = e; }
     }
-    throw new Error(`โหลดข้อมูลจาก Binance ไม่สำเร็จ (${lastErr && lastErr.message}) — ลองสลับไปโหมด demo หรือเช็กการเชื่อมต่อ/ตัวบล็อกโฆษณา`);
+    throw new Error(`โหลดข้อมูลจาก Binance ไม่สำเร็จ (${lastErr && lastErr.message})`);
   }
 
   async _tdHistory(interval, limit) {

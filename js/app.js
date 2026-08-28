@@ -240,6 +240,17 @@ async function reload() {
     feed.start(onLiveCandle, (s) => setStatus(s.state, s.message));
     setInterval(refreshHtf, 60000);
   } catch (e) {
+    // ต่อข้อมูลจริงไม่ได้ (เน็ตล่ม / โดนบล็อก / โบรกเกอร์ล่ม)
+    // ไม่ปล่อยให้เจอหน้าจอว่าง ๆ — สลับไปโหมดจำลองให้ใช้งานต่อได้ พร้อมบอกสาเหตุให้ชัด
+    if (settings.source !== 'demo') {
+      settings.source = 'demo';           // เปลี่ยนเฉพาะรอบนี้ ไม่บันทึก ครั้งหน้าจะลองต่อของจริงอีก
+      $('sourceSel').value = 'demo';
+      toast({ kind: 'info', title: '⚠ ต่อข้อมูลราคาจริงไม่ได้ — สลับไปโหมดจำลองให้ชั่วคราว',
+        body: `${e.message}\n\nสาเหตุที่พบบ่อย: ไม่ได้ต่อเน็ต · ตัวบล็อกโฆษณาบล็อก Binance · เน็ตองค์กร/มหาวิทยาลัยบล็อกไว้\nแก้แล้วกด "↻ โหลดใหม่" เพื่อกลับไปใช้ราคาจริง` });
+      await reload();
+      setStatus('demo', '⚠ กำลังแสดงข้อมูลจำลอง (ไม่ใช่ราคาจริง) — ต่อ Binance ไม่ได้ กด "โหลดใหม่" เพื่อลองอีกครั้ง');
+      return;
+    }
     setStatus('error', e.message);
     toast({ kind: 'info', title: 'โหลดข้อมูลไม่สำเร็จ', body: e.message });
   }
