@@ -42,6 +42,57 @@ writeFileSync('gold-signal-lab.html', html);
 const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
 console.log(`สร้าง gold-signal-lab.html สำเร็จ (${kb} KB, รวม ${ORDER.length} โมดูล)`);
 
+/**
+ * เวอร์ชันที่สอง: สำหรับโฮสต์บนหน้าเว็บที่ต่อ Binance ไม่ได้ (เช่นระบบที่บล็อกโดเมนภายนอก)
+ * ต้องบังคับโหมดจำลอง และติดป้ายบอกให้ชัดว่าไม่ใช่ราคาจริง
+ * เครื่องมือเทรดที่แสดงราคาปลอมโดยไม่บอก คือสิ่งที่อันตรายที่สุดที่จะปล่อยออกไป
+ */
+const banner = `
+<style>
+  .demo-banner {
+    display: flex; align-items: center; justify-content: center; gap: 10px 18px;
+    flex-wrap: wrap; text-align: center;
+    background: linear-gradient(90deg, #4a370c, #6b4f10 50%, #4a370c);
+    border-bottom: 1px solid #f0b429;
+    color: #ffe9b0; padding: 9px 16px; font-size: 13px; line-height: 1.5;
+  }
+  .demo-banner b { color: #fff2cc; }
+  .demo-banner .tag {
+    background: #f0b429; color: #241a02; font-weight: 700;
+    border-radius: 20px; padding: 2px 11px; font-size: 12px; white-space: nowrap;
+  }
+  .demo-banner a { color: #ffd980; }
+</style>
+<div class="demo-banner">
+  <span class="tag">หน้าตัวอย่างเพื่อการเรียนรู้</span>
+  <span>ตัวเลขราคาทั้งหมดในหน้านี้เป็น <b>ข้อมูลจำลอง ไม่ใช่ราคาทองคำจริง</b> — ใช้ดูวิธีอ่านกราฟและฝึกใช้เครื่องมือ <b>ห้ามใช้ตัดสินใจซื้อขายจริง</b></span>
+  <span>อยากได้ราคาจริง: ดาวน์โหลด <b>gold-signal-lab.html</b> ไปเปิดในเครื่อง</span>
+</div>`;
+
+const demoOnly = html
+  .replace('<body>', '<body>' + banner)
+  // บังคับโหมดจำลองก่อนแอปเริ่มทำงาน และปิดตัวเลือกที่ใช้ไม่ได้ในหน้านี้
+  .replace('<script>\nconst __m = {};', `<script>
+try {
+  const k = 'goldtrader.settings.v1';
+  const cur = JSON.parse(localStorage.getItem(k) || '{}');
+  localStorage.setItem(k, JSON.stringify({ ...cur, source: 'demo' }));
+} catch (e) { /* โหมดส่วนตัวเขียน localStorage ไม่ได้ ก็ยังใช้ค่าเริ่มต้นได้ */ }
+addEventListener('DOMContentLoaded', () => {
+  const sel = document.getElementById('sourceSel');
+  if (!sel) return;
+  for (const o of sel.options) {
+    if (o.value !== 'demo') { o.disabled = true; o.textContent = o.textContent + ' — ใช้ในหน้านี้ไม่ได้'; }
+  }
+  sel.value = 'demo';
+});
+</script>
+<script>
+const __m = {};`);
+
+writeFileSync('gold-signal-lab-demo.html', demoOnly);
+console.log(`สร้าง gold-signal-lab-demo.html สำเร็จ (เวอร์ชันสำหรับโฮสต์ บังคับโหมดจำลอง + ติดป้ายเตือน)`);
+
 // ตรวจว่าไม่มีร่องรอย import/export หลงเหลือ ซึ่งจะทำให้ไฟล์พังเงียบ ๆ
 const inner = html.slice(html.indexOf('const __m = {};'));
 const leftovers = [...inner.matchAll(/^\s*(import|export)\s/gm)];
