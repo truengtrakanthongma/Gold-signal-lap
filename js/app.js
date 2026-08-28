@@ -29,6 +29,7 @@ const state = {
   bt: null,
   lastAnalyze: 0,
   lastClosedT: null,
+  htfTimer: null,
   warnedAt: 0,          // เตือนล่วงหน้าครั้งล่าสุดเมื่อไร
   warnedSide: 0,
   narrationOpen: true,
@@ -275,7 +276,8 @@ async function reload() {
     doBacktest();
     renderContextTab();
     feed.start(onLiveCandle, (s) => setStatus(s.state, s.message));
-    setInterval(refreshHtf, 60000);
+    clearInterval(state.htfTimer);   // ไม่งั้นโหลดใหม่ทุกครั้งจะเพิ่มตัวจับเวลาซ้อนกันเรื่อย ๆ
+    state.htfTimer = setInterval(refreshHtf, feed.htfRefreshMs);
   } catch (e) {
     // ต่อข้อมูลจริงไม่ได้ (เน็ตล่ม / โดนบล็อก / โบรกเกอร์ล่ม)
     // ไม่ปล่อยให้เจอหน้าจอว่าง ๆ — สลับไปโหมดจำลองให้ใช้งานต่อได้ พร้อมบอกสาเหตุให้ชัด

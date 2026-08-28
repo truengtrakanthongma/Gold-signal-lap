@@ -34,6 +34,22 @@ const BINANCE_WS = ['wss://stream.binance.com:9443', 'wss://data-stream.binance.
  */
 const DEMO_TICK_MS = 80;
 
+/**
+ * Twelve Data แผนฟรีให้ 8 คำขอ/นาที และ 800 คำขอ/วัน
+ *
+ * ถ้าดึงราคาใหม่ทุก 15 วินาทีเหมือน Binance จะใช้ 5,760 คำขอ/วัน = เกินโควตา 7 เท่า
+ * คีย์จะใช้ไม่ได้ภายในราว 2 ชั่วโมง จึงต้องยืดจังหวะให้อยู่ในงบ
+ *
+ * งบที่ตั้งไว้: ดึงราคาทุก 3 นาที (480/วัน) + กรอบเวลาใหญ่ทุก 30 นาที (~96/วัน)
+ * รวมราว 600 คำขอ/วัน เหลือที่ว่างให้โหลดหน้าใหม่ได้อีกหลายรอบ
+ */
+export const TD_LIMITS = {
+  pollMs: 180000,        // 3 นาที
+  htfRefreshMs: 1800000, // 30 นาที
+  perDay: 800,
+  perMinute: 8,
+};
+
 async function fetchJson(url, timeoutMs = 12000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -62,6 +78,17 @@ export class MarketFeed {
     this.onStatus = () => {};
     this.stopped = true;
     this.demoState = null;
+    this.requestCount = 0;   // นับคำขอที่ยิงออกไป เพื่อให้ผู้ใช้เห็นว่าใช้โควตาไปเท่าไร
+  }
+
+  /** จังหวะดึงราคาสด ขึ้นกับข้อจำกัดของผู้ให้บริการ */
+  get livePollMs() {
+    return this.source === 'twelvedata' ? TD_LIMITS.pollMs : 15000;
+  }
+
+  /** จังหวะรีเฟรชกรอบเวลาใหญ่ */
+  get htfRefreshMs() {
+    return this.source === 'twelvedata' ? TD_LIMITS.htfRefreshMs : 60000;
   }
 
   configure(opts) { Object.assign(this, opts); }
@@ -128,8 +155,16 @@ export class MarketFeed {
   async _tdHistory(interval, limit) {
     if (!this.apiKey) throw new Error('โหมด Twelve Data ต้องใส่ API key ก่อน (สมัครฟรีที่ twelvedata.com)');
     const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${TF[interval].td}&outputsize=${Math.min(limit, 5000)}&order=ASC&apikey=${encodeURIComponent(this.apiKey)}`;
+    this.requestCount++;
     const data = await fetchJson(url);
-    if (data.status === 'error') throw new Error(`Twelve Data: ${data.message}`);
+    if (data.status === 'error') {
+      const msg = String(data.message || '');
+      if (/limit|quota|credits/i.test(msg)) {
+        throw new Error(`ใช้โควตา Twelve Data หมดแล้ว — แผนฟรีจำกัด ${TD_LIMITS.perMinute} คำขอ/นาที และ ${TD_LIMITS.perDay} คำขอ/วัน `
+          + `(ข้อความจากผู้ให้บริการ: ${msg})`);
+      }
+      throw new Error(`Twelve Data: ${msg}`);
+    }
     return (data.values || []).map((v) => ({
       t: new Date(v.datetime.replace(' ', 'T') + 'Z').getTime(),
       o: +v.open, h: +v.high, l: +v.low, c: +v.close, v: +(v.volume || 0), closed: true,
@@ -190,13 +225,15 @@ export class MarketFeed {
         rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
         const last = rows[rows.length - 1];
         if (last) this.onCandle({ ...last, closed: false });
-        this.onStatus({ state: 'live', message: 'Twelve Data (polling 15 วิ)' });
+        this.onStatus({ state: 'live',
+          message: `XAU/USD จาก Twelve Data · อัปเดตทุก ${Math.round(this.livePollMs / 60000)} นาที `
+            + `(แผนฟรีจำกัดโควตา) · ใช้ไปแล้ว ${this.requestCount} คำขอ` });
       } catch (e) {
         this.onStatus({ state: 'error', message: e.message });
       }
     };
     tick();
-    this.pollTimer = setInterval(tick, 15000);
+    this.pollTimer = setInterval(tick, this.livePollMs);
   }
 
   // ── โหมดจำลอง ─────────────────────────────────────────────────────────

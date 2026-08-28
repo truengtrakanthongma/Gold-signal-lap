@@ -492,6 +492,30 @@ section('7) การแปลงข้อมูลจาก Binance / Twelve Da
     tdRows[0].t === Date.UTC(2026, 7, 27, 10, 0, 0), JSON.stringify(tdRows[0]));
   ok('ไม่มี volume ก็ไม่พัง (โลหะมีค่าไม่มีข้อมูล volume)', tdRows[0].v === 0);
 
+  // จังหวะยิงคำขอต้องต่างกันตามผู้ให้บริการ ไม่งั้นโควตาแผนฟรีหมดใน 2 ชั่วโมง
+  const { TD_LIMITS } = await import('../js/feed.js');
+  const bnc = new MarketFeed(); bnc.configure({ source: 'binance' });
+  const tdf = new MarketFeed(); tdf.configure({ source: 'twelvedata' });
+  ok('Binance ดึงถี่ได้ (15 วินาที)', bnc.livePollMs === 15000);
+  ok('Twelve Data ต้องยืดจังหวะ ไม่งั้นโควตาหมด', tdf.livePollMs === TD_LIMITS.pollMs && tdf.livePollMs >= 120000,
+    `${tdf.livePollMs / 1000} วินาที`);
+  ok('กรอบเวลาใหญ่ก็ยืดตามผู้ให้บริการ', tdf.htfRefreshMs > bnc.htfRefreshMs);
+  ok('จังหวะที่ตั้งไว้อยู่ในงบ 800 คำขอ/วัน', (() => {
+    const perDay = (86400000 / TD_LIMITS.pollMs) + (86400000 / TD_LIMITS.htfRefreshMs) * 2;
+    return perDay < TD_LIMITS.perDay;
+  })(), `ประมาณ ${Math.round((86400000 / TD_LIMITS.pollMs) + (86400000 / TD_LIMITS.htfRefreshMs) * 2)} คำขอ/วัน`);
+
+  // โควตาหมด → ต้องบอกเป็นภาษาคน ไม่ใช่โยน error ดิบ
+  globalThis.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ status: 'error', message: 'You have run out of API credits for the current minute' }) });
+  const quota = new MarketFeed();
+  quota.configure({ source: 'twelvedata', interval: '1h', apiKey: 'x' });
+  let qErr = '';
+  try { await quota.loadHistory('1h', 100); } catch (e) { qErr = e.message; }
+  ok('โควตาหมด → อธิบายเป็นภาษาไทยว่าเกิดอะไรและขีดจำกัดเท่าไร',
+    qErr.includes('โควตา') && qErr.includes('800'), qErr.slice(0, 90));
+  ok('นับจำนวนคำขอที่ยิงไปได้', quota.requestCount >= 1);
+
   let tdErr = '';
   const noKey = new MarketFeed();
   noKey.configure({ source: 'twelvedata', interval: '1h', apiKey: '' });
