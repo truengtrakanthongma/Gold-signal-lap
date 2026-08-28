@@ -26,10 +26,11 @@ export function runBacktest(ctx, opts = {}) {
   const o = { ...DEFAULT_BT, ...opts };
   const { candles, cfg } = ctx;
   const n = candles.length;
+  const stopAt = Math.min(o.toIndex === undefined ? n : o.toIndex, n) - 2;
   const trades = [];
-  let i = Math.max(o.warmup, 2);
+  let i = Math.max(o.warmup, 2, o.fromIndex || 0);
 
-  while (i < n - 2) {
+  while (i < stopAt) {
     const s = scoreAt(ctx, i);
     if (!s.ready || Math.abs(s.score) < o.threshold) { i++; continue; }
     if (o.useFilters && (s.atrPct < cfg.minAtrPct || s.atrPct > cfg.maxAtrPct)) { i++; continue; }
@@ -83,7 +84,22 @@ export function runBacktest(ctx, opts = {}) {
     }
 
     const d = new Date(candles[i + 1].t);
+    // เก็บว่าปัจจัยไหนเห็นด้วย/ค้าน เพื่อย้อนดูทีหลังว่าปัจจัยไหนทำนายได้จริง
+    //
+    // ปัจจัยเดียวอาจถูกบันทึกหลายรายการที่ชี้คนละทาง (เช่น MACD ทิศทางขึ้น แต่จุดตัดชี้ลง)
+    // ต้องรวมเป็นยอดสุทธิต่อปัจจัยก่อน แล้วค่อยตัดสินว่าฝั่งไหน — ให้ตรงกับวิธีที่คะแนนรวมใช้จริง
+    const netByKey = new Map();
+    for (const f of s.factors) {
+      if (!f.contribution) continue;
+      netByKey.set(f.key, (netByKey.get(f.key) || 0) + f.contribution);
+    }
+    const agree = [], against = [];
+    for (const [key, net] of netByKey) {
+      if (!net) continue;
+      (Math.sign(net) === side ? agree : against).push(key);
+    }
     trades.push({
+      agree, against,
       index: i, entryIndex: i + 1, exitIndex: exitIdx, t: candles[i + 1].t,
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
       entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv,
@@ -144,9 +160,23 @@ function summarize(trades, o) {
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
 
+  // ปัจจัยไหนคุ้มน้ำหนักที่ให้ไว้จริง — วัดจากอัตราชนะตอนมันเห็นด้วย เทียบกับตอนมันค้าน
+  const factorKeys = [...new Set(trades.flatMap((t) => [...(t.agree || []), ...(t.against || [])]))];
+  const factors = factorKeys.map((key) => {
+    const withIt = trades.filter((t) => (t.agree || []).includes(key));
+    const vsIt = trades.filter((t) => (t.against || []).includes(key));
+    const wr = (list) => (list.length ? (list.filter((t) => t.hit1R).length / list.length) * 100 : null);
+    const a = wr(withIt), b = wr(vsIt);
+    return {
+      key, nAgree: withIt.length, nAgainst: vsIt.length, winAgree: a, winAgainst: b,
+      avgR: withIt.length ? withIt.reduce((x, t) => x + t.rMultiple, 0) / withIt.length : null,
+      edge: a !== null && b !== null ? a - b : null,
+    };
+  }).sort((x, y) => (y.edge === null ? -1e9 : y.edge) - (x.edge === null ? -1e9 : x.edge));
+
   const wonTrades = trades.filter((t) => t.hit1R);
   return {
-    trades, equity, bands, sessions, bySide,
+    trades, equity, bands, sessions, bySide, factors,
     stats: {
       n,
       winRate: n ? (wins1R / n) * 100 : null,
@@ -162,6 +192,62 @@ function summarize(trades, o) {
     },
     opts: o,
   };
+}
+
+/**
+ * ตรวจสอบแบบแบ่งข้อมูล (walk-forward)
+ *
+ * ปัญหาของ backtest ธรรมดา: เราเลือกเกณฑ์จากข้อมูลชุดไหน แล้ววัดผลบนชุดนั้น
+ * ตัวเลขจะสวยเสมอ เพราะเป็นการ "ตอบข้อสอบที่เห็นเฉลยแล้ว"
+ *
+ * วิธีนี้แบ่งข้อมูลเป็นสองท่อน:
+ *   ช่วงเรียนรู้ (60% แรก) — ใช้หาว่าเกณฑ์คะแนนเท่าไรดีที่สุด
+ *   ช่วงสอบจริง (40% หลัง) — ใช้เกณฑ์นั้นวัดผล โดยไม่เคยเห็นข้อมูลส่วนนี้มาก่อน
+ *
+ * ตัวเลขจากช่วงสอบจริงคือตัวเลขที่ควรเชื่อ ส่วนช่วงเรียนรู้ไว้เทียบว่าห่างกันแค่ไหน
+ * ถ้าสองค่าต่างกันมาก แปลว่าระบบจำข้อมูลเก่าได้ ไม่ได้เข้าใจตลาดจริง (overfit)
+ */
+export function walkForward(ctx, opts = {}) {
+  const o = { ...DEFAULT_BT, ...opts };
+  const n = ctx.candles.length;
+  const splitAt = Math.floor(n * (o.splitRatio || 0.6));
+  if (splitAt - o.warmup < 80) {
+    return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับแบ่งช่วงเรียนรู้/ช่วงสอบ (ต้องการอย่างน้อย ~400 แท่ง)' };
+  }
+
+  const candidates = (o.thresholds || [25, 30, 35, 40, 45, 50, 55, 60]);
+  const sweep = candidates.map((threshold) => {
+    const r = runBacktest(ctx, { ...o, threshold, toIndex: splitAt });
+    return { threshold, n: r.stats.n, winRate: r.stats.winRate, expectancy: r.stats.expectancy, totalR: r.stats.totalR };
+  });
+
+  // เลือกเกณฑ์ที่ค่าคาดหวังดีที่สุด แต่ต้องมีตัวอย่างพอ (>= 12 ไม้) ไม่งั้นเป็นความบังเอิญ
+  const usable = sweep.filter((x) => x.n >= 12 && x.expectancy !== null);
+  const best = usable.sort((a, b) => b.expectancy - a.expectancy)[0] || null;
+  if (!best) return { ok: false, reason: 'ช่วงเรียนรู้ไม่มีเกณฑ์ไหนสร้างไม้ได้มากพอจะสรุป', sweep, splitAt };
+
+  const inSample = runBacktest(ctx, { ...o, threshold: best.threshold, toIndex: splitAt });
+  const outSample = runBacktest(ctx, { ...o, threshold: best.threshold, fromIndex: splitAt });
+
+  const drop = inSample.stats.winRate !== null && outSample.stats.winRate !== null
+    ? inSample.stats.winRate - outSample.stats.winRate : null;
+
+  return {
+    ok: true, splitAt, sweep, chosenThreshold: best.threshold, inSample, outSample, drop,
+    verdict: verdictOf(outSample, drop),
+  };
+}
+
+function verdictOf(out, drop) {
+  if (!out.stats.n) return { level: 'unknown', text: 'ช่วงสอบจริงไม่มีสัญญาณเลย — สรุปไม่ได้ ลองลดเกณฑ์คะแนนหรือโหลดข้อมูลมากขึ้น' };
+  if (out.stats.n < 15) return { level: 'weak', text: `ช่วงสอบจริงมีแค่ ${out.stats.n} ไม้ — น้อยเกินกว่าจะเชื่อถือได้ ใช้ประกอบเท่านั้น` };
+  if (out.stats.expectancy > 0.05 && (drop === null || drop < 15)) {
+    return { level: 'good', text: 'ผ่าน — ระบบทำกำไรได้บนข้อมูลที่ไม่เคยเห็น และผลไม่ตกจากช่วงเรียนรู้มากนัก' };
+  }
+  if (out.stats.expectancy > 0) {
+    return { level: 'ok', text: 'พอไปได้ — ยังเป็นบวกบนข้อมูลใหม่ แต่ผลตกลงจากช่วงเรียนรู้พอสมควร ให้ลดขนาดไม้ลง' };
+  }
+  return { level: 'bad', text: 'ไม่ผ่าน — บนข้อมูลที่ไม่เคยเห็น ระบบขาดทุน แปลว่ากฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ อย่าเทรดตาม' };
 }
 
 /**

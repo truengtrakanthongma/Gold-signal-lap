@@ -234,6 +234,54 @@ section('4) การจำลองย้อนหลัง');
   ok('ในตลาดขาขึ้นชัดเจน ระบบเข้าฝั่งซื้อมากกว่าฝั่งขาย', longs > btBull.stats.n / 2, `ซื้อ ${longs}/${btBull.stats.n}`);
 }
 
+// ── 4b. การตรวจสอบแบบแบ่งข้อมูล ───────────────────────────────────────
+section('4b) walk-forward — วัดผลบนข้อมูลที่ระบบไม่เคยเห็น');
+{
+  const { walkForward } = await import('../js/backtest.js');
+  const candles = makeCandles(1400, 91);
+  const ctx = buildContext(candles, DEFAULT_CFG);
+  const wf = walkForward(ctx, { maxHold: 40, spread: 0.3, splitRatio: 0.6 });
+
+  ok('รันแล้วได้ผลลัพธ์', wf.ok === true, wf.reason || '');
+  if (wf.ok) {
+    const splitAt = wf.splitAt;
+    ok('แบ่งข้อมูลที่ 60% ตามที่กำหนด', Math.abs(splitAt - 1400 * 0.6) < 2, `แบ่งที่แท่ง ${splitAt}`);
+    ok('ไม้ในช่วงเรียนรู้ ทุกไม้อยู่ก่อนจุดแบ่ง',
+      wf.inSample.trades.every((t) => t.index < splitAt), 'มีไม้ล้ำไปช่วงสอบ');
+    ok('ไม้ในช่วงสอบจริง ทุกไม้อยู่หลังจุดแบ่ง — ไม่มีข้อมูลรั่ว',
+      wf.outSample.trades.every((t) => t.index >= splitAt), 'มีไม้ย้อนกลับไปช่วงเรียนรู้');
+    ok('สองช่วงไม่มีไม้ซ้ำกันเลย', (() => {
+      const a = new Set(wf.inSample.trades.map((t) => t.index));
+      return wf.outSample.trades.every((t) => !a.has(t.index));
+    })());
+    ok('เกณฑ์ที่เลือกมาจากช่วงเรียนรู้เท่านั้น',
+      wf.sweep.some((x) => x.threshold === wf.chosenThreshold && x.n >= 12));
+    ok('ทุกไม้ในทั้งสองช่วงผ่านเกณฑ์ที่เลือกจริง',
+      [...wf.inSample.trades, ...wf.outSample.trades].every((t) => t.absScore >= wf.chosenThreshold));
+    ok('มีคำตัดสินที่อ่านรู้เรื่อง', wf.verdict && wf.verdict.text.length > 20, JSON.stringify(wf.verdict));
+    ok('ระดับคำตัดสินเป็นค่าที่รู้จัก',
+      ['good', 'ok', 'bad', 'weak', 'unknown'].includes(wf.verdict.level), wf.verdict.level);
+    console.log(`     ↳ เกณฑ์ที่เลือก ${wf.chosenThreshold} · ช่วงเรียนรู้ ${wf.inSample.stats.n} ไม้ ` +
+      `(ชนะ ${wf.inSample.stats.winRate === null ? '-' : wf.inSample.stats.winRate.toFixed(0)}%) · ` +
+      `ช่วงสอบจริง ${wf.outSample.stats.n} ไม้ (ชนะ ${wf.outSample.stats.winRate === null ? '-' : wf.outSample.stats.winRate.toFixed(0)}%)`);
+    console.log(`     ↳ คำตัดสิน: ${wf.verdict.text}`);
+  }
+
+  const tiny = walkForward(buildContext(makeCandles(300, 5), DEFAULT_CFG), {});
+  ok('ข้อมูลน้อยเกินไป → บอกเหตุผล ไม่ใช่พังหรือให้ตัวเลขมั่ว',
+    tiny.ok === false && tiny.reason.includes('น้อยเกินไป'), JSON.stringify(tiny).slice(0, 80));
+
+  // ผลงานรายปัจจัย
+  const bt = runBacktest(ctx, { threshold: 30, maxHold: 40, spread: 0.3 });
+  ok('มีตารางผลงานรายปัจจัย', Array.isArray(bt.factors) && bt.factors.length > 0, `${bt.factors.length} ปัจจัย`);
+  ok('ทุกปัจจัยนับจำนวนไม้ไม่เกินจำนวนไม้ทั้งหมด',
+    bt.factors.every((f) => f.nAgree <= bt.stats.n && f.nAgainst <= bt.stats.n));
+  ok('ไม่มีปัจจัยไหนทั้งเห็นด้วยและค้านในไม้เดียวกัน',
+    bt.trades.every((t) => t.agree.every((k) => !t.against.includes(k))));
+  ok('เรียงจากปัจจัยที่ได้เปรียบมากสุดไปน้อยสุด',
+    bt.factors.every((f, i) => i === 0 || f.edge === null || bt.factors[i - 1].edge === null || bt.factors[i - 1].edge >= f.edge));
+}
+
 // ── 5. เวลาและการแปลงหน่วย ────────────────────────────────────────────
 section('5) เวลาตลาดและการแปลงราคา');
 {

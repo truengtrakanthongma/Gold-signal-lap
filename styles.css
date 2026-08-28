@@ -312,3 +312,21 @@ body.simple .narr p { font-size: 13.8px; }
 
 /* ชื่อภาษาอังกฤษของปัจจัย — ไว้ให้ผู้เรียนจำศัพท์ที่จะไปเจอในโปรแกรมอื่น */
 .reason-head .en { color: var(--muted); font-weight: 400; font-size: 10.5px; }
+
+/* ── ผลตรวจสอบแบบแบ่งข้อมูล ─────────────────────────── */
+.wf-box { margin-bottom: 14px; }
+.wf-card { border-radius: 10px; padding: 13px 15px; border: 1px solid var(--line); background: var(--panel-2); }
+.wf-card.good { border-color: rgba(34,197,94,.5); background: rgba(34,197,94,.06); }
+.wf-card.ok { border-color: rgba(240,180,41,.5); background: rgba(240,180,41,.06); }
+.wf-card.bad { border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.06); }
+.wf-card.weak, .wf-card.unknown { border-color: rgba(148,163,184,.4); }
+.wf-verdict { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.wf-card.good .wf-verdict { color: #4ade80; }
+.wf-card.ok .wf-verdict { color: var(--gold); }
+.wf-card.bad .wf-verdict { color: #fca5a5; }
+.wf-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 10px; margin-top: 11px; }
+.wf-side { background: rgba(2,6,23,.4); border-radius: 7px; padding: 9px 11px; }
+.wf-side h4 { margin: 0 0 5px; font-size: 11.5px; color: var(--muted); font-weight: 500; }
+.wf-side.trusted h4 { color: var(--gold); }
+.wf-side .big { font-size: 20px; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+.wf-side .sub { font-size: 11.5px; color: var(--muted); }

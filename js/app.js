@@ -4,7 +4,7 @@
 
 import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS } from './signals.js';
-import { runBacktest, probabilityFor, wilsonInterval } from './backtest.js';
+import { runBacktest, walkForward, probabilityFor, wilsonInterval } from './backtest.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -466,7 +466,7 @@ function renderNarration() {
   const sections = narrate({
     candles: state.candles, ctx: state.ctx, scored: state.scored, combined: state.combined,
     setup: state.setup, action: state.action, blocks: state.blocks || [], tf: state.tf,
-    session: sessionInfo(new Date()), prob: probabilityFor(state.combined ? state.combined.score : 0, state.bt),
+    session: sessionInfo(new Date()), prob: probabilityFor(state.combined ? state.combined.score : 0, probSource().bt),
     htfScores,
   });
   $('narrationBody').innerHTML = sections.map((sec) => `
@@ -475,6 +475,17 @@ function renderNarration() {
       <p>${sec.text}</p>
     </div>`).join('');
   $('narrationTime').textContent = `อัปเดตล่าสุด ${new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })}`;
+}
+
+/**
+ * แหล่งสถิติที่ใช้อ้างอิงความน่าจะเป็น
+ * ถ้าผ่านการตรวจแบบแบ่งข้อมูลและมีไม้พอ ให้ใช้ผลจาก "ช่วงสอบจริง" เสมอ
+ * เพราะสถิติจากข้อมูลชุดเดียวกับที่ใช้ตั้งกฎ มักสวยเกินความจริง
+ */
+function probSource() {
+  const wf = state.wf;
+  if (wf && wf.ok && wf.outSample.stats.n >= 15) return { bt: wf.outSample, outOfSample: true };
+  return { bt: state.bt, outOfSample: false };
 }
 
 function buildLevelList() {
@@ -491,7 +502,7 @@ function buildLevelList() {
 
 function fireSignalAlert() {
   const s = state.setup;
-  const prob = probabilityFor(state.combined.score, state.bt);
+  const prob = probabilityFor(state.combined.score, probSource().bt);
   const ex = explain({ ...state.scored, side: Math.sign(state.combined.score) });
   const top = ex.pro.slice(0, 3).map((f) => `• ${f.name}`).join('\n');
   const body = [
@@ -551,7 +562,8 @@ function renderSignal() {
   fill.style.width = `${pct}%`;
 
   const hasSignal = Math.abs(score) >= settings.threshold;
-  const prob = probabilityFor(score, state.bt);
+  const src = probSource();
+  const prob = probabilityFor(score, src.bt);
   if (!hasSignal) {
     $('probValue').textContent = '—';
     $('probValue').style.color = 'var(--muted)';
@@ -559,7 +571,8 @@ function renderSignal() {
   } else {
     $('probValue').textContent = prob.p !== null ? `${prob.p.toFixed(0)}%` : '—';
     $('probValue').style.color = prob.p === null ? 'var(--muted)' : prob.p >= 55 ? 'var(--up)' : prob.p >= 45 ? 'var(--gold)' : 'var(--down)';
-    $('probNote').textContent = prob.note + (prob.avgR != null ? ` · ค่าคาดหวังต่อไม้ ${prob.avgR.toFixed(2)}R` : '');
+    $('probNote').textContent = (src.outOfSample ? 'วัดจากช่วงข้อมูลที่ระบบไม่เคยเห็น — ' : '')
+      + prob.note + (prob.avgR != null ? ` · ค่าคาดหวังต่อไม้ ${prob.avgR.toFixed(2)}R` : '');
   }
 
   const last = state.candles[state.candles.length - 1];
@@ -571,6 +584,9 @@ function renderSignal() {
   }
   if (state.blocks && state.blocks.length) {
     parts.push(`<span style="color:var(--gold)">⛔ ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
+  }
+  if (state.wf && state.wf.ok && state.wf.verdict.level === 'bad') {
+    parts.push('<span style="color:var(--down)">⚠ ระบบสอบไม่ผ่านบนข้อมูลที่ไม่เคยเห็น — กฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ ดูรายละเอียดในแท็บผลทดสอบย้อนหลัง</span>');
   }
   $('candleState').innerHTML = parts.join('<br>');
   renderPlainAdvice();
@@ -591,10 +607,16 @@ function renderPlainAdvice() {
   const ex = explain({ ...state.scored, side: side || 1 });
   const top3 = ex.pro.slice(0, 3).map((f) => `<li>${f.reason}</li>`).join('');
 
+  const failWarn = state.wf && state.wf.ok && state.wf.verdict.level === 'bad'
+    ? `<div class="next-step" style="background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.4)">
+        <b>⚠ อ่านก่อนตัดสินใจ:</b> ระบบทดสอบตัวเองกับข้อมูลที่ไม่เคยเห็นแล้ว<b>ขาดทุน</b>
+        แปลว่ากฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ — ใช้ดูเพื่อเรียนรู้ได้ แต่ยังไม่ควรเทรดตาม</div>`
+    : '';
+
   if (state.action === 'buy' || state.action === 'sell') {
-    const prob = probabilityFor(state.combined.score, state.bt);
+    const prob = probabilityFor(state.combined.score, probSource().bt);
     const s = state.setup;
-    el.innerHTML = `
+    el.innerHTML = failWarn + `
       <div class="headline" style="color:${state.action === 'buy' ? 'var(--up)' : 'var(--down)'}">
         ${state.action === 'buy' ? '🟢 ตอนนี้เข้าซื้อได้' : '🔴 ตอนนี้เข้าขายได้'}
       </div>
@@ -610,7 +632,7 @@ function renderPlainAdvice() {
   const watch = [];
   if (state.scored.resistance) watch.push(`ราคาขึ้นทะลุ <b>${state.scored.resistance.toFixed(2)}</b> → มีโอกาสไปต่อขาขึ้น`);
   if (state.scored.support) watch.push(`ราคาหลุดลงต่ำกว่า <b>${state.scored.support.toFixed(2)}</b> → มีโอกาสไปต่อขาลง`);
-  el.innerHTML = `
+  el.innerHTML = failWarn + `
     <div class="headline" style="color:var(--muted)">⏸ ตอนนี้ยังไม่ต้องทำอะไร</div>
     <div>${blocked
       ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ')
@@ -714,18 +736,90 @@ function doBacktest() {
   $('btStatus').textContent = 'กำลังคำนวณ…';
   setTimeout(() => {
     const t0 = performance.now();
+    state.wf = walkForward(state.ctx, {
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+    });
     state.bt = runBacktest(state.ctx, {
       threshold: settings.threshold, maxHold: settings.maxHold,
       spread: settings.spread, useFilters: settings.volFilter,
     });
     $('btStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที · ข้อมูล ${state.candles.length} แท่ง (${TF[state.tf].label})`;
     renderBacktest();
+    renderWalkForward();
     renderSignal();
     if ($('togMarkers').checked) {
       chart.setData({ markers: state.bt.trades.map((t) => ({ index: t.index, side: t.side })) });
       chart.render();
     }
   }, 20);
+}
+
+/**
+ * ผลตรวจสอบแบบแบ่งข้อมูล — ตัวเลขที่ควรเชื่อจริง ๆ
+ * วางไว้เหนือสถิติรวม เพราะสถิติรวมเป็นการวัดผลบนข้อมูลชุดเดียวกับที่ใช้ตั้งกฎ
+ */
+function renderWalkForward() {
+  const el = $('wfBox');
+  const wf = state.wf;
+  if (!wf) { el.innerHTML = ''; return; }
+  if (!wf.ok) {
+    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังตรวจสอบแบบแบ่งข้อมูลไม่ได้</div>
+      <div class="tiny" style="margin:0">${wf.reason}</div></div>`;
+    return;
+  }
+  const io = wf.inSample.stats, oo = wf.outSample.stats;
+  const pct = (v) => (v === null ? '—' : `${v.toFixed(1)}%`);
+  const r = (v) => (v === null ? '—' : `${v.toFixed(3)}R`);
+  el.innerHTML = `
+    <div class="wf-card ${wf.verdict.level}">
+      <div class="wf-verdict">${wf.verdict.text}</div>
+      <div class="tiny" style="margin:0">
+        แบ่งข้อมูลเป็นสองท่อน: ใช้ท่อนแรกหาว่าเกณฑ์คะแนนเท่าไรดีที่สุด (ได้ <b>${wf.chosenThreshold}</b>)
+        แล้วเอาเกณฑ์นั้นไปวัดผลกับท่อนหลังที่ระบบไม่เคยเห็น — ตัวเลขจากท่อนหลังคือตัวเลขที่ควรเชื่อ
+      </div>
+      <div class="wf-compare">
+        <div class="wf-side">
+          <h4>ช่วงเรียนรู้ (ตัวเลขมักสวยเกินจริง)</h4>
+          <div class="big">${pct(io.winRate)}</div>
+          <div class="sub">${io.n} ไม้ · ค่าคาดหวัง ${r(io.expectancy)}</div>
+        </div>
+        <div class="wf-side trusted">
+          <h4>⭐ ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
+          <div class="big" style="color:${oo.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${pct(oo.winRate)}</div>
+          <div class="sub">${oo.n} ไม้ · ค่าคาดหวัง ${r(oo.expectancy)}</div>
+        </div>
+        <div class="wf-side">
+          <h4>ผลตกลงเท่าไร</h4>
+          <div class="big" style="color:${wf.drop === null ? 'var(--muted)' : wf.drop > 15 ? 'var(--down)' : 'var(--up)'}">${wf.drop === null ? '—' : (wf.drop > 0 ? '-' : '+') + Math.abs(wf.drop).toFixed(1) + '%'}</div>
+          <div class="sub">ตกเกิน 15% = ระบบจำข้อมูลเก่า มากกว่าเข้าใจตลาด</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderFactorTable() {
+  const el = $('btFactors');
+  if (!el || !state.bt || !state.bt.factors) return;
+  const names = {
+    emaTrend: 'เส้นค่าเฉลี่ย', adxTrend: 'ความแรงแนวโน้ม', macdMom: 'แรงส่งของราคา',
+    rsiMom: 'แรงซื้อ-แรงขาย', structure: 'โครงสร้างราคา', patterns: 'รูปแบบแท่งเทียน',
+    volume: 'ปริมาณซื้อขาย', bands: 'กรอบความผันผวน', levels: 'แนวรับ-แนวต้าน',
+    divergence: 'สัญญาณแรงหมด', vwap: 'เทียบต้นทุนเฉลี่ย', stoch: 'จุดตัดระยะสั้น',
+  };
+  const rows = state.bt.factors.filter((f) => f.nAgree + f.nAgainst >= 8);
+  el.innerHTML = rows.length ? `<table><thead><tr>
+      <th>ปัจจัย</th><th>ตอนมันเห็นด้วย</th><th>ตอนมันค้าน</th><th>ส่วนต่าง</th></tr></thead><tbody>
+    ${rows.map((f) => `<tr>
+      <td>${names[f.key] || f.key}</td>
+      <td class="num">${f.winAgree === null ? '—' : f.winAgree.toFixed(0) + '%'} <span style="color:var(--muted)">(${f.nAgree})</span></td>
+      <td class="num">${f.winAgainst === null ? '—' : f.winAgainst.toFixed(0) + '%'} <span style="color:var(--muted)">(${f.nAgainst})</span></td>
+      <td class="num" style="color:${f.edge === null ? 'var(--muted)' : f.edge > 5 ? 'var(--up)' : f.edge < -5 ? 'var(--down)' : 'var(--muted)'}">
+        ${f.edge === null ? '—' : (f.edge > 0 ? '+' : '') + f.edge.toFixed(0)}</td>
+    </tr>`).join('')}</tbody></table>
+    <p class="tiny">อ่านยังไง: ส่วนต่างเป็นบวกมาก = เวลาปัจจัยนี้เห็นด้วยกับทิศทางที่เข้า ไม้มักชนะกว่าตอนมันค้าน
+    แปลว่าปัจจัยนี้ทำนายได้จริง · ส่วนต่างติดลบ = ปัจจัยนี้ให้สัญญาณสวนทางความจริงในข้อมูลชุดนี้
+    ควรลดน้ำหนักลงในแท็บตั้งค่า (ตัวเลขในวงเล็บคือจำนวนไม้ ยิ่งน้อยยิ่งเชื่อได้น้อย)</p>`
+    : '<p class="tiny">ยังมีไม้ไม่พอจะแยกผลงานรายปัจจัย</p>';
 }
 
 function renderBacktest() {
@@ -793,6 +887,7 @@ function renderBacktest() {
       <td>${t.result === 'loss' ? 'โดน SL' : t.result === 'timeout' ? 'หมดเวลาถือ' : t.result === 'win2R' ? 'ถึง 2R' : 'ถึง 1R แล้วกลับมาทุน'}</td>
       <td class="num" style="color:${t.rMultiple > 0 ? 'var(--up)' : 'var(--down)'}">${t.rMultiple.toFixed(2)}</td>
     </tr>`).join('')}</tbody></table>`;
+  renderFactorTable();
   drawEquity();
 }
 
