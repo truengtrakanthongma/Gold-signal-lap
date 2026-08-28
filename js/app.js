@@ -5,6 +5,7 @@
 import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS } from './signals.js';
 import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
+import { learnAndValidate } from './learn.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -48,6 +49,7 @@ const settings = {
   usdThb: 36.5, apiKey: '',
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
   smartSession: true, historyBars: 3000,
+  learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
 };
 
 const feed = new MarketFeed();
@@ -66,7 +68,12 @@ function saveEvents() {
   try { localStorage.setItem('goldtrader.events', JSON.stringify(state.events)); } catch (e) { /* ignore */ }
 }
 function cfg() {
-  return { ...DEFAULT_CFG, slAtrMult: settings.slAtr, threshold: settings.threshold, adxTrendMin: settings.adxMin };
+  const base = { ...DEFAULT_CFG, slAtrMult: settings.slAtr, threshold: settings.threshold, adxTrendMin: settings.adxMin };
+  // ใส่น้ำหนักที่เรียนรู้มาก็ต่อเมื่อ "ครบทุกปัจจัย" เท่านั้น
+  // ถ้าใส่ไม่ครบ ปัจจัยที่ขาดจะกลายเป็น undefined แล้วคะแนนทั้งระบบพังเป็น NaN เงียบ ๆ
+  const lw = settings.learnedWeights;
+  if (lw && Object.keys(WEIGHTS).every((k) => Number.isFinite(lw[k]))) base.weights = lw;
+  return base;
 }
 
 // ── เริ่มระบบ ────────────────────────────────────────────────────────────
@@ -82,6 +89,7 @@ async function init() {
   alerts.onUpdate = (entry) => { renderLog(); toast(entry); };
   renderAlertUI();
   renderWeights();
+  renderLearn();   // ถ้าเคยยืนยันน้ำหนักชุดใหม่ไว้ ต้องบอกให้เห็นตั้งแต่เปิดหน้า
   renderContextTab();
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
@@ -177,6 +185,9 @@ function bindEvents() {
   }));
 
   $('runBt').addEventListener('click', () => doBacktest());
+  $('runLearn').addEventListener('click', () => doLearn());
+  $('applyLearn').addEventListener('click', () => applyLearned(state.learn && state.learn.weights));
+  $('resetLearn').addEventListener('click', () => applyLearned(null));
   ['thresholdInput', 'maxHoldInput', 'spreadInput'].forEach((id) => $(id).addEventListener('change', () => {
     settings.threshold = +$('thresholdInput').value || 35;
     settings.maxHold = +$('maxHoldInput').value || 60;
@@ -964,6 +975,113 @@ function renderWalkForward() {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * เรียนรู้น้ำหนักปัจจัยจากข้อมูลจริงของผู้ใช้ แล้วสอบกับช่วงที่ไม่เคยเห็น
+ *
+ * เหตุผลที่ต้องทำในเบราว์เซอร์ ไม่ใช่ฝังตัวเลขมาให้:
+ * น้ำหนักที่ "ดีที่สุด" ขึ้นกับสินทรัพย์ กรอบเวลา และช่วงตลาดที่คุณโหลดมา
+ * ตัวเลขที่ฟิตจากข้อมูลชุดอื่นแล้วฝังมา ก็คือการเดาอีกแบบหนึ่ง
+ */
+function doLearn() {
+  if (!state.ctx || state.candles.length < 600) {
+    $('learnStatus').textContent = 'ต้องมีข้อมูลอย่างน้อย ~600 แท่งถึงจะแบ่งช่วงเรียนรู้/ช่วงสอบได้ (ตอนนี้ ' + state.candles.length + ')';
+    return;
+  }
+  $('learnStatus').textContent = 'กำลังเรียนรู้และสอบ… (สุ่มทดสอบซ้ำหลายพันรอบ ใช้เวลาสักครู่)';
+  $('applyLearn').hidden = true;
+  setTimeout(() => {
+    const t0 = performance.now();
+    // ฟิตกับน้ำหนัก "ตั้งต้นจากตำรา" เสมอ ไม่ใช่กับน้ำหนักที่เพิ่งใช้อยู่
+    // ไม่งั้นกดซ้ำ ๆ น้ำหนักจะไหลไปเรื่อย ๆ โดยไม่มีอะไรพิสูจน์รอบใหม่
+    const baseCtx = { ...state.ctx, cfg: { ...state.ctx.cfg, weights: undefined } };
+    state.learn = learnAndValidate(baseCtx, {
+      keys: Object.keys(WEIGHTS), baseWeights: WEIGHTS, threshold: settings.threshold,
+      backtest: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
+    });
+    $('learnStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที`;
+    renderLearn();
+  }, 20);
+}
+
+function applyLearned(weights) {
+  settings.learnedWeights = weights || null;
+  saveSettings();
+  analyze(false, false);   // คำนวณใหม่ทั้งระบบด้วยน้ำหนักชุดใหม่
+  doBacktest();
+  renderLearn();
+}
+
+const FACTOR_NAMES = {
+  emaTrend: 'เส้นค่าเฉลี่ย', adxTrend: 'ความแรงแนวโน้ม', macdMom: 'แรงส่งของราคา',
+  rsiMom: 'แรงซื้อ-แรงขาย', structure: 'โครงสร้างราคา', patterns: 'รูปแบบแท่งเทียน',
+  volume: 'ปริมาณซื้อขาย', bands: 'กรอบความผันผวน', levels: 'แนวรับ-แนวต้าน',
+  divergence: 'สัญญาณแรงหมด', vwap: 'เทียบต้นทุนเฉลี่ย', stoch: 'จุดตัดระยะสั้น',
+};
+
+function renderLearn() {
+  const el = $('learnBox');
+  const L = state.learn;
+  const using = !!settings.learnedWeights;
+  $('resetLearn').hidden = !using;
+  if (!L) {
+    el.innerHTML = using ? '<div class="wf-card ok"><div class="wf-verdict">กำลังใช้น้ำหนักชุดที่เรียนรู้ไว้</div></div>' : '';
+    return;
+  }
+  if (!L.ok) {
+    $('applyLearn').hidden = true;
+    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังเรียนรู้น้ำหนักไม่ได้</div>
+      <div class="tiny" style="margin:0">${L.reason}</div></div>`;
+    return;
+  }
+  $('applyLearn').hidden = !L.verdict.apply || using;
+
+  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
+  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
+  const a = L.outBase, b = L.outNew;
+  const rows = L.coefficients.map((c) => {
+    const d = c.delta;
+    const arrow = Math.abs(d) < 0.3 ? '=' : d > 0 ? '▲' : '▼';
+    const col = Math.abs(d) < 0.3 ? 'var(--muted)' : d > 0 ? 'var(--up)' : 'var(--down)';
+    return `<tr>
+      <td>${FACTOR_NAMES[c.key] || c.key}</td>
+      <td class="num">${c.base.toFixed(0)}</td>
+      <td class="num" style="color:${col}">${c.weight.toFixed(1)} ${arrow}</td>
+      <td class="num" title="สุ่มข้อมูลซ้ำแล้วปัจจัยนี้ยังช่วยทำนายไปทางเดิมกี่เปอร์เซ็นต์ของรอบ">
+        ${c.live ? (c.posFrac * 100).toFixed(0) + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="wf-card ${L.verdict.level === 'better' ? 'good' : L.verdict.level === 'worse' ? 'bad' : 'ok'}">
+      <div class="wf-verdict">${L.verdict.text}</div>
+      <div class="wf-compare">
+        <div class="wf-side">
+          <h4>ช่วงสอบ · น้ำหนักเดิม</h4>
+          <div class="big">${pct(a.winRate)}</div>
+          <div class="sub">${a.n} ไม้ · ค่าคาดหวัง ${r(a.expectancy)}</div>
+        </div>
+        <div class="wf-side ${L.verdict.apply ? 'trusted' : ''}">
+          <h4>ช่วงสอบ · น้ำหนักที่เรียนรู้</h4>
+          <div class="big">${pct(b.winRate)}</div>
+          <div class="sub">${b.n} ไม้ · ค่าคาดหวัง ${r(b.expectancy)}</div>
+        </div>
+        <div class="wf-side">
+          <h4>เชื่อได้แค่ไหน</h4>
+          <div class="big">${L.verdict.probBetter === null || L.verdict.probBetter === undefined ? '—' : (L.verdict.probBetter * 100).toFixed(0) + '%'}</div>
+          <div class="sub">สุ่มทดสอบซ้ำ 2,000 รอบ ชุดใหม่ชนะกี่เปอร์เซ็นต์ของรอบ (ต้องการ ≥ 90%)</div>
+        </div>
+      </div>
+      <div class="tiny" style="margin:.6rem 0 0">
+        เรียนรู้จาก <b>${L.rows} ไม้</b> ในช่วงแรกของข้อมูล (ใช้เกณฑ์คะแนน ${L.learnThreshold} เพื่อเก็บตัวอย่างให้มากพอ)
+        แล้วสอบด้วยเกณฑ์จริง ${L.threshold} · ข้อมูลเท่านี้มีสิทธิ์ขยับน้ำหนักได้ <b>${(L.blend * 100).toFixed(0)}%</b>
+        ที่เหลือยังยึดน้ำหนักเดิม — ยิ่งเก็บไม้ได้มาก ข้อมูลยิ่งมีสิทธิ์มากขึ้นเอง
+      </div>
+    </div>
+    <table class="learn-table"><thead><tr>
+      <th>ปัจจัย</th><th>น้ำหนักเดิม</th><th>ที่เรียนรู้ได้</th><th>ความนิ่ง</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderFactorTable() {

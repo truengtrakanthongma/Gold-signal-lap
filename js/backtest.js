@@ -121,12 +121,20 @@ export function runBacktest(ctx, opts = {}) {
       netByKey.set(f.key, (netByKey.get(f.key) || 0) + f.contribution);
     }
     const agree = [], against = [];
+    const features = {};
     for (const [key, net] of netByKey) {
       if (!net) continue;
       (Math.sign(net) === side ? agree : against).push(key);
     }
+    // ตัวแปรต้นสำหรับเรียนรู้น้ำหนัก: ปรับให้เป็น -1..+1 โดยเทียบกับน้ำหนักสูงสุดของปัจจัยนั้น
+    // และคูณทิศทางที่เข้า เพื่อให้ค่าบวก = ปัจจัยนี้เชียร์ทิศทางที่เราเข้าจริง ๆ
+    for (const f of s.factors) {
+      if (!f.weight) continue;
+      features[f.key] = (features[f.key] || 0) + (f.contribution / f.weight) * side;
+    }
+    for (const k of Object.keys(features)) features[k] = Math.max(-1, Math.min(1, features[k]));
     trades.push({
-      agree, against,
+      agree, against, features,
       index: i, entryIndex: i + 1, exitIndex: exitIdx, t: candles[i + 1].t,
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
       entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv, favBeforeStop,

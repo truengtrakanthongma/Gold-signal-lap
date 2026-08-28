@@ -8,6 +8,7 @@
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest } from '../js/backtest.js';
+import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -691,6 +692,124 @@ section('10) Pine Script (TradingView) ตรงกับเวอร์ชั�
     ok('ใช้ pivot แบบยืนยันช้า (ไม่มองอนาคต)', /ta\.pivothigh\(high, 3, 3\)/.test(pine));
     ok('ปิด lookahead ตอนดึงกรอบเวลาใหญ่ (กันข้อมูลอนาคตรั่ว)',
       /lookahead\s*=\s*barmerge\.lookahead_off/.test(pine));
+  }
+}
+
+// ── การเรียนรู้น้ำหนักจากผลจริง ────────────────────────────────────────
+section('12) เรียนรู้น้ำหนักปัจจัย — ต้องไม่ "จูนให้เข้ากับอดีต" แล้วเอามาใช้');
+{
+  const KEYS = Object.keys(WEIGHTS);
+  const TOTAL = KEYS.reduce((a, k) => a + WEIGHTS[k], 0);
+
+  // 12.1 คณิตศาสตร์ของตัวฟิต
+  {
+    // ตัวแปรที่ 0 ทำนายผลได้เป๊ะ ตัวแปรที่ 1 เป็นเสียงรบกวนล้วน
+    const rnd = mulberry(4242);
+    const rows = Array.from({ length: 400 }, () => {
+      const a = rnd() * 2 - 1;
+      return { x: [a, rnd() * 2 - 1], y: a > 0 ? 1 : 0 };
+    });
+    const f = fitLogistic(rows);
+    ok('ฟิตได้สัมประสิทธิ์บวกให้ตัวแปรที่ทำนายได้จริง', f.w[0] > 1, `ได้ ${f.w[0].toFixed(2)}`);
+    ok('ตัวแปรที่เป็นเสียงรบกวนได้สัมประสิทธิ์เกือบศูนย์',
+      Math.abs(f.w[1]) < Math.abs(f.w[0]) / 5, `ได้ ${f.w[1].toFixed(2)} เทียบ ${f.w[0].toFixed(2)}`);
+    ok('ค่าความคลาดเคลื่อนต่ำกว่าการเดาสุ่ม (0.693)', f.logLoss < 0.5, `ได้ ${f.logLoss.toFixed(3)}`);
+  }
+
+  // 12.2 การปรับสเกลตัวแปร — เหตุผลที่รุ่นแรกพัง
+  {
+    const rows = [{ x: [1, 5], y: 1 }, { x: [-1, 5], y: 0 }, { x: [1, 5], y: 1 }, { x: [-1, 5], y: 0 }];
+    const z = standardize(rows, { mean: [0, 5], std: [1, 0] });
+    ok('ตัวแปรที่ไม่เคยเปลี่ยนค่า (std=0) ถูกปัดเป็นศูนย์ ไม่ทำให้หารด้วยศูนย์',
+      z.every((r) => r.x[1] === 0) && z.every((r) => Number.isFinite(r.x[0])));
+  }
+
+  // 12.3 ผลลัพธ์ต้องใช้กับเครื่องคิดคะแนนได้จริง
+  {
+    const ctx = buildContext(makeCandles(3000, 91, 0.3), DEFAULT_CFG);
+    const inRun = runBacktest(ctx, { threshold: 18, toIndex: 1800 });
+    const res = learnWeights(inRun.trades, KEYS, WEIGHTS);
+    ok('เรียนรู้จากไม้ในช่วงเรียนรู้ได้สำเร็จ', res.ok, res.reason || '');
+    if (res.ok) {
+      ok('คืนน้ำหนักครบทั้ง 12 ปัจจัย (ขาดตัวเดียวคะแนนทั้งระบบพังเป็น NaN)',
+        KEYS.every((k) => Number.isFinite(res.weights[k])));
+      const total = KEYS.reduce((a, k) => a + res.weights[k], 0);
+      ok('ผลรวมน้ำหนักเท่าเดิม (120) คะแนนสองชุดจึงเทียบกันได้', near(total, TOTAL, 1e-6), `ได้ ${total.toFixed(4)}`);
+
+      /* บั๊กของรุ่นแรก: ฟิตดิบแล้วตัดค่าติดลบทิ้ง ทำให้ 10 จาก 12 ปัจจัยกลายเป็นศูนย์
+         เหลือ 2 ปัจจัยกินน้ำหนักทั้งหมด ซึ่งไม่ใช่ความรู้ แต่เป็นอาการของข้อมูลน้อย
+         การผสมกับน้ำหนักเดิมต้องกันไม่ให้เกิดอาการนี้อีก */
+      const dead = KEYS.filter((k) => res.weights[k] < 1);
+      ok('ไม่มีปัจจัยไหนถูกบีบจนหายไป (บั๊กรุ่นแรก: หายไป 10 จาก 12)',
+        dead.length === 0, `หายไป ${dead.length} ตัว: ${dead.join(',')}`);
+
+      ok('ข้อมูลเท่านี้ขยับน้ำหนักได้แค่บางส่วน ไม่ใช่แทนที่ทั้งหมด',
+        res.blend > 0 && res.blend <= 0.6, `ได้ ${res.blend}`);
+
+      // คะแนนต้องยังอยู่ในกรอบ -100..100 และไม่เป็น NaN
+      const tuned = { ...ctx, cfg: { ...ctx.cfg, weights: res.weights } };
+      let bad = 0;
+      for (let i = 300; i < 1000; i += 7) {
+        const sc = scoreAt(tuned, i).score;
+        if (!Number.isFinite(sc) || sc < -100 || sc > 100) bad++;
+      }
+      ok('ใช้น้ำหนักชุดใหม่แล้วคะแนนยังอยู่ในกรอบ -100..100 ทุกแท่ง', bad === 0, `พลาด ${bad} แท่ง`);
+    }
+  }
+
+  // 12.4 ต้องปฏิเสธเมื่อข้อมูลน้อย แทนที่จะเดาให้
+  {
+    const few = learnWeights([{ features: { emaTrend: 1 }, hit1R: true }], KEYS, WEIGHTS);
+    ok('ไม้น้อยเกินไป → ปฏิเสธพร้อมบอกเหตุผล ไม่ใช่คืนตัวเลขมั่ว', !few.ok && /น้อยเกิน/.test(few.reason));
+    const allWin = learnWeights(
+      Array.from({ length: 60 }, () => ({ features: { emaTrend: 1 }, hit1R: true })), KEYS, WEIGHTS);
+    ok('ไม้ชนะหมด → ปฏิเสธ เพราะไม่มีความต่างให้เรียนรู้', !allWin.ok);
+  }
+
+  // 12.5 ตัวตัดสินว่า "ดีกว่าจริงหรือบังเอิญ"
+  {
+    const rnd = mulberry(777);
+    const a = Array.from({ length: 200 }, () => rnd() * 2 - 1);
+    const b = Array.from({ length: 200 }, () => rnd() * 2 - 1);
+    const same = probBetter(a, b, { samples: 800 });
+    ok('สองชุดที่มาจากที่เดียวกัน → ความมั่นใจใกล้ 50% (ไม่มีใครดีกว่า)',
+      same > 0.2 && same < 0.8, `ได้ ${(same * 100).toFixed(0)}%`);
+    const better = probBetter(a, b.map((v) => v + 2), { samples: 800 });
+    ok('ชุดที่ดีกว่าชัด ๆ → ความมั่นใจเกือบ 100%', better > 0.98, `ได้ ${(better * 100).toFixed(0)}%`);
+  }
+
+  // 12.6 ด่านสำคัญที่สุด: บนข้อมูลที่ไม่มีอะไรให้เรียนรู้ ต้อง "ไม่ผ่าน"
+  {
+    let applied = 0, checked = 0;
+    for (const seed of [15, 29, 43, 57, 71, 85]) {
+      const ctx = buildContext(makeCandles(3000, seed, 0), DEFAULT_CFG);
+      const r = learnAndValidate(ctx, { keys: KEYS, baseWeights: WEIGHTS, threshold: 35 });
+      checked++;
+      if (r.ok && r.verdict.apply) applied++;
+    }
+    /* ข้อมูลสุ่มล้วนไม่มีโครงสร้างให้เรียนรู้ ระบบจึงต้องปฏิเสธน้ำหนักชุดใหม่
+       ถ้าตรงนี้ผ่านบ่อย ๆ แปลว่าด่านตรวจหลวม แล้วผู้ใช้จะได้น้ำหนักที่เป็นเสียงรบกวน */
+    ok('ข้อมูลสุ่มล้วน → ไม่อนุมัติน้ำหนักชุดใหม่เลย', applied === 0, `อนุมัติ ${applied}/${checked} ชุด`);
+  }
+
+  // 12.7 ข้อมูลสั้นเกินไป → บอกตรง ๆ
+  {
+    const tiny = learnAndValidate(buildContext(makeCandles(400, 3), DEFAULT_CFG),
+      { keys: KEYS, baseWeights: WEIGHTS, threshold: 35 });
+    ok('ข้อมูลสั้นเกินไป → ปฏิเสธพร้อมบอกให้โหลดเพิ่ม', !tiny.ok && /น้อยเกินไป/.test(tiny.reason));
+  }
+
+  // 12.8 ห้ามเรียนรู้จากช่วงสอบ
+  {
+    const ctx = buildContext(makeCandles(3000, 101, 0.25), DEFAULT_CFG);
+    const r = learnAndValidate(ctx, { keys: KEYS, baseWeights: WEIGHTS, threshold: 35 });
+    if (r.ok) {
+      const inRun = runBacktest(ctx, { threshold: r.learnThreshold, toIndex: r.splitAt });
+      ok('จำนวนไม้ที่ใช้เรียนรู้ = ไม้ในช่วงแรกเท่านั้น (ไม่มีไม้จากช่วงสอบปน)',
+        r.rows === toDataset(inRun.trades, KEYS).length, `${r.rows} เทียบ ${inRun.trades.length}`);
+      ok('ไม้ทุกไม้ที่ใช้เรียนรู้จบก่อนเส้นแบ่ง',
+        inRun.trades.every((t) => t.exitIndex < r.splitAt));
+    } else { ok('จำนวนไม้ที่ใช้เรียนรู้ = ไม้ในช่วงแรกเท่านั้น', false, r.reason); }
   }
 }
 

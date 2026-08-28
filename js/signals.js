@@ -121,6 +121,8 @@ export function projectedVolume(candles, i, now = Date.now()) {
  */
 export function scoreAt(ctx, i) {
   const { cfg, candles } = ctx;
+  // น้ำหนักปรับได้ผ่าน cfg เพื่อให้ทดลองน้ำหนักที่เรียนรู้จากข้อมูลแล้ววัดผลเทียบกันได้
+  const W = cfg.weights || WEIGHTS;
   const c = candles[i];
   const price = c.c;
   const atrVal = ctx.atr[i];
@@ -135,8 +137,8 @@ export function scoreAt(ctx, i) {
   const push = (key, name, side, strength, reason, extra = {}) => {
     if (!side || strength <= 0) return;
     factors.push({
-      key, name, side, strength: clamp(strength, 0, 1), weight: WEIGHTS[key],
-      contribution: WEIGHTS[key] * clamp(strength, 0, 1) * side, reason, ...extra,
+      key, name, side, strength: clamp(strength, 0, 1), weight: W[key],
+      contribution: W[key] * clamp(strength, 0, 1) * side, reason, ...extra,
     });
   };
 
@@ -280,7 +282,7 @@ export function scoreAt(ctx, i) {
     byKey.get(f.key).push(f);
   }
   for (const [key, list] of byKey) {
-    const cap = WEIGHTS[key] || 0;
+    const cap = W[key] || 0;
     const sum = list.reduce((a, f) => a + f.contribution, 0);
     if (cap > 0 && Math.abs(sum) > cap) {
       const scale = cap / Math.abs(sum);
@@ -289,7 +291,8 @@ export function scoreAt(ctx, i) {
   }
 
   const raw = factors.reduce((a, f) => a + f.contribution, 0);
-  const score = clamp((raw / TOTAL_WEIGHT) * 100, -100, 100);
+  const totalW = cfg.weights ? Object.values(cfg.weights).reduce((a, b) => a + b, 0) : TOTAL_WEIGHT;
+  const score = clamp((raw / (totalW || 1)) * 100, -100, 100);
   return {
     score, side: Math.sign(score), factors, regime, atrPct,
     ready: true, adx: adxVal, rsi: r, atr: atrVal,

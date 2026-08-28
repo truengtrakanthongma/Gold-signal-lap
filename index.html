@@ -168,6 +168,23 @@
       <div><h3>เส้นทุน (หน่วย R)</h3><canvas id="equityCanvas" height="150"></canvas></div>
       <div><h3>ปัจจัยไหนทำนายได้จริง</h3><div id="btFactors"></div></div>
     </div>
+    <details class="learn-box">
+      <summary>🧪 ตรวจสอบน้ำหนักปัจจัย — น้ำหนักที่ตั้งไว้ถูกจริงไหม?</summary>
+      <p class="tiny">
+        คะแนนสัญญาณมาจากการถ่วงน้ำหนัก 12 ปัจจัย (เส้นค่าเฉลี่ย 16, ความแรงแนวโน้ม 12, …)
+        ตัวเลขชุดนี้ตั้งจากตำราและประสบการณ์ ไม่ใช่จากข้อมูลของคุณ
+        ปุ่มนี้จะ <b>เรียนรู้น้ำหนักใหม่จากผลเทรดจริงในช่วงแรกของข้อมูล</b>
+        แล้ว <b>เอาไปสอบกับช่วงหลังที่ตอนเรียนรู้ไม่เคยเห็น</b>
+        ถ้าสอบไม่ผ่าน ระบบจะไม่ให้ใช้ — ไม่ว่าตัวเลขตอนเรียนรู้จะสวยแค่ไหน
+      </p>
+      <div class="bt-controls">
+        <button id="runLearn" class="btn">▶ เรียนรู้แล้วสอบน้ำหนักชุดใหม่</button>
+        <button id="applyLearn" class="btn primary" hidden>✓ ใช้น้ำหนักชุดใหม่</button>
+        <button id="resetLearn" class="btn" hidden>↺ กลับไปใช้น้ำหนักเดิม</button>
+        <span id="learnStatus" class="tiny"></span>
+      </div>
+      <div id="learnBox"></div>
+    </details>
     <div id="btTrades"></div>
   </div>
 

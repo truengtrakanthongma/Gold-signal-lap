@@ -331,6 +331,22 @@ body.simple .narr p { font-size: 13.8px; }
 .wf-side .big { font-size: 20px; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
 .wf-side .sub { font-size: 11.5px; color: var(--muted); }
 
+/* ── ตรวจสอบน้ำหนักปัจจัย ────────────────────────────── */
+.learn-box { margin: 14px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.learn-box > summary {
+  cursor: pointer; padding: 11px 14px; font-size: 13.5px; font-weight: 600;
+  color: var(--gold); list-style: none;
+}
+.learn-box > summary::-webkit-details-marker { display: none; }
+.learn-box > summary::before { content: '▸ '; display: inline-block; transition: transform .15s ease; }
+.learn-box[open] > summary::before { transform: rotate(90deg); }
+.learn-box > *:not(summary) { padding-left: 14px; padding-right: 14px; }
+.learn-box > *:last-child { padding-bottom: 14px; }
+.learn-table { width: 100%; border-collapse: collapse; margin-top: 11px; font-size: 12.5px; }
+.learn-table th, .learn-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.learn-table th { color: var(--muted); font-weight: 500; font-size: 11.5px; }
+.learn-table .num { text-align: right; font-family: 'JetBrains Mono', monospace; }
+
 /* ══ มือถือ ══════════════════════════════════════════════
    บนจอเล็ก คำตอบสำคัญกว่ารูป — ต้องเห็น "ตอนนี้ควรทำอะไร"
    ทันทีที่เปิด ไม่ใช่ต้องเลื่อนผ่านกราฟลงไปครึ่งหน้าจอ      */
