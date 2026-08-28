@@ -487,6 +487,14 @@ body.simple .narr p { font-size: 13.8px; }
 .be-line { display: inline-block; margin-top: 5px; color: var(--muted); font-size: 12px; }
 .be-line b { color: #e2e8f0; }
 
+/* บรรทัดบอกสินทรัพย์ที่กำลังดู */
+.instrument-line { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.instrument-line b { color: #cbd5e1; }
+.instrument-line.proxy b { color: var(--gold); }
+.spot-steps { margin: 8px 0; padding-left: 20px; font-size: 12.5px; color: #cbd5e1; }
+.spot-steps li { margin-bottom: 5px; }
+@media (max-width: 720px) { .instrument-line { font-size: 12.5px; } .spot-steps { font-size: 13.5px; } }
+
 </style>
 </head>
 <body>
@@ -527,12 +535,13 @@ body.simple .narr p { font-size: 13.8px; }
   <div class="price-block">
     <div class="price-main">
       <span id="livePrice">—</span>
-      <span class="unit">USD / ออนซ์</span>
+      <span class="unit" id="priceUnit">USD / ออนซ์</span>
     </div>
     <div class="price-sub">
       <span id="priceChange" class="chg">—</span>
       <span id="thbPrice" class="thb">—</span>
     </div>
+    <div class="instrument-line" id="instrumentLine"></div>
   </div>
 
   <div class="controls">
@@ -751,7 +760,19 @@ body.simple .narr p { font-size: 13.8px; }
           </select>
         </label>
         <label>อัตราแลกเปลี่ยน USD/THB <input type="number" id="setUsdThb" value="36.5" step="0.05"></label>
-        <label>API key (Twelve Data) <input type="password" id="setApiKey" placeholder="ไม่บังคับ"></label>
+      </div>
+      <div class="card" id="spotCard">
+        <h2>อยากได้ราคาทองคำสปอตจริง (XAU/USD)</h2>
+        <p class="tiny" style="margin-top:0">ค่าเริ่มต้นใช้ PAXG ซึ่งเป็นโทเคนอิงทองคำ ราคาวิ่งเกาะทองจริงแต่<b>ไม่เท่ากันเป๊ะ</b>
+          ถ้าเอาไปเทียบกับกราฟทองของโบรกเกอร์แล้วตัวเลขไม่ตรง สาเหตุคือตรงนี้</p>
+        <ol class="spot-steps">
+          <li>สมัครฟรีที่ <b>twelvedata.com</b> (แผนฟรีพอใช้งาน)</li>
+          <li>คัดลอก API key มาวางในช่องข้างล่าง</li>
+          <li>เปลี่ยน "แหล่งข้อมูล" ด้านบนเป็น <b>Twelve Data XAU/USD</b></li>
+        </ol>
+        <label>API key (Twelve Data) <input type="password" id="setApiKey" placeholder="วาง API key ที่นี่"></label>
+        <p class="tiny">แผนฟรีจำกัด 8 คำขอ/นาที ระบบจึงดึงราคาใหม่ทุก 15 วินาที (ไม่ใช่เรียลไทม์เท่า Binance)
+          และ API key เก็บอยู่ในเบราว์เซอร์ของคุณเท่านั้น ไม่ได้ส่งไปไหน</p>
       </div>
       <div class="card">
         <h2>น้ำหนักปัจจัย</h2>
@@ -1902,7 +1923,7 @@ function distanceText(dist, atr) {
  * สร้างคำบรรยายกราฟ ณ ขณะนั้น
  * @returns {{id:string,title:string,tone:string,text:string}[]}
  */
-function narrate({ candles, ctx, scored, combined, setup, action, blocks = [], tf, session, prob, htfScores = [] }) {
+function narrate({ candles, ctx, scored, combined, setup, action, blocks = [], tf, session, prob, htfScores = [], instrument = null }) {
   const out = [];
   if (!candles || !candles.length || !scored || !scored.ready) {
     return [{ id: 'wait', title: 'กำลังรวบรวมข้อมูล', tone: 'neutral',
@@ -1934,8 +1955,9 @@ function narrate({ candles, ctx, scored, combined, setup, action, blocks = [], t
 
   out.push({
     id: 'price', title: '1. ราคาตอนนี้', tone: chg >= 0 ? 'good' : 'bad',
-    text: `ทองคำอยู่ที่ <b>${fmt(price)}</b> ดอลลาร์ต่อออนซ์ ${chg >= 0 ? 'ขึ้น' : 'ลง'} ${fmt(Math.abs(chg))} ดอลลาร์ (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%) เทียบกับ<b>ราคาปิดของแท่งก่อนหน้า</b>` +
+    text: `${instrument && !instrument.isSpot ? instrument.name : 'ทองคำ'} อยู่ที่ <b>${fmt(price)}</b> ดอลลาร์ต่อออนซ์ ${chg >= 0 ? 'ขึ้น' : 'ลง'} ${fmt(Math.abs(chg))} ดอลลาร์ (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%) เทียบกับ<b>ราคาปิดของแท่งก่อนหน้า</b>` +
       `<br><br>${candleTalk}` +
+      (instrument && !instrument.isSpot ? `<br><br><i>ℹ ${instrument.note}</i>` : '') +
       (forming ? '<br><br><i>⏳ แท่งนี้ยังไม่ปิด ตัวเลขทั้งหมดยังเปลี่ยนได้จนกว่าจะหมดเวลาแท่ง</i>' : ''),
   });
 
@@ -3761,6 +3783,88 @@ function toThai(name) {
   return {toThai};
 })();
 
+__m.instrument = (function () {
+
+/**
+ * instrument.js — บอกให้ชัดว่ากำลังดูราคาอะไรอยู่
+ *
+ * แอปเคยเขียนว่า "ทองคำ USD/ออนซ์" ทั้งที่ดึงราคา PAXG/USDT มา
+ * ซึ่งเป็นโทเคนที่หนุนด้วยทองคำ ไม่ใช่ราคาทองสปอต (XAU/USD)
+ * สองอย่างนี้วิ่งเกาะกันแต่ไม่เท่ากัน ต่างกันได้หลายดอลลาร์
+ *
+ * ถ้าผู้ใช้เอาไปเทียบกับกราฟทองของโบรกเกอร์แล้วเห็นตัวเลขไม่ตรง
+ * นั่นไม่ใช่กราฟผิด แต่เป็นคนละสินทรัพย์ — ต้องบอกให้รู้ ไม่ใช่ปล่อยให้เข้าใจผิด
+ */
+
+const INSTRUMENTS = {
+  PAXGUSDT: {
+    name: 'PAXG/USDT',
+    kind: 'โทเคนอิงทองคำ',
+    long: 'Paxos Gold — โทเคน 1 เหรียญหนุนด้วยทองคำจริง 1 ทรอยออนซ์ เก็บในตู้นิรภัยลอนดอน',
+    isSpot: false,
+    note: 'ราคาวิ่งเกาะทองคำสปอต (XAU/USD) แต่ไม่เท่ากันเป๊ะ ต่างกันได้ประมาณ 0.1–1% '
+        + 'ตามอุปสงค์อุปทานของโทเคนเอง โดยเฉพาะช่วงตลาดทองจริงปิด',
+  },
+  XAUTUSDT: {
+    name: 'XAUT/USDT',
+    kind: 'โทเคนอิงทองคำ',
+    long: 'Tether Gold — โทเคน 1 เหรียญหนุนด้วยทองคำจริง 1 ทรอยออนซ์',
+    isSpot: false,
+    note: 'เช่นเดียวกับ PAXG คือวิ่งเกาะทองคำสปอตแต่ไม่เท่ากันเป๊ะ',
+  },
+  'XAU/USD': {
+    name: 'XAU/USD',
+    kind: 'ทองคำสปอต',
+    long: 'ราคาทองคำสปอตสากล ต่อ 1 ทรอยออนซ์',
+    isSpot: true,
+    note: 'นี่คือราคาทองคำจริงที่โบรกเกอร์และเว็บข่าวอ้างอิงกัน',
+  },
+  DEMO: {
+    name: 'ข้อมูลจำลอง',
+    kind: 'ไม่ใช่ราคาจริง',
+    long: 'ตัวเลขสุ่มขึ้นในเครื่องเพื่อทดสอบระบบ',
+    isSpot: false,
+    note: 'ห้ามใช้ตัดสินใจซื้อขาย',
+  },
+};
+
+function instrumentOf(source, symbol) {
+  if (source === 'demo') return INSTRUMENTS.DEMO;
+  if (source === 'twelvedata') return INSTRUMENTS['XAU/USD'];
+  return INSTRUMENTS[symbol] || INSTRUMENTS.PAXGUSDT;
+}
+
+/**
+ * ตรวจสุขภาพข้อมูลที่โหลดมา — ถ้าผู้ใช้รู้สึกว่า "กราฟไม่ตรง"
+ * ต้องตอบได้ว่ากำลังแสดงข้อมูลอะไร ครบไหม มีรูโหว่ตรงไหน
+ */
+function dataHealth(candles, tfMs) {
+  if (!candles || candles.length < 2) return { ok: false, reason: 'ข้อมูลน้อยเกินไป' };
+  let gaps = 0, dups = 0, outOfOrder = 0, biggestGapBars = 0;
+  const seen = new Set();
+  for (let i = 0; i < candles.length; i++) {
+    if (seen.has(candles[i].t)) dups++;
+    seen.add(candles[i].t);
+    if (i === 0) continue;
+    const d = candles[i].t - candles[i - 1].t;
+    if (d <= 0) { outOfOrder++; continue; }
+    if (d > tfMs * 1.5) {
+      gaps++;
+      biggestGapBars = Math.max(biggestGapBars, Math.round(d / tfMs) - 1);
+    }
+  }
+  const spanMs = candles[candles.length - 1].t - candles[0].t;
+  return {
+    ok: dups === 0 && outOfOrder === 0,
+    bars: candles.length, gaps, dups, outOfOrder, biggestGapBars,
+    from: candles[0].t, to: candles[candles.length - 1].t,
+    days: spanMs / 86400000,
+  };
+}
+
+  return {INSTRUMENTS, instrumentOf, dataHealth};
+})();
+
 __m.app = (function () {
   const {MarketFeed, TF, mergeCandle} = __m.feed;
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS} = __m.signals;
@@ -3772,9 +3876,11 @@ __m.app = (function () {
   const {narrate, narrateShort} = __m.narrate;
   const {Tour} = __m.tour;
   const {toThai} = __m.glossary;
+  const {instrumentOf, dataHealth} = __m.instrument;
 /**
  * app.js — ตัวเชื่อมทุกส่วนเข้าด้วยกัน: ข้อมูลสด → วิเคราะห์ → กราฟ/เหตุผล → แจ้งเตือน
  */
+
 
 
 
@@ -4259,6 +4365,7 @@ function renderNarration() {
     setup: state.setup, action: state.action, blocks: state.blocks || [], tf: state.tf,
     session: sessionInfo(new Date()), prob: probabilityFor(state.combined ? state.combined.score : 0, probSource().bt),
     htfScores,
+    instrument: instrumentOf(settings.source, settings.symbol),
   });
   $('narrationBody').innerHTML = sections.map((sec) => `
     <div class="narr ${sec.tone}">
@@ -4325,14 +4432,32 @@ function renderAll() {
 function updatePriceHeader() {
   const last = state.candles[state.candles.length - 1];
   if (!last) return;
+  const inst = instrumentOf(settings.source, settings.symbol);
   $('livePrice').textContent = last.c.toFixed(2);
+  $('priceUnit').textContent = inst.isSpot ? 'USD / ออนซ์' : `USD · ${inst.name}`;
   const base = state.prevClose || last.o;
   const chg = last.c - base;
   const pct = (chg / base) * 100;
   const el = $('priceChange');
   el.textContent = `${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(2)} (${pct.toFixed(2)}%)`;
   el.className = 'chg ' + (chg >= 0 ? 'up' : 'down');
-  $('thbPrice').textContent = `≈ ${Math.round(xauToThaiBaht(last.c, settings.usdThb)).toLocaleString('th-TH')} บาท/บาททองคำ (96.5%)`;
+  $('thbPrice').textContent = `≈ ${Math.round(xauToThaiBaht(last.c, settings.usdThb)).toLocaleString('th-TH')} บาท/บาททองคำ (คิดที่ ${settings.usdThb} บาท/ดอลลาร์)`;
+  renderInstrumentLine(inst);
+}
+
+/** บรรทัดบอกว่ากำลังดูราคาอะไร และมันต่างจากทองสปอตยังไง */
+function renderInstrumentLine(inst) {
+  const el = $('instrumentLine');
+  if (!el) return;
+  const h = state.candles.length ? dataHealth(state.candles, TF[state.tf].ms) : null;
+  const warn = inst.isSpot ? '' : ' · <b>ไม่ใช่ราคาทองสปอต</b>';
+  const health = h
+    ? ` · ${h.bars.toLocaleString('th-TH')} แท่ง ย้อนหลัง ${h.days.toFixed(1)} วัน`
+      + (h.gaps ? ` · <span style="color:var(--gold)">มีช่วงข้อมูลขาด ${h.gaps} จุด</span>` : '')
+      + (h.ok ? '' : ' · <span style="color:var(--down)">ข้อมูลผิดลำดับ</span>')
+    : '';
+  el.innerHTML = `<span title="${inst.long}">กำลังดู <b>${inst.name}</b> (${inst.kind})${warn}</span>${health}`;
+  el.className = 'instrument-line' + (inst.isSpot ? '' : ' proxy');
 }
 
 function renderSignal() {

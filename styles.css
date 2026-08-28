@@ -474,3 +474,11 @@ body.simple .narr p { font-size: 13.8px; }
 
 .be-line { display: inline-block; margin-top: 5px; color: var(--muted); font-size: 12px; }
 .be-line b { color: #e2e8f0; }
+
+/* บรรทัดบอกสินทรัพย์ที่กำลังดู */
+.instrument-line { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.instrument-line b { color: #cbd5e1; }
+.instrument-line.proxy b { color: var(--gold); }
+.spot-steps { margin: 8px 0; padding-left: 20px; font-size: 12.5px; color: #cbd5e1; }
+.spot-steps li { margin-bottom: 5px; }
+@media (max-width: 720px) { .instrument-line { font-size: 12.5px; } .spot-steps { font-size: 13.5px; } }

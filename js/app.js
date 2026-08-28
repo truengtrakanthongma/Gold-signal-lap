@@ -12,6 +12,7 @@ import { levelsAt, fibLevels } from './levels.js';
 import { narrate, narrateShort } from './narrate.js';
 import { Tour } from './tour.js';
 import { toThai } from './glossary.js';
+import { instrumentOf, dataHealth } from './instrument.js';
 
 const $ = (id) => document.getElementById(id);
 const LS_SETTINGS = 'goldtrader.settings.v1';
@@ -485,6 +486,7 @@ function renderNarration() {
     setup: state.setup, action: state.action, blocks: state.blocks || [], tf: state.tf,
     session: sessionInfo(new Date()), prob: probabilityFor(state.combined ? state.combined.score : 0, probSource().bt),
     htfScores,
+    instrument: instrumentOf(settings.source, settings.symbol),
   });
   $('narrationBody').innerHTML = sections.map((sec) => `
     <div class="narr ${sec.tone}">
@@ -551,14 +553,32 @@ function renderAll() {
 function updatePriceHeader() {
   const last = state.candles[state.candles.length - 1];
   if (!last) return;
+  const inst = instrumentOf(settings.source, settings.symbol);
   $('livePrice').textContent = last.c.toFixed(2);
+  $('priceUnit').textContent = inst.isSpot ? 'USD / ออนซ์' : `USD · ${inst.name}`;
   const base = state.prevClose || last.o;
   const chg = last.c - base;
   const pct = (chg / base) * 100;
   const el = $('priceChange');
   el.textContent = `${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(2)} (${pct.toFixed(2)}%)`;
   el.className = 'chg ' + (chg >= 0 ? 'up' : 'down');
-  $('thbPrice').textContent = `≈ ${Math.round(xauToThaiBaht(last.c, settings.usdThb)).toLocaleString('th-TH')} บาท/บาททองคำ (96.5%)`;
+  $('thbPrice').textContent = `≈ ${Math.round(xauToThaiBaht(last.c, settings.usdThb)).toLocaleString('th-TH')} บาท/บาททองคำ (คิดที่ ${settings.usdThb} บาท/ดอลลาร์)`;
+  renderInstrumentLine(inst);
+}
+
+/** บรรทัดบอกว่ากำลังดูราคาอะไร และมันต่างจากทองสปอตยังไง */
+function renderInstrumentLine(inst) {
+  const el = $('instrumentLine');
+  if (!el) return;
+  const h = state.candles.length ? dataHealth(state.candles, TF[state.tf].ms) : null;
+  const warn = inst.isSpot ? '' : ' · <b>ไม่ใช่ราคาทองสปอต</b>';
+  const health = h
+    ? ` · ${h.bars.toLocaleString('th-TH')} แท่ง ย้อนหลัง ${h.days.toFixed(1)} วัน`
+      + (h.gaps ? ` · <span style="color:var(--gold)">มีช่วงข้อมูลขาด ${h.gaps} จุด</span>` : '')
+      + (h.ok ? '' : ' · <span style="color:var(--down)">ข้อมูลผิดลำดับ</span>')
+    : '';
+  el.innerHTML = `<span title="${inst.long}">กำลังดู <b>${inst.name}</b> (${inst.kind})${warn}</span>${health}`;
+  el.className = 'instrument-line' + (inst.isSpot ? '' : ' proxy');
 }
 
 function renderSignal() {

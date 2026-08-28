@@ -591,6 +591,37 @@ section('8) คำบรรยายกราฟสด (ภาษาไทย)')
   ok('สรุปสั้นบรรทัดเดียวใช้ได้ ไม่มีค่าว่าง', short.length > 20 && !/undefined|NaN/.test(short), short);
 }
 
+// ── 9. บอกสินทรัพย์และตรวจสุขภาพข้อมูล ────────────────────────────────
+section('9) บอกให้ชัดว่ากำลังดูราคาอะไร');
+{
+  const { instrumentOf, dataHealth, INSTRUMENTS } = await import('../js/instrument.js');
+
+  ok('PAXG ต้องไม่ถูกเรียกว่าราคาทองสปอต', instrumentOf('binance', 'PAXGUSDT').isSpot === false);
+  ok('XAUT ก็เช่นกัน', instrumentOf('binance', 'XAUTUSDT').isSpot === false);
+  ok('Twelve Data คือ XAU/USD ของจริง', instrumentOf('twelvedata', '').isSpot === true);
+  ok('โหมดจำลองต้องบอกว่าไม่ใช่ราคาจริง', instrumentOf('demo', '').kind.includes('ไม่ใช่ราคาจริง'));
+  ok('สินทรัพย์ที่ไม่ใช่สปอต ต้องมีคำอธิบายว่าต่างจากทองจริงยังไง',
+    Object.values(INSTRUMENTS).filter((i) => !i.isSpot).every((i) => i.note && i.note.length > 15));
+  ok('สัญลักษณ์ที่ไม่รู้จัก ไม่ทำให้พัง', instrumentOf('binance', 'ไม่มีจริง').name.length > 0);
+
+  const step = 900000, t0 = 1700000000000;
+  const clean = Array.from({ length: 50 }, (_, i) => ({ t: t0 + i * step, o: 1, h: 1, l: 1, c: 1, v: 1 }));
+  const hc = dataHealth(clean, step);
+  ok('ข้อมูลสมบูรณ์ → ไม่พบปัญหา', hc.ok && hc.gaps === 0 && hc.dups === 0 && hc.outOfOrder === 0);
+  ok('นับจำนวนแท่งและช่วงวันถูกต้อง', hc.bars === 50 && Math.abs(hc.days - (49 * step) / 86400000) < 1e-9);
+
+  const gapped = [...clean.slice(0, 20), ...clean.slice(25)];
+  const hg = dataHealth(gapped, step);
+  ok('ข้อมูลขาดช่วง → ตรวจเจอและบอกว่าขาดกี่แท่ง', hg.gaps === 1 && hg.biggestGapBars === 5, JSON.stringify({ gaps: hg.gaps, biggest: hg.biggestGapBars }));
+
+  const dup = [...clean, clean[10]];
+  ok('มีแท่งซ้ำ → ตรวจเจอและไม่ผ่าน', dataHealth(dup, step).dups === 1 && dataHealth(dup, step).ok === false);
+
+  const rev = [clean[5], clean[3], clean[7]];
+  ok('ข้อมูลผิดลำดับเวลา → ตรวจเจอ', dataHealth(rev, step).outOfOrder >= 1);
+  ok('ข้อมูลน้อยเกินไป → บอกเหตุผล ไม่พัง', dataHealth([clean[0]], step).ok === false);
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

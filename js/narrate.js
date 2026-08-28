@@ -28,7 +28,7 @@ function distanceText(dist, atr) {
  * สร้างคำบรรยายกราฟ ณ ขณะนั้น
  * @returns {{id:string,title:string,tone:string,text:string}[]}
  */
-export function narrate({ candles, ctx, scored, combined, setup, action, blocks = [], tf, session, prob, htfScores = [] }) {
+export function narrate({ candles, ctx, scored, combined, setup, action, blocks = [], tf, session, prob, htfScores = [], instrument = null }) {
   const out = [];
   if (!candles || !candles.length || !scored || !scored.ready) {
     return [{ id: 'wait', title: 'กำลังรวบรวมข้อมูล', tone: 'neutral',
@@ -60,8 +60,9 @@ export function narrate({ candles, ctx, scored, combined, setup, action, blocks 
 
   out.push({
     id: 'price', title: '1. ราคาตอนนี้', tone: chg >= 0 ? 'good' : 'bad',
-    text: `ทองคำอยู่ที่ <b>${fmt(price)}</b> ดอลลาร์ต่อออนซ์ ${chg >= 0 ? 'ขึ้น' : 'ลง'} ${fmt(Math.abs(chg))} ดอลลาร์ (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%) เทียบกับ<b>ราคาปิดของแท่งก่อนหน้า</b>` +
+    text: `${instrument && !instrument.isSpot ? instrument.name : 'ทองคำ'} อยู่ที่ <b>${fmt(price)}</b> ดอลลาร์ต่อออนซ์ ${chg >= 0 ? 'ขึ้น' : 'ลง'} ${fmt(Math.abs(chg))} ดอลลาร์ (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%) เทียบกับ<b>ราคาปิดของแท่งก่อนหน้า</b>` +
       `<br><br>${candleTalk}` +
+      (instrument && !instrument.isSpot ? `<br><br><i>ℹ ${instrument.note}</i>` : '') +
       (forming ? '<br><br><i>⏳ แท่งนี้ยังไม่ปิด ตัวเลขทั้งหมดยังเปลี่ยนได้จนกว่าจะหมดเวลาแท่ง</i>' : ''),
   });
 
