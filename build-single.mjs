@@ -62,6 +62,10 @@ const banner = `
     border-radius: 20px; padding: 2px 11px; font-size: 12px; white-space: nowrap;
   }
   .demo-banner a { color: #ffd980; }
+  @media (max-width: 720px) {
+    .demo-banner { font-size: 12.5px; padding: 7px 10px; gap: 5px 12px; line-height: 1.45; }
+    .demo-banner .tag { font-size: 11.5px; padding: 2px 9px; }
+  }
 </style>
 <div class="demo-banner">
   <span class="tag">หน้าตัวอย่างเพื่อการเรียนรู้</span>

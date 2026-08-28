@@ -330,3 +330,87 @@ body.simple .narr p { font-size: 13.8px; }
 .wf-side.trusted h4 { color: var(--gold); }
 .wf-side .big { font-size: 20px; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
 .wf-side .sub { font-size: 11.5px; color: var(--muted); }
+
+/* ══ มือถือ ══════════════════════════════════════════════
+   บนจอเล็ก คำตอบสำคัญกว่ารูป — ต้องเห็น "ตอนนี้ควรทำอะไร"
+   ทันทีที่เปิด ไม่ใช่ต้องเลื่อนผ่านกราฟลงไปครึ่งหน้าจอ      */
+@media (max-width: 720px) {
+  main {
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    gap: 10px;
+  }
+  /* ปล่อยลูกของ sidebar ออกมาเรียงร่วมกับกราฟ จะได้สลับลำดับได้
+     ต้องเขียนให้จำเพาะเท่ากันทุกบรรทัด ไม่งั้น .sidebar > .card จะทับ .signal-card */
+  .sidebar { display: contents; }
+  .sidebar > .card { order: 4; }
+  .sidebar > .signal-card { order: 1; }
+  .chart-area { order: 2; }
+  .sidebar > #planCard { order: 3; }
+
+  /* ต้องระบุ body.simple ด้วย ไม่งั้นกฎของโหมดง่ายที่จำเพาะกว่าจะทับ */
+  .canvas-wrap, body.simple .canvas-wrap { height: 330px; }
+
+  /* ปุ่มเลือกช่วงเวลา 7 ปุ่มกว้างเกินจอ ต้องยอมให้ขึ้นบรรทัดใหม่
+     ไม่งั้นมันดันทั้งหน้าให้กว้างกว่าจอจริง แล้วเลื่อนซ้ายขวาได้ทั้งหน้า */
+  .tf-group { flex-wrap: wrap; }
+  .tf-btn { padding: 6px 12px; }
+  .narration { margin: 0 8px 10px; }
+  .tabs-section { margin: 0 8px 10px; }
+
+  /* ตัวอักษรบนมือถืออ่านยากกว่าบนคอม ต้องใหญ่ขึ้น */
+  body { font-size: 15px; }
+  .tiny { font-size: 12.5px; }
+  .reason p { font-size: 13.5px; }
+  .reason-head { font-size: 12.5px; }
+  .plain-advice { font-size: 14.5px; }
+  .plain-advice .next-step { font-size: 13.5px; }
+  .narr p { font-size: 14.5px; }
+  .prob-label, .prob-note, .candle-state { font-size: 12.5px; }
+  .stat span { font-size: 12px; }
+  .legend, .chart-toolbar { font-size: 12.5px; }
+  th, td { font-size: 12.5px; padding: 7px 6px; }
+  .rtab { font-size: 13.5px; }
+  .btn, .btn.small { font-size: 13.5px; }
+  .reason-head .en { font-size: 12px; }
+  .price-main .unit { font-size: 12.5px; }
+  .mtf-row, .kv, .gauge-labels { font-size: 12.5px; }
+  .narration-meta, .tour-step { font-size: 12.5px; }
+  .tour-box p { font-size: 14.5px; }
+  .tour-box h3 { font-size: 17px; }
+
+  .price-main { font-size: 30px; }
+  .action { font-size: 21px; }
+  /* บนมือถือ แถบบนที่ตรึงไว้และสูงมาก จะกินพื้นที่จนไม่เหลือที่ให้เนื้อหา */
+  .topbar {
+    position: static;              /* ไม่ตรึง จะได้เลื่อนพ้นไปได้ */
+    padding: 7px 10px;
+    gap: 6px 10px;
+    row-gap: 6px;
+  }
+  .brand h1 { font-size: 15px; }
+  .brand p { font-size: 11.5px; }
+  .price-main { font-size: 27px; }
+  .price-sub { font-size: 12.5px; }
+  .controls { width: 100%; gap: 6px; }
+  .controls label { flex: 1; min-width: 130px; }
+  .controls select { width: 100%; }
+  .controls .btn { flex: 1; }
+}
+
+/* ══ นิ้วกดได้จริง ═══════════════════════════════════════
+   เป้าที่นิ้วกดสบายคือ 44px ตามมาตรฐาน แต่ของเดิมสูงแค่ 22px */
+@media (pointer: coarse) {
+  .btn, .tf-btn, .tab, .rtab,
+  select, input[type=number], input[type=text], input[type=password], input[type=datetime-local] {
+    min-height: 42px;
+  }
+  .tf-btn { padding: 6px 16px; font-size: 14px; }
+  .btn { padding: 9px 14px; font-size: 14px; }
+  .tab { padding: 12px 16px; }
+  .chk { min-height: 42px; }
+  .chk input[type=checkbox] { min-height: 0; width: 20px; height: 20px; }
+  .tiny-btn { min-height: 34px; padding: 4px 12px; }
+  .tour-btns .btn { min-height: 40px; }
+}

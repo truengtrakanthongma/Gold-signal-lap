@@ -339,11 +339,21 @@ export class Chart {
 
     // ── แกนเวลา ────────────────────────────────────────────────────────
     g.fillStyle = COL.text; g.font = '10px system-ui'; g.textAlign = 'center';
-    const tickEvery = Math.max(1, Math.floor(vis.length / 7));
+    // จำนวนป้ายต้องคิดจากความกว้างที่มีจริง ไม่ใช่ตั้งไว้ตายตัว 7 ป้าย
+    // จอแคบ ๆ ป้าย 7 อันจะทับกันจนอ่านไม่ออก
+    const sample = new Date(this.candles[start].t)
+      .toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const lblW = g.measureText(sample).width + 18;   // เผื่อช่องไฟกันชนกัน
+    const maxLabels = Math.max(2, Math.floor(plotW / lblW));
+    const tickEvery = Math.max(1, Math.ceil(vis.length / maxLabels));
+    let lastRight = -Infinity;
     for (let i = start; i < end; i += tickEvery) {
       const d = new Date(this.candles[i].t);
       const lbl = d.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-      const x = Math.max(padL + g.measureText(lbl).width / 2, Math.min(W - padR - g.measureText(lbl).width / 2, xI(i)));
+      const w = g.measureText(lbl).width;
+      const x = Math.max(padL + w / 2, Math.min(W - padR - w / 2, xI(i)));
+      if (x - w / 2 < lastRight + 8) continue;   // กันป้ายที่จะทับป้ายก่อนหน้า
+      lastRight = x + w / 2;
       g.fillText(lbl, x, H - 7);
     }
     g.textAlign = 'left';
