@@ -98,6 +98,20 @@ section('1) คณิตศาสตร์ของตัวชี้วัด')
   ok('ADX ของเทรนด์ขึ้นชัดเจน สูง (>40)', adxTrend.adx[59] > 40, `ได้ ${adxTrend.adx[59]}`);
   ok('+DI มากกว่า -DI ในเทรนด์ขาขึ้น', adxTrend.plusDI[59] > adxTrend.minusDI[59]);
 
+  // VWAP เริ่มนับใหม่ทุกวัน — กราฟจึงต้องตัดเส้นตรงรอยต่อ ไม่ลากพาด
+  const day = 86400000, hr = 3600000;
+  const twoDays = [];
+  for (let i = 0; i < 48; i++) {
+    const price = i < 24 ? 100 : 200;   // วันที่สองราคากระโดดไปคนละระดับ
+    twoDays.push({ t: Date.UTC(2026, 0, 1) + i * hr, o: price, h: price, l: price, c: price, v: 10 });
+  }
+  const vw = ta.vwapDaily(twoDays);
+  ok('VWAP วันแรกเท่ากับราคาของวันนั้น', near(vw[23], 100, 1e-9), `ได้ ${vw[23]}`);
+  ok('VWAP รีเซ็ตเมื่อขึ้นวันใหม่ (ไม่ลากค่าเฉลี่ยข้ามวัน)', near(vw[24], 200, 1e-9), `ได้ ${vw[24]}`);
+  ok('รอยต่อวันตรวจจับได้จาก timestamp',
+    new Date(twoDays[23].t).getUTCDate() !== new Date(twoDays[24].t).getUTCDate());
+  void day;
+
   ok('ทุก series ยาวเท่าอินพุตเสมอ',
     ta.rsi(px, 14).length === px.length && ta.atr(makeCandles(50), 14).length === 50 && ta.macd(px).hist.length === px.length);
 }

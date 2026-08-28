@@ -2137,7 +2137,80 @@ class Chart {
     this.drag = null;
     this.showLevels = true;
     this.showBB = true;
+
+    // ค่าที่ "ไหลเข้าหาเป้าหมาย" แทนการกระโดด — ทำให้ซูมและสเกลแกนราคานุ่ม
+    this.anim = { min: null, max: null, count: null };
+    this.needsDraw = true;
+    this.reduce = typeof matchMedia === 'function'
+      && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     this._bind();
+    this._raf();
+  }
+
+  /**
+   * วาดใหม่ตามรอบรีเฟรชของจอ ไม่ใช่ตามจังหวะที่ข้อมูลเข้ามา
+   *
+   * เดิมทุก event (ราคาเข้า, ขยับเมาส์, ลาก) สั่งวาดทันที ทำให้วาดถี่เกินจำเป็น
+   * บางเฟรมวาดหลายรอบ บางเฟรมไม่วาดเลย ภาพจึงกระตุก
+   * ตอนนี้ทุก event แค่ยกธง แล้ววาดครั้งเดียวต่อเฟรม
+   */
+  _raf() {
+    if (typeof requestAnimationFrame !== 'function') return;
+    requestAnimationFrame(() => this._raf());
+    const moving = this._ease();
+    if (moving || this.needsDraw) {
+      this.needsDraw = false;
+      this._draw();
+    }
+  }
+
+  /** ขอให้วาดใหม่ในเฟรมถัดไป (ราคาถูก เรียกบ่อยแค่ไหนก็ได้) */
+  invalidate() { this.needsDraw = true; }
+
+  /** ขอบเขตแกนราคาที่ "ควรจะเป็น" ณ ตอนนี้ */
+  _computeTarget() {
+    const n = this.candles.length;
+    const count = Math.max(20, Math.round(this.anim.count === null ? this.view.count : this.anim.count));
+    const end = Math.max(20, n - this.view.offset);
+    const start = Math.max(0, end - count);
+    let min = Infinity, max = -Infinity;
+    for (let i = start; i < end; i++) {
+      const c = this.candles[i];
+      if (c.l < min) min = c.l;
+      if (c.h > max) max = c.h;
+    }
+    const add = (v) => { if (v === null || v === undefined || Number.isNaN(v)) return; if (v < min) min = v; if (v > max) max = v; };
+    if (this.ind && this.showBB) for (let i = start; i < end; i++) { add(this.ind.bb.upper[i]); add(this.ind.bb.lower[i]); }
+    if (this.setup) [this.setup.entry, this.setup.sl, this.setup.tp1, this.setup.tp2, this.setup.tp3].forEach(add);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    const pad = (max - min) * 0.08 || 1;
+    return { min: min - pad, max: max + pad, start, end };
+  }
+
+  /** ค่อย ๆ เลื่อนค่าที่แสดงเข้าหาเป้าหมาย คืน true ถ้ายังเคลื่อนอยู่ */
+  _ease() {
+    if (!this.candles.length || !this.W) return false;
+    if (this.anim.count === null) this.anim.count = this.view.count;
+    const k = this.reduce ? 1 : 0.24;   // ผู้ที่ตั้งค่าลดการเคลื่อนไหว จะได้ภาพนิ่งทันที
+    let moving = false;
+
+    const dCount = this.view.count - this.anim.count;
+    if (Math.abs(dCount) > 0.4) { this.anim.count += dCount * k; moving = true; }
+    else this.anim.count = this.view.count;
+
+    const t = this._computeTarget();
+    if (!t) return moving;
+    this.win = t;
+    if (this.anim.min === null) { this.anim.min = t.min; this.anim.max = t.max; }
+    const span = Math.max(1e-9, t.max - t.min);
+    const dMin = t.min - this.anim.min, dMax = t.max - this.anim.max;
+    if (Math.abs(dMin) > span * 0.0006 || Math.abs(dMax) > span * 0.0006) {
+      this.anim.min += dMin * k;
+      this.anim.max += dMax * k;
+      moving = true;
+    } else { this.anim.min = t.min; this.anim.max = t.max; }
+    return moving;
   }
 
   _bind() {
@@ -2147,7 +2220,7 @@ class Chart {
       const dir = Math.sign(e.deltaY);
       const next = Math.round(this.view.count * (dir > 0 ? 1.15 : 0.87));
       this.view.count = Math.max(30, Math.min(600, next));
-      this.render();
+      this.invalidate();
     }, { passive: false });
 
     cv.addEventListener('mousedown', (e) => { this.drag = { x: e.offsetX, offset: this.view.offset }; });
@@ -2159,9 +2232,9 @@ class Chart {
         const shift = Math.round((e.offsetX - this.drag.x) / bw);
         this.view.offset = Math.max(0, Math.min(this.candles.length - 20, this.drag.offset + shift));
       }
-      this.render();
+      this.invalidate();
     });
-    cv.addEventListener('mouseleave', () => { this.mouse = null; this.render(); });
+    cv.addEventListener('mouseleave', () => { this.mouse = null; this.invalidate(); });
 
     // สัมผัสบนมือถือ: ลากเพื่อเลื่อนกราฟ
     cv.addEventListener('touchstart', (e) => {
@@ -2172,18 +2245,26 @@ class Chart {
         const x = e.touches[0].clientX - cv.getBoundingClientRect().left;
         const bw = this.plot ? this.plot.barW : 6;
         this.view.offset = Math.max(0, Math.min(this.candles.length - 20, this.drag.offset + Math.round((x - this.drag.x) / bw)));
-        this.render();
+        this.invalidate();
       }
     }, { passive: true });
     cv.addEventListener('touchend', () => { this.drag = null; });
   }
 
   setData({ candles, ind, setup, markers, levels }) {
+    // เปลี่ยนชุดข้อมูล (สลับกรอบเวลา/สัญลักษณ์) = ช่วงราคาคนละเรื่องกัน
+    // ต้องรีเซ็ตค่าที่หน่วงไว้ ไม่งั้นกราฟจะไหลจากสเกลเก่าไปสเกลใหม่ให้เห็นเป็นการกวาดยาว ๆ
+    if (candles && candles !== this.candles) {
+      this.anim.min = null;
+      this.anim.max = null;
+      this.win = null;
+    }
     if (candles) this.candles = candles;
     if (ind !== undefined) this.ind = ind;
     if (setup !== undefined) this.setup = setup;
     if (markers !== undefined) this.markers = markers || [];
     if (levels !== undefined) this.levels = levels || [];
+    this.invalidate();
   }
 
   resize() {
@@ -2193,10 +2274,13 @@ class Chart {
     this.cv.height = Math.max(280, r.height * dpr);
     this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.W = r.width; this.H = r.height;
-    this.render();
+    this.invalidate();
   }
 
-  render() {
+  /** ขอวาดใหม่ (ของเดิมเรียก render() อยู่หลายที่ จึงคงชื่อไว้) */
+  render() { this.invalidate(); }
+
+  _draw() {
     const g = this.g;
     if (!this.W) this.resize();
     const W = this.W, H = this.H;
@@ -2219,21 +2303,17 @@ class Chart {
     const priceH = usableH * (1 - subTotal);
 
     const n = this.candles.length;
-    const end = Math.max(20, n - this.view.offset);
-    const start = Math.max(0, end - this.view.count);
+    if (!this.win || this.anim.min === null) { this._ease(); }
+    const win = this.win || { start: Math.max(0, n - this.view.count), end: n, min: 0, max: 1 };
+    const end = win.end;
+    const start = win.start;
     const vis = this.candles.slice(start, end);
     const plotW = W - padL - padR;
     const barW = plotW / Math.max(1, vis.length);
     this.plot = { start, end, barW, padL, padR, padT, priceH, plotW };
 
-    // ── สเกลราคา ────────────────────────────────────────────────────────
-    let min = Infinity, max = -Infinity;
-    for (const c of vis) { if (c.l < min) min = c.l; if (c.h > max) max = c.h; }
-    const addRange = (v) => { if (v === null || v === undefined || Number.isNaN(v)) return; if (v < min) min = v; if (v > max) max = v; };
-    if (this.ind && this.showBB) for (let i = start; i < end; i++) { addRange(this.ind.bb.upper[i]); addRange(this.ind.bb.lower[i]); }
-    if (this.setup) [this.setup.entry, this.setup.sl, this.setup.tp1, this.setup.tp2, this.setup.tp3].forEach(addRange);
-    const pad = (max - min) * 0.08 || 1;
-    min -= pad; max += pad;
+    // ── สเกลราคา (ใช้ค่าที่หน่วงแล้ว จึงไม่กระโดดเวลาราคาทะลุกรอบเดิม) ──
+    const min = this.anim.min, max = this.anim.max;
     const yP = (p) => padT + ((max - p) / (max - min)) * priceH;
     const xI = (i) => padL + (i - start + 0.5) * barW;
     this.yP = yP; this.xI = xI; this.min = min; this.max = max;
@@ -2279,17 +2359,20 @@ class Chart {
     }
 
     // ── แท่งเทียน ───────────────────────────────────────────────────────
-    const bodyW = Math.max(1, barW * 0.62);
+    // ปัดทุกพิกัดเป็นจำนวนเต็ม ไม่งั้นเบราว์เซอร์จะเกลี่ยขอบให้จาง-เข้มไม่เท่ากัน
+    // ทำให้แถวแท่งเทียนดู "ขาด ๆ" ทั้งที่ข้อมูลครบ
+    const bodyW = Math.max(1, Math.round(barW * 0.62));
+    const wickW = Math.max(1, Math.round(barW * 0.14));
     for (let i = start; i < end; i++) {
       const c = this.candles[i];
-      const x = xI(i);
+      const xc = Math.round(xI(i));
       const up = c.c >= c.o;
-      g.strokeStyle = up ? COL.up : COL.down;
-      g.lineWidth = Math.max(1, barW * 0.1);
-      g.beginPath(); g.moveTo(x, yP(c.h)); g.lineTo(x, yP(c.l)); g.stroke();
-      const yo = yP(c.o), yc = yP(c.c);
+      const yh = Math.round(yP(c.h)), yl = Math.round(yP(c.l));
+      g.fillStyle = up ? COL.up : COL.down;
+      g.fillRect(xc - Math.floor(wickW / 2), yh, wickW, Math.max(1, yl - yh));
+      const yo = Math.round(yP(c.o)), yc2 = Math.round(yP(c.c));
       g.fillStyle = up ? COL.upFill : COL.downFill;
-      g.fillRect(x - bodyW / 2, Math.min(yo, yc), bodyW, Math.max(1, Math.abs(yc - yo)));
+      g.fillRect(xc - Math.floor(bodyW / 2), Math.min(yo, yc2), bodyW, Math.max(1, Math.abs(yc2 - yo)));
     }
 
     // ── เส้นค่าเฉลี่ย ───────────────────────────────────────────────────
@@ -2297,7 +2380,7 @@ class Chart {
       this._line(this.ind.ema20, start, end, COL.ema20, 1.4);
       this._line(this.ind.ema50, start, end, COL.ema50, 1.4);
       this._line(this.ind.ema200, start, end, COL.ema200, 1.6);
-      if (this.panels.vwap !== false) this._line(this.ind.vwap, start, end, COL.vwap, 1, [3, 3]);
+      if (this.panels.vwap !== false) this._line(this.ind.vwap, start, end, COL.vwap, 1, [3, 3], (i) => this._newDay(i));
     }
 
     // ── แผนเทรดปัจจุบัน ────────────────────────────────────────────────
@@ -2377,7 +2460,12 @@ class Chart {
     if (this.mouse) this._crosshair(padL, W - padR, padT, H - padB);
   }
 
-  _line(series, start, end, color, width = 1, dash = null) {
+  /**
+   * @param {(i:number)=>boolean} breakAt คืน true ตรงจุดที่ต้อง "ยกปากกา"
+   *   ใช้กับเส้นที่รีเซ็ตค่าเป็นช่วง ๆ เช่น VWAP ที่เริ่มนับใหม่ทุกวัน
+   *   ถ้าลากพาดข้ามรอยต่อ จะได้เส้นดิ่งที่ไม่มีอยู่จริงบนกราฟ
+   */
+  _line(series, start, end, color, width = 1, dash = null, breakAt = null) {
     const g = this.g;
     g.strokeStyle = color; g.lineWidth = width;
     if (dash) g.setLineDash(dash);
@@ -2386,11 +2474,19 @@ class Chart {
     for (let i = start; i < end; i++) {
       const v = series[i];
       if (v === null || v === undefined) { started = false; continue; }
+      if (started && breakAt && breakAt(i)) started = false;
       const x = this.xI(i), y = this.yP(v);
       if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
     }
     g.stroke();
     if (dash) g.setLineDash([]);
+  }
+
+  /** VWAP เริ่มนับใหม่ทุกวัน (เวลา UTC) — ตรงรอยต่อวันต้องไม่ลากเส้นเชื่อม */
+  _newDay(i) {
+    const a = this.candles[i - 1], b = this.candles[i];
+    if (!a || !b) return false;
+    return new Date(a.t).getUTCDate() !== new Date(b.t).getUTCDate();
   }
 
   _drawSub(key, top, h, start, end, x0, x1) {
@@ -2408,7 +2504,8 @@ class Chart {
         const c = this.candles[i];
         const bh = vmax ? (c.v / vmax) * inner : 0;
         g.fillStyle = c.c >= c.o ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)';
-        g.fillRect(this.xI(i) - barW * 0.31, top + h - bh - 4, Math.max(1, barW * 0.62), bh);
+        const vw = Math.max(1, Math.round(barW * 0.62));
+        g.fillRect(Math.round(this.xI(i)) - Math.floor(vw / 2), Math.round(top + h - bh - 4), vw, Math.max(1, Math.round(bh)));
       }
       g.fillStyle = COL.text; g.fillText('Volume', x0 + 4, top + 11);
       return;
@@ -2513,7 +2610,7 @@ class Chart {
     txt.forEach((t, k) => g.fillText(t, bx + 7, by + 18 + k * 15));
   }
 
-  scrollToEnd() { this.view.offset = 0; this.render(); }
+  scrollToEnd() { this.view.offset = 0; this.invalidate(); }
 }
 
   return {Chart};
@@ -2719,6 +2816,13 @@ const BINANCE_HOSTS = [
 ];
 const BINANCE_WS = ['wss://stream.binance.com:9443', 'wss://data-stream.binance.vision'];
 
+/**
+ * จังหวะเต้นของราคาในโหมดจำลอง
+ * ของจริงจาก WebSocket ส่งมาหลายครั้งต่อวินาที ถ้าจำลองช้ากว่านั้นมาก
+ * กราฟจะดูกระตุกเป็นขั้นบันได ทั้งที่ระบบวาดไม่ได้มีปัญหา
+ */
+const DEMO_TICK_MS = 80;
+
 async function fetchJson(url, timeoutMs = 12000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -2882,7 +2986,7 @@ class MarketFeed {
       // ปริมาณต่อ tick ต้องหารตามจำนวน tick ที่จะเกิดใน 1 แท่ง
       // ไม่งั้นแท่งสดจะสะสมปริมาณจนสูงกว่าข้อมูลย้อนหลังหลายเท่า
       const avgVol = out.reduce((a, k) => a + k.v, 0) / out.length;
-      const ticksPerCandle = Math.max(1, step / 900);
+      const ticksPerCandle = Math.max(1, step / DEMO_TICK_MS);
       this.demoState = {
         price, step, lastT: out[out.length - 1].t, cur: null, vol,
         volPerTick: avgVol / ticksPerCandle,
@@ -2899,7 +3003,8 @@ class MarketFeed {
     this.demoTimer = setInterval(() => {
       const now = Date.now();
       const bucket = Math.floor(now / st.step) * st.step;
-      const move = gauss() * st.price * st.vol * 0.35;
+      // ความผันผวนต่อ tick ต้องลดตามรากที่สองของเวลา ไม่งั้นเต้นถี่ขึ้น = ผันผวนเกินจริง
+      const move = gauss() * st.price * st.vol * 0.35 * Math.sqrt(DEMO_TICK_MS / 900);
       st.price = Math.max(1, st.price + move);
       if (!st.cur || st.cur.t !== bucket) {
         if (st.cur) this.onCandle({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
@@ -2916,7 +3021,7 @@ class MarketFeed {
       st.cur.l = Math.min(st.cur.l, st.price);
       st.cur.v += (st.volPerTick || 1) * (0.5 + Math.random() + Math.abs(move) / (st.price * st.vol + 1e-9) * 0.3);
       this.onCandle({ ...st.cur });
-    }, 900);
+    }, DEMO_TICK_MS);
   }
 }
 
@@ -3477,6 +3582,7 @@ function onLiveCandle(k) {
   if (res.stale) return;
   if (res.appended && state.candles.length > 1) state.prevClose = state.candles[state.candles.length - 2].c;
   updatePriceHeader();
+  if (chart) chart.invalidate();   // ให้กราฟไหลตามราคาทุกครั้ง ไม่ต้องรอรอบวิเคราะห์
   alerts.checkRules({ price: k.c, rsi: state.ctx && state.scored ? state.scored.rsi : null, score: state.combined ? state.combined.score : 0 });
 
   // "แท่งปิด" คือเหตุการณ์ที่ข้อมูลของแท่งนั้นสมบูรณ์แล้ว — ต้องให้คะแนนตอนนี้

@@ -27,6 +27,13 @@ const BINANCE_HOSTS = [
 ];
 const BINANCE_WS = ['wss://stream.binance.com:9443', 'wss://data-stream.binance.vision'];
 
+/**
+ * จังหวะเต้นของราคาในโหมดจำลอง
+ * ของจริงจาก WebSocket ส่งมาหลายครั้งต่อวินาที ถ้าจำลองช้ากว่านั้นมาก
+ * กราฟจะดูกระตุกเป็นขั้นบันได ทั้งที่ระบบวาดไม่ได้มีปัญหา
+ */
+const DEMO_TICK_MS = 80;
+
 async function fetchJson(url, timeoutMs = 12000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -190,7 +197,7 @@ export class MarketFeed {
       // ปริมาณต่อ tick ต้องหารตามจำนวน tick ที่จะเกิดใน 1 แท่ง
       // ไม่งั้นแท่งสดจะสะสมปริมาณจนสูงกว่าข้อมูลย้อนหลังหลายเท่า
       const avgVol = out.reduce((a, k) => a + k.v, 0) / out.length;
-      const ticksPerCandle = Math.max(1, step / 900);
+      const ticksPerCandle = Math.max(1, step / DEMO_TICK_MS);
       this.demoState = {
         price, step, lastT: out[out.length - 1].t, cur: null, vol,
         volPerTick: avgVol / ticksPerCandle,
@@ -207,7 +214,8 @@ export class MarketFeed {
     this.demoTimer = setInterval(() => {
       const now = Date.now();
       const bucket = Math.floor(now / st.step) * st.step;
-      const move = gauss() * st.price * st.vol * 0.35;
+      // ความผันผวนต่อ tick ต้องลดตามรากที่สองของเวลา ไม่งั้นเต้นถี่ขึ้น = ผันผวนเกินจริง
+      const move = gauss() * st.price * st.vol * 0.35 * Math.sqrt(DEMO_TICK_MS / 900);
       st.price = Math.max(1, st.price + move);
       if (!st.cur || st.cur.t !== bucket) {
         if (st.cur) this.onCandle({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
@@ -224,7 +232,7 @@ export class MarketFeed {
       st.cur.l = Math.min(st.cur.l, st.price);
       st.cur.v += (st.volPerTick || 1) * (0.5 + Math.random() + Math.abs(move) / (st.price * st.vol + 1e-9) * 0.3);
       this.onCandle({ ...st.cur });
-    }, 900);
+    }, DEMO_TICK_MS);
   }
 }
 

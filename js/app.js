@@ -297,6 +297,7 @@ function onLiveCandle(k) {
   if (res.stale) return;
   if (res.appended && state.candles.length > 1) state.prevClose = state.candles[state.candles.length - 2].c;
   updatePriceHeader();
+  if (chart) chart.invalidate();   // ให้กราฟไหลตามราคาทุกครั้ง ไม่ต้องรอรอบวิเคราะห์
   alerts.checkRules({ price: k.c, rsi: state.ctx && state.scored ? state.scored.rsi : null, score: state.combined ? state.combined.score : 0 });
 
   // "แท่งปิด" คือเหตุการณ์ที่ข้อมูลของแท่งนั้นสมบูรณ์แล้ว — ต้องให้คะแนนตอนนี้
