@@ -1,0 +1,54 @@
+# เผยแพร่แอปขึ้น GitHub Pages อัตโนมัติทุกครั้งที่ push เข้า main
+#
+# configure-pages พร้อม enablement: true จะเปิด Pages ให้เองผ่าน API
+# เจ้าของ repo จึงไม่ต้องเข้าไปกดใน Settings เอง
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# ให้ deploy ทีละงาน ไม่ยกเลิกงานที่กำลังเผยแพร่อยู่
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ตรวจว่าโค้ดยังผ่านเทสต์ก่อนเผยแพร่
+        run: node test/run-tests.mjs
+
+      - name: ตรวจว่าไฟล์รวมตรงกับซอร์สล่าสุด
+        run: |
+          node build-single.mjs
+          if ! git diff --quiet -- gold-signal-lab.html gold-signal-lab-demo.html; then
+            echo "::warning::ไฟล์รวมไม่ตรงกับซอร์ส — สร้างใหม่ให้แล้วสำหรับการเผยแพร่ครั้งนี้"
+          fi
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
