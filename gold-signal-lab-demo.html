@@ -278,6 +278,53 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
   .narr p { font-size: 13.6px; }
 }
 
+/* ── โหมดง่าย: ซ่อนเครื่องมือขั้นสูง ─────────────────── */
+body.simple [data-adv] { display: none !important; }
+body.simple .canvas-wrap { height: 460px; }
+
+/* คำแนะนำภาษาชาวบ้าน (แสดงเฉพาะโหมดง่าย) */
+.plain-advice { display: none; }
+body.simple .plain-advice {
+  display: block; margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed var(--line); font-size: 13.5px; line-height: 1.7;
+}
+.plain-advice .headline { font-size: 15px; font-weight: 700; margin-bottom: 5px; }
+.plain-advice ul { margin: 6px 0 0; padding-left: 18px; color: #cbd5e1; }
+.plain-advice li { margin-bottom: 3px; }
+.plain-advice .next-step {
+  margin-top: 9px; background: rgba(56,189,248,.09); border: 1px solid rgba(56,189,248,.3);
+  border-radius: 6px; padding: 8px 10px; font-size: 12.8px;
+}
+
+/* ── ทัวร์พาชมหน้าจอ ─────────────────────────────────── */
+.tour-root { position: fixed; inset: 0; z-index: 500; }
+.tour-spot {
+  position: fixed; border-radius: 10px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(3, 7, 18, .82), 0 0 0 2px var(--gold);
+  transition: all .28s cubic-bezier(.4, 0, .2, 1);
+}
+.tour-box {
+  position: fixed; background: var(--panel); border: 1px solid var(--gold);
+  border-radius: 10px; padding: 15px 17px; box-shadow: 0 18px 50px rgba(0, 0, 0, .6);
+  transition: top .28s, left .28s;
+}
+.tour-step { font-size: 11px; color: var(--gold); letter-spacing: .5px; margin-bottom: 4px; }
+.tour-box h3 { font-size: 15.5px; color: var(--text); margin: 0 0 7px; }
+.tour-box p { margin: 0; font-size: 13.3px; line-height: 1.75; color: #d7dee9; }
+.tour-btns { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot, .tour-box { transition: none; }
+}
+
+/* โหมดง่าย: เก็บศัพท์เทคนิคและกล่องที่ซ้ำซ้อน */
+body.simple .reason-head .w { display: none; }           /* ตัวเลขน้ำหนักคะแนน */
+body.simple #planCard.no-plan { display: none; }          /* ไม่มีแผนก็ไม่ต้องโชว์กล่องเปล่า */
+body.simple .signal-head .action { font-size: 20px; }
+body.simple .narr p { font-size: 13.8px; }
+
+/* ชื่อภาษาอังกฤษของปัจจัย — ไว้ให้ผู้เรียนจำศัพท์ที่จะไปเจอในโปรแกรมอื่น */
+.reason-head .en { color: var(--muted); font-weight: 400; font-size: 10.5px; }
+
 </style>
 </head>
 <body>
@@ -337,6 +384,8 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
       </select>
     </label>
     <button id="reloadBtn" class="btn">↻ โหลดใหม่</button>
+    <button id="tourBtn" class="btn" title="พาชมหน้าจอทีละจุด">❓ สอนใช้</button>
+    <button id="modeToggle" class="btn">🔧 โหมดเต็ม</button>
   </div>
 </header>
 
@@ -346,11 +395,13 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
       <div class="tf-group" id="tfGroup"></div>
       <div class="countdown" id="countdown" title="เวลาที่เหลือก่อนแท่งเทียนปัจจุบันจะปิด">แท่งนี้ปิดในอีก <b>—</b></div>
       <div class="spacer"></div>
-      <label class="chk"><input type="checkbox" id="togBB" checked> Bollinger</label>
-      <label class="chk"><input type="checkbox" id="togLevels" checked> แนวรับ-ต้าน</label>
-      <label class="chk"><input type="checkbox" id="togRSI" checked> RSI</label>
-      <label class="chk"><input type="checkbox" id="togMACD" checked> MACD</label>
-      <label class="chk"><input type="checkbox" id="togMarkers" checked> จุดสัญญาณย้อนหลัง</label>
+      <span data-adv style="display:contents">
+        <label class="chk"><input type="checkbox" id="togBB" checked> Bollinger</label>
+        <label class="chk"><input type="checkbox" id="togLevels" checked> แนวรับ-ต้าน</label>
+        <label class="chk"><input type="checkbox" id="togRSI" checked> RSI</label>
+        <label class="chk"><input type="checkbox" id="togMACD" checked> MACD</label>
+        <label class="chk"><input type="checkbox" id="togMarkers" checked> จุดสัญญาณย้อนหลัง</label>
+      </span>
       <button id="resetZoom" class="btn small">⟲ ล่าสุด</button>
     </div>
     <div class="canvas-wrap"><canvas id="chart"></canvas></div>
@@ -368,24 +419,25 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
     <div class="card signal-card" id="signalCard">
       <div class="signal-head">
         <div class="action" id="actionText">รอสัญญาณ</div>
-        <div class="grade" id="gradeText">—</div>
+        <div class="grade" id="gradeText" data-adv>—</div>
       </div>
-      <div class="gauge">
+      <div class="gauge" data-adv>
         <div class="gauge-bar"><div class="gauge-fill" id="gaugeFill"></div><div class="gauge-zero"></div></div>
         <div class="gauge-labels"><span>ขาย -100</span><span id="scoreText">0</span><span>+100 ซื้อ</span></div>
       </div>
-      <div class="prob-row">
+      <div class="prob-row" data-adv>
         <div class="prob">
           <span class="prob-label">โอกาสถึงเป้าแรก (1R) ก่อนโดน SL</span>
           <span class="prob-value" id="probValue">—</span>
         </div>
         <div class="prob-note" id="probNote">ยังไม่ได้ทดสอบย้อนหลัง</div>
       </div>
-      <div class="candle-state" id="candleState"></div>
+      <div class="candle-state" id="candleState" data-adv></div>
+      <div class="plain-advice" id="plainAdvice"></div>
     </div>
 
     <!-- แผนเทรด -->
-    <div class="card">
+    <div class="card" id="planCard">
       <h2>แผนเข้า–ออก</h2>
       <div id="planBox" class="plan-empty">ยังไม่มีแผน — รอคะแนนถึงเกณฑ์</div>
       <div class="risk-inputs">
@@ -397,7 +449,7 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
 
     <!-- เหตุผล -->
     <div class="card">
-      <h2>เหตุผลประกอบ <small id="reasonCount"></small></h2>
+      <h2>เหตุผลประกอบ <small id="reasonCount" data-adv></small></h2>
       <div class="reason-tabs">
         <button class="rtab active" data-r="pro">สนับสนุน</button>
         <button class="rtab" data-r="con">ค้าน</button>
@@ -407,7 +459,7 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
     </div>
 
     <!-- หลายกรอบเวลา -->
-    <div class="card">
+    <div class="card" data-adv>
       <h2>หลายกรอบเวลา (Multi-Timeframe)</h2>
       <div id="mtfBox" class="mtf-box"></div>
       <p class="tiny">กรอบใหญ่บอก "กระแสน้ำ" กรอบเล็กบอก "จังหวะกระโดดลงน้ำ" — เทรดสวนกรอบใหญ่คืออัตราชนะที่ต่ำลง</p>
@@ -427,7 +479,7 @@ footer p { margin: 0; font-size: 11.5px; color: var(--muted); }
   <p class="tiny">คำอธิบายนี้สร้างจากตัวเลขจริงบนกราฟ ณ วินาทีนี้ และอัปเดตตัวเองตลอดเวลา — ใช้สำหรับเรียนรู้ว่าแต่ละตัวชี้วัดกำลังบอกอะไร ไม่ใช่คำแนะนำให้ซื้อขาย</p>
 </section>
 
-<section class="tabs-section">
+<section class="tabs-section" data-adv>
   <div class="tabbar">
     <button class="tab active" data-tab="backtest">📊 ผลทดสอบย้อนหลัง</button>
     <button class="tab" data-tab="alerts">🔔 แจ้งเตือน</button>
@@ -915,7 +967,7 @@ function detectPatterns(candles, i, atrVal) {
       name: isBull(c) ? 'Strong Bull Candle' : 'Strong Bear Candle',
       side: isBull(c) ? 1 : -1,
       strength: Math.min(1, b / (a * 2)),
-      reason: `แท่งเทียนตัวใหญ่กว่า ATR ${(b / a).toFixed(1)} เท่า = มีโมเมนตัมและ volume จริงหนุนอยู่`,
+      reason: `แท่งเทียนตัวใหญ่กว่าระยะแกว่งปกติต่อแท่ง (ATR) ถึง ${(b / a).toFixed(1)} เท่า = มีแรงและปริมาณซื้อขายจริงหนุนอยู่`,
     });
   }
 
@@ -1087,13 +1139,13 @@ function rsiDivergence(candles, rsiSeries, pivots, i, maxLookback = 60) {
   if (lows.length === 2) {
     const [a, b] = lows;
     if (b.price < a.price && rsiSeries[b.index] !== null && rsiSeries[a.index] !== null && rsiSeries[b.index] > rsiSeries[a.index] + 2) {
-      return { side: 1, type: 'Bullish Divergence', detail: `ราคาทำจุดต่ำใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่ RSI กลับยกสูงขึ้น (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงขายเริ่มหมด` };
+      return { side: 1, type: 'Bullish Divergence', detail: `ราคาทำจุดต่ำใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่มาตรวัดแรงซื้อ-แรงขาย (RSI) กลับยกสูงขึ้น (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงขายเริ่มหมด` };
     }
   }
   if (highs.length === 2) {
     const [a, b] = highs;
     if (b.price > a.price && rsiSeries[b.index] !== null && rsiSeries[a.index] !== null && rsiSeries[b.index] < rsiSeries[a.index] - 2) {
-      return { side: -1, type: 'Bearish Divergence', detail: `ราคาทำจุดสูงใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่ RSI กลับต่ำลง (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงซื้อเริ่มหมด` };
+      return { side: -1, type: 'Bearish Divergence', detail: `ราคาทำจุดสูงใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่มาตรวัดแรงซื้อ-แรงขาย (RSI) กลับต่ำลง (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงซื้อเริ่มหมด` };
     }
   }
   return null;
@@ -1391,8 +1443,8 @@ function scoreAt(ctx, i) {
   if (adxVal !== null && pDI !== null) {
     if (adxVal >= cfg.adxTrendMin) {
       const s = clamp((adxVal - 18) / 27, 0.2, 1);
-      if (pDI > mDI) push('adxTrend', 'ADX / DI', 1, s, `ADX = ${adxVal.toFixed(1)} (เกิน ${cfg.adxTrendMin} = มีเทรนด์จริง) และ +DI ${pDI.toFixed(1)} > -DI ${mDI.toFixed(1)} = แรงซื้อเหนือกว่า`);
-      else push('adxTrend', 'ADX / DI', -1, s, `ADX = ${adxVal.toFixed(1)} (เกิน ${cfg.adxTrendMin} = มีเทรนด์จริง) และ -DI ${mDI.toFixed(1)} > +DI ${pDI.toFixed(1)} = แรงขายเหนือกว่า`);
+      if (pDI > mDI) push('adxTrend', 'ADX / DI', 1, s, `ความแรงของแนวโน้ม (ADX) = ${adxVal.toFixed(1)} เกินเกณฑ์ ${cfg.adxTrendMin} แปลว่าตลาดมีทิศทางจริง ไม่ได้ออกข้าง · วัดแรงสองฝั่งแล้ว ฝั่งซื้อ ${pDI.toFixed(1)} มากกว่าฝั่งขาย ${mDI.toFixed(1)} = ผู้ซื้อกำลังคุมเกม`);
+      else push('adxTrend', 'ADX / DI', -1, s, `ความแรงของแนวโน้ม (ADX) = ${adxVal.toFixed(1)} เกินเกณฑ์ ${cfg.adxTrendMin} แปลว่าตลาดมีทิศทางจริง ไม่ได้ออกข้าง · วัดแรงสองฝั่งแล้ว ฝั่งขาย ${mDI.toFixed(1)} มากกว่าฝั่งซื้อ ${pDI.toFixed(1)} = ผู้ขายกำลังคุมเกม`);
     }
   }
 
@@ -1401,25 +1453,25 @@ function scoreAt(ctx, i) {
   if (h !== null && hPrev !== null) {
     const norm = clamp(Math.abs(h) / (atrVal * 0.6), 0, 1);
     const rising = h > hPrev;
-    if (h > 0 && rising) push('macdMom', 'MACD', 1, Math.max(0.45, norm), `MACD histogram เป็นบวกและกำลังขยายตัว (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาขึ้นกำลังเร่ง`);
-    else if (h < 0 && !rising) push('macdMom', 'MACD', -1, Math.max(0.45, norm), `MACD histogram เป็นลบและกำลังขยายตัว (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาลงกำลังเร่ง`);
-    else if (h > 0 && !rising) push('macdMom', 'MACD', 1, 0.2, `MACD ยังเป็นบวกแต่เริ่มหดตัว = ขาขึ้นยังอยู่ แต่แรงส่งเริ่มแผ่ว ระวังพักฐาน`);
-    else if (h < 0 && rising) push('macdMom', 'MACD', -1, 0.2, `MACD ยังเป็นลบแต่เริ่มหดตัว = ขาลงยังอยู่ แต่แรงขายเริ่มลด ระวังเด้ง`);
-    if (hPrev <= 0 && h > 0) push('macdMom', 'MACD Cross', 1, 0.9, 'MACD ตัดขึ้นเหนือเส้นสัญญาณในแท่งนี้ = จุดกลับตัวโมเมนตัมฝั่งซื้อ');
-    if (hPrev >= 0 && h < 0) push('macdMom', 'MACD Cross', -1, 0.9, 'MACD ตัดลงใต้เส้นสัญญาณในแท่งนี้ = จุดกลับตัวโมเมนตัมฝั่งขาย');
+    if (h > 0 && rising) push('macdMom', 'MACD', 1, Math.max(0.45, norm), `แรงส่งของราคา (MACD) เป็นบวกและกำลังเพิ่มขึ้น (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาขึ้นกำลังเร่ง`);
+    else if (h < 0 && !rising) push('macdMom', 'MACD', -1, Math.max(0.45, norm), `แรงส่งของราคา (MACD) เป็นลบและกำลังเพิ่มขึ้น (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาลงกำลังเร่ง`);
+    else if (h > 0 && !rising) push('macdMom', 'MACD', 1, 0.2, `แรงส่งของราคายังเป็นบวกแต่เริ่มลดลง = ขาขึ้นยังอยู่ แต่แรงส่งเริ่มแผ่ว ระวังพักฐาน`);
+    else if (h < 0 && rising) push('macdMom', 'MACD', -1, 0.2, `แรงส่งของราคายังเป็นลบแต่เริ่มลดลง = ขาลงยังอยู่ แต่แรงขายเริ่มลด ระวังเด้ง`);
+    if (hPrev <= 0 && h > 0) push('macdMom', 'MACD Cross', 1, 0.9, 'เส้นแรงส่ง (MACD) ตัดขึ้นเหนือเส้นสัญญาณในแท่งนี้ = จุดที่แรงซื้อเริ่มชนะ');
+    if (hPrev >= 0 && h < 0) push('macdMom', 'MACD Cross', -1, 0.9, 'เส้นแรงส่ง (MACD) ตัดลงใต้เส้นสัญญาณในแท่งนี้ = จุดที่แรงขายเริ่มชนะ');
   }
 
   // ── 4) RSI (ตีความตาม regime) ───────────────────────────────────────────
   const r = ctx.rsi[i];
   if (r !== null) {
     if (regime === 'trend') {
-      if (r > 55 && r < 78) push('rsiMom', 'RSI Momentum', 1, clamp((r - 50) / 25, 0, 1), `RSI = ${r.toFixed(1)} อยู่โซนแข็งแรงฝั่งซื้อ (55-78) ในตลาดมีเทรนด์ = ไปต่อได้ ไม่ใช่สัญญาณขาย`);
-      else if (r < 45 && r > 22) push('rsiMom', 'RSI Momentum', -1, clamp((50 - r) / 25, 0, 1), `RSI = ${r.toFixed(1)} อยู่โซนอ่อนแรง (22-45) ในตลาดมีเทรนด์ = แรงขายยังคุม`);
-      else if (r >= 78) push('rsiMom', 'RSI Overheat', -1, 0.3, `RSI = ${r.toFixed(1)} ร้อนแรงเกินไป เสี่ยงย่อพักตัว ไม่ควรไล่ราคาซื้อตรงนี้`);
-      else if (r <= 22) push('rsiMom', 'RSI Oversold', 1, 0.3, `RSI = ${r.toFixed(1)} ขายมากเกินไป เสี่ยงเด้งกลับ ไม่ควรไล่ขายตรงนี้`);
+      if (r > 55 && r < 78) push('rsiMom', 'RSI Momentum', 1, clamp((r - 50) / 25, 0, 1), `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} อยู่ในโซนที่ฝั่งซื้อแข็งแรง (55-78) ขณะตลาดมีแนวโน้มชัด = ไปต่อได้ ไม่ใช่สัญญาณขาย`);
+      else if (r < 45 && r > 22) push('rsiMom', 'RSI Momentum', -1, clamp((50 - r) / 25, 0, 1), `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} อยู่ในโซนอ่อนแรง (22-45) ขณะตลาดมีแนวโน้มชัด = แรงขายยังคุม`);
+      else if (r >= 78) push('rsiMom', 'RSI Overheat', -1, 0.3, `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} ร้อนแรงเกินไป เสี่ยงย่อพักตัว ไม่ควรไล่ราคาซื้อตรงนี้`);
+      else if (r <= 22) push('rsiMom', 'RSI Oversold', 1, 0.3, `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} ถูกเทขายมากเกินไป เสี่ยงเด้งกลับ ไม่ควรไล่ขายตรงนี้`);
     } else {
-      if (r < 32) push('rsiMom', 'RSI Mean-Revert', 1, clamp((32 - r) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + RSI = ${r.toFixed(1)} ต่ำกว่า 32 = ราคาถูกกดลงเกินไป สถิติมักเด้งกลับเข้าค่ากลาง`);
-      else if (r > 68) push('rsiMom', 'RSI Mean-Revert', -1, clamp((r - 68) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + RSI = ${r.toFixed(1)} สูงกว่า 68 = ราคาถูกดันขึ้นเกินไป สถิติมักย่อกลับ`);
+      if (r < 32) push('rsiMom', 'RSI Mean-Revert', 1, clamp((32 - r) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} ต่ำกว่า 32 = ราคาถูกกดลงเกินไป สถิติมักเด้งกลับเข้าค่ากลาง`);
+      else if (r > 68) push('rsiMom', 'RSI Mean-Revert', -1, clamp((r - 68) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} สูงกว่า 68 = ราคาถูกดันขึ้นเกินไป สถิติมักย่อกลับ`);
     }
   }
 
@@ -1453,23 +1505,23 @@ function scoreAt(ctx, i) {
   const bbU = ctx.bb.upper[i], bbL = ctx.bb.lower[i], pctB = ctx.bb.pctB[i], w = ctx.bb.width[i];
   if (bbU !== null && pctB !== null) {
     const squeeze = ctx.bbWidthLow[i] !== null && w <= ctx.bbWidthLow[i] * 1.08;
-    if (squeeze && c.c > bbU) push('bands', 'BB Squeeze Breakout', 1, 0.95, `แบนด์บีบแคบสุดในรอบ 20 แท่ง (width ${w.toFixed(2)}%) แล้วราคาปิดทะลุขอบบน = พลังงานที่สะสมไว้ระเบิดออกฝั่งขึ้น`);
-    else if (squeeze && c.c < bbL) push('bands', 'BB Squeeze Breakdown', -1, 0.95, `แบนด์บีบแคบสุดในรอบ 20 แท่ง (width ${w.toFixed(2)}%) แล้วราคาปิดหลุดขอบล่าง = พลังงานที่สะสมไว้ระเบิดออกฝั่งลง`);
-    else if (regime === 'range' && pctB <= 0.05) push('bands', 'BB Lower Band', 1, 0.7, `ราคาแตะขอบล่าง Bollinger (%B = ${pctB.toFixed(2)}) ในตลาดออกข้าง = โซนรับเชิงสถิติ`);
-    else if (regime === 'range' && pctB >= 0.95) push('bands', 'BB Upper Band', -1, 0.7, `ราคาแตะขอบบน Bollinger (%B = ${pctB.toFixed(2)}) ในตลาดออกข้าง = โซนต้านเชิงสถิติ`);
-    else if (regime === 'trend' && pctB > 0.75 && pctB < 1.05) push('bands', 'Band Ride', 1, 0.35, `ราคาเกาะครึ่งบนของ Bollinger (%B = ${pctB.toFixed(2)}) = พฤติกรรม "band riding" ของเทรนด์ขาขึ้นที่แข็งแรง`);
-    else if (regime === 'trend' && pctB < 0.25 && pctB > -0.05) push('bands', 'Band Ride', -1, 0.35, `ราคาเกาะครึ่งล่างของ Bollinger (%B = ${pctB.toFixed(2)}) = พฤติกรรมของเทรนด์ขาลงที่แข็งแรง`);
+    if (squeeze && c.c > bbU) push('bands', 'BB Squeeze Breakout', 1, 0.95, `กรอบความผันผวนบีบแคบที่สุดในรอบ 20 แท่ง แล้วราคาปิดทะลุขอบบน = พลังงานที่สะสมไว้ระเบิดออกฝั่งขึ้น`);
+    else if (squeeze && c.c < bbL) push('bands', 'BB Squeeze Breakdown', -1, 0.95, `กรอบความผันผวนบีบแคบที่สุดในรอบ 20 แท่ง แล้วราคาปิดหลุดขอบล่าง = พลังงานที่สะสมไว้ระเบิดออกฝั่งลง`);
+    else if (regime === 'range' && pctB <= 0.05) push('bands', 'BB Lower Band', 1, 0.7, `ราคาลงมาแตะขอบล่างของกรอบความผันผวน (Bollinger Band) ในตลาดที่ออกข้าง = สถิติบอกว่าราคามักเด้งกลับเข้ากรอบ`);
+    else if (regime === 'range' && pctB >= 0.95) push('bands', 'BB Upper Band', -1, 0.7, `ราคาขึ้นไปแตะขอบบนของกรอบความผันผวน (Bollinger Band) ในตลาดที่ออกข้าง = สถิติบอกว่าราคามักย่อกลับเข้ากรอบ`);
+    else if (regime === 'trend' && pctB > 0.75 && pctB < 1.05) push('bands', 'Band Ride', 1, 0.35, `ราคาเกาะครึ่งบนของกรอบความผันผวนไปเรื่อย ๆ = พฤติกรรมเฉพาะของแนวโน้มขาขึ้นที่แข็งแรงจริง`);
+    else if (regime === 'trend' && pctB < 0.25 && pctB > -0.05) push('bands', 'Band Ride', -1, 0.35, `ราคาเกาะครึ่งล่างของกรอบความผันผวนไปเรื่อย ๆ = พฤติกรรมเฉพาะของแนวโน้มขาลงที่แข็งแรงจริง`);
   }
 
   // ── 9) แนวรับ-แนวต้าน ───────────────────────────────────────────────────
   const { support, resistance } = nearestLevels(ctx.zones, price, i);
   if (support && (price - support.price) / atrVal < 0.6 && ms.side >= 0) {
     push('levels', 'Support Test', 1, clamp(support.touches / 4, 0.35, 1),
-      `ราคาอยู่ห่างแนวรับ ${support.price.toFixed(2)} เพียง ${((price - support.price) / atrVal).toFixed(2)} ATR และแนวนี้ถูกทดสอบมาแล้ว ${support.touches} ครั้ง = โซนที่มีคำสั่งซื้อรออยู่จริง (ความเสี่ยงต่อไม้ต่ำเพราะตั้ง SL ใต้แนวได้ใกล้)`);
+      `ราคาอยู่ห่างแนวรับ ${support.price.toFixed(2)} เพียง ${((price - support.price) / atrVal).toFixed(2)} เท่าของระยะแกว่งปกติต่อแท่ง และแนวนี้ถูกทดสอบมาแล้ว ${support.touches} ครั้ง = โซนที่มีคำสั่งซื้อรออยู่จริง (ความเสี่ยงต่อไม้ต่ำ เพราะวางจุดตัดขาดทุนใต้แนวนี้ได้ใกล้)`);
   }
   if (resistance && (resistance.price - price) / atrVal < 0.6 && ms.side <= 0) {
     push('levels', 'Resistance Test', -1, clamp(resistance.touches / 4, 0.35, 1),
-      `ราคาอยู่ห่างแนวต้าน ${resistance.price.toFixed(2)} เพียง ${((resistance.price - price) / atrVal).toFixed(2)} ATR และแนวนี้ถูกทดสอบมาแล้ว ${resistance.touches} ครั้ง = โซนที่มีคำสั่งขายรออยู่จริง`);
+      `ราคาอยู่ห่างแนวต้าน ${resistance.price.toFixed(2)} เพียง ${((resistance.price - price) / atrVal).toFixed(2)} เท่าของระยะแกว่งปกติต่อแท่ง และแนวนี้ถูกทดสอบมาแล้ว ${resistance.touches} ครั้ง = โซนที่มีคำสั่งขายรออยู่จริง`);
   }
   // เบรกแนวต้าน/หลุดแนวรับด้วยแท่งปิด
   const prevClose = candles[i - 1].c;
@@ -1490,7 +1542,7 @@ function scoreAt(ctx, i) {
     const dev = (price - ctx.vwap[i]) / atrVal;
     if (Math.abs(dev) > 0.15) {
       push('vwap', 'VWAP Position', Math.sign(dev), clamp(Math.abs(dev) / 2, 0.2, 1),
-        `ราคาอยู่${dev > 0 ? 'เหนือ' : 'ใต้'} VWAP ของวัน (${ctx.vwap[i].toFixed(2)}) ${Math.abs(dev).toFixed(2)} ATR = ต้นทุนเฉลี่ยของคนที่ถืออยู่${dev > 0 ? 'กำไร ฝั่งซื้อได้เปรียบ' : 'ขาดทุน ฝั่งขายได้เปรียบ'}`);
+        `ราคาอยู่${dev > 0 ? 'เหนือ' : 'ใต้'}ราคาต้นทุนเฉลี่ยของวัน (VWAP ${ctx.vwap[i].toFixed(2)}) อยู่ ${Math.abs(dev).toFixed(2)} ช่วงแกว่ง = ต้นทุนเฉลี่ยของคนที่ถืออยู่${dev > 0 ? 'กำไร ฝั่งซื้อได้เปรียบ' : 'ขาดทุน ฝั่งขายได้เปรียบ'}`);
     }
   }
 
@@ -1567,14 +1619,14 @@ function buildSetup(ctx, i, scored, opts = {}) {
     const structDist = entryPrice - lastLow.price + atrVal * 0.15;
     if (structDist > slDist && structDist <= atrVal * cfg.maxSlAtrMult) {
       slDist = structDist;
-      notes.push(`ขยาย SL ไปใต้ swing low ที่ ${lastLow.price.toFixed(2)} เพื่อไม่ให้โดนไส้เทียนเขี่ยออกก่อนราคาไปตามทาง`);
+      notes.push(`ขยายจุดตัดขาดทุนลงไปใต้จุดต่ำล่าสุดที่ ${lastLow.price.toFixed(2)} เพื่อไม่ให้โดนไส้เทียนเขี่ยออกก่อนราคาไปตามทาง`);
     }
   }
   if (side < 0 && lastHigh && entryPrice < lastHigh.price) {
     const structDist = lastHigh.price - entryPrice + atrVal * 0.15;
     if (structDist > slDist && structDist <= atrVal * cfg.maxSlAtrMult) {
       slDist = structDist;
-      notes.push(`ขยาย SL ไปเหนือ swing high ที่ ${lastHigh.price.toFixed(2)} เพื่อกันการ stop hunt`);
+      notes.push(`ขยายจุดตัดขาดทุนขึ้นไปเหนือจุดสูงล่าสุดที่ ${lastHigh.price.toFixed(2)} เพื่อกันการ stop hunt`);
     }
   }
   slDist = Math.min(slDist, atrVal * cfg.maxSlAtrMult);
@@ -2889,6 +2941,232 @@ function mergeCandle(candles, k) {
   return {TF, MarketFeed, mergeCandle};
 })();
 
+__m.tour = (function () {
+
+/**
+ * tour.js — พาชมหน้าจอครั้งแรก
+ *
+ * เครื่องมือเทรดมีศัพท์เฉพาะเยอะ คนเปิดครั้งแรกมักไม่รู้ว่าต้องมองตรงไหนก่อน
+ * ทัวร์นี้ไฮไลต์ทีละจุดพร้อมอธิบายสั้น ๆ ว่าแต่ละส่วนคืออะไรและใช้ยังไง
+ */
+
+const LS_DONE = 'goldtrader.tour.done.v1';
+
+const STEPS = [
+  {
+    sel: '.price-block',
+    title: 'ราคาทองคำตอนนี้',
+    text: 'ตัวเลขใหญ่คือราคาทองต่อ 1 ออนซ์ (หน่วยสากล) อัปเดตทุกวินาที ' +
+          'บรรทัดล่างแปลงเป็นราคาบาททองคำไทยโดยประมาณให้แล้ว',
+  },
+  {
+    sel: '.canvas-wrap',
+    title: 'กราฟแท่งเทียน',
+    text: 'แต่ละแท่งคือช่วงเวลาหนึ่ง (เริ่มต้นคือ 15 นาที) ' +
+          '<b style="color:#22c55e">แท่งเขียว</b> = ช่วงนั้นราคาขึ้น · <b style="color:#ef4444">แท่งแดง</b> = ราคาลง ' +
+          'ขีดบาง ๆ บนล่างคือจุดสูงสุด-ต่ำสุดที่ราคาไปแตะ<br><br>เลื่อนล้อเมาส์เพื่อซูม ลากเพื่อเลื่อนดูย้อนหลัง',
+  },
+  {
+    sel: '#tfGroup',
+    title: 'เลือกช่วงเวลาต่อแท่ง',
+    text: '<b>15m</b> = แท่งละ 15 นาที เหมาะกับเทรดรายวัน · <b>5m</b> เร็วกว่า เหมาะกับเข้าออกไว · ' +
+          '<b>4h / 1d</b> ช้ากว่า เหมาะกับถือยาวหลายวัน<br><br>ยิ่งแท่งสั้น สัญญาณยิ่งเยอะแต่หลอกบ่อยกว่า',
+  },
+  {
+    sel: '#signalCard',
+    title: 'ดูตรงนี้ที่เดียวพอ',
+    text: 'บอกว่าตอนนี้ควรทำอะไร — <b>เข้าซื้อ · เข้าขาย · หรือรอ</b><br><br>' +
+          'ตัวเลข % คือโอกาสที่สัญญาณแบบนี้จะได้กำไรก่อนขาดทุน ' +
+          'คำนวณจากการย้อนไปทดสอบกฎเดียวกันนี้กับข้อมูลจริงในอดีต ไม่ใช่ตัวเลขที่ตั้งขึ้นเอง',
+  },
+  {
+    sel: '#planBox',
+    title: 'แผนเข้า-ออก',
+    text: 'เมื่อมีสัญญาณ ตรงนี้จะบอกตัวเลข 3 อย่างให้เอาไปตั้งในโปรแกรมเทรด:<br><br>' +
+          '<b>จุดเข้า</b> = ราคาที่ควรซื้อ/ขาย<br>' +
+          '<b>ตัดขาดทุน</b> = ถ้าราคาถึงจุดนี้ให้ยอมแพ้ ปิดทันที (สำคัญที่สุด ห้ามข้าม)<br>' +
+          '<b>เป้าที่ 1/2/3</b> = จุดทำกำไร<br><br>' +
+          'ตั้งเป็นคำสั่งรอไว้ได้เลย ไม่ต้องนั่งเฝ้าจอ',
+  },
+  {
+    sel: '.narration',
+    title: 'คำอธิบายกราฟ (สำหรับเรียนรู้)',
+    text: 'อธิบายเป็นภาษาไทยว่ากราฟกำลังบอกอะไร ทุกศัพท์เทคนิคมีคำแปลกำกับ ' +
+          'อัปเดตตัวเองตลอดเวลา<br><br>ส่วนนี้ทำมาเพื่อการสอนโดยเฉพาะ เปิดค้างไว้ให้นักเรียนอ่านตามได้',
+  },
+  {
+    sel: '#modeToggle',
+    title: 'อยากดูละเอียดกว่านี้',
+    text: 'ตอนนี้อยู่ใน <b>โหมดง่าย</b> ซึ่งซ่อนเครื่องมือขั้นสูงไว้<br><br>' +
+          'กดปุ่มนี้เพื่อเปิด <b>โหมดเต็ม</b> จะเห็นผลทดสอบย้อนหลัง ตั้งค่าแจ้งเตือน ' +
+          'ตัวชี้วัดเพิ่มเติม และปฏิทินข่าว',
+  },
+];
+
+class Tour {
+  constructor() {
+    this.idx = 0;
+    this.el = null;
+  }
+
+  static seen() {
+    try { return localStorage.getItem(LS_DONE) === '1'; } catch (e) { return false; }
+  }
+
+  start() {
+    this.idx = 0;
+    this._build();
+    this._show();
+  }
+
+  _build() {
+    if (this.el) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'tour-root';
+    wrap.innerHTML = `
+      <div class="tour-spot"></div>
+      <div class="tour-box" role="dialog" aria-live="polite">
+        <div class="tour-step"></div>
+        <h3></h3>
+        <p></p>
+        <div class="tour-btns">
+          <button class="btn small tour-skip">ข้ามทั้งหมด</button>
+          <span style="flex:1"></span>
+          <button class="btn small tour-prev">ย้อนกลับ</button>
+          <button class="btn primary small tour-next">ถัดไป</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    this.el = wrap;
+    wrap.querySelector('.tour-skip').addEventListener('click', () => this.finish());
+    wrap.querySelector('.tour-prev').addEventListener('click', () => { this.idx = Math.max(0, this.idx - 1); this._show(); });
+    wrap.querySelector('.tour-next').addEventListener('click', () => {
+      if (this.idx >= STEPS.length - 1) this.finish();
+      else { this.idx++; this._show(); }
+    });
+    this._onKey = (e) => {
+      if (e.key === 'Escape') this.finish();
+      if (e.key === 'ArrowRight') wrap.querySelector('.tour-next').click();
+      if (e.key === 'ArrowLeft') wrap.querySelector('.tour-prev').click();
+    };
+    document.addEventListener('keydown', this._onKey);
+    this._onResize = () => this._show();
+    window.addEventListener('resize', this._onResize);
+  }
+
+  _show() {
+    const step = STEPS[this.idx];
+    const target = document.querySelector(step.sel);
+    if (!target) { // ถ้าหาองค์ประกอบไม่เจอ ข้ามไปขั้นถัดไปแทนที่จะค้าง
+      if (this.idx >= STEPS.length - 1) return this.finish();
+      this.idx++;
+      return this._show();
+    }
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+    setTimeout(() => {
+      const r = target.getBoundingClientRect();
+      const spot = this.el.querySelector('.tour-spot');
+      const pad = 6;
+      spot.style.top = `${r.top - pad}px`;
+      spot.style.left = `${r.left - pad}px`;
+      spot.style.width = `${r.width + pad * 2}px`;
+      spot.style.height = `${r.height + pad * 2}px`;
+
+      const box = this.el.querySelector('.tour-box');
+      box.querySelector('.tour-step').textContent = `ขั้นที่ ${this.idx + 1} จาก ${STEPS.length}`;
+      box.querySelector('h3').textContent = step.title;
+      box.querySelector('p').innerHTML = step.text;
+      box.querySelector('.tour-prev').style.visibility = this.idx === 0 ? 'hidden' : '';
+      box.querySelector('.tour-next').textContent = this.idx >= STEPS.length - 1 ? 'เริ่มใช้งาน' : 'ถัดไป';
+
+      const bw = Math.min(380, window.innerWidth - 24);
+      box.style.width = `${bw}px`;
+      const below = r.bottom + 14;
+      const boxH = box.offsetHeight || 220;
+      const top = (below + boxH < window.innerHeight) ? below : Math.max(12, r.top - boxH - 14);
+      box.style.top = `${top}px`;
+      box.style.left = `${Math.max(12, Math.min(window.innerWidth - bw - 12, r.left + r.width / 2 - bw / 2))}px`;
+    }, 320);
+  }
+
+  finish() {
+    try { localStorage.setItem(LS_DONE, '1'); } catch (e) { /* โหมดส่วนตัว */ }
+    document.removeEventListener('keydown', this._onKey);
+    window.removeEventListener('resize', this._onResize);
+    if (this.el) { this.el.remove(); this.el = null; }
+  }
+}
+
+  return {Tour};
+})();
+
+__m.glossary = (function () {
+
+/**
+ * glossary.js — แปลชื่อปัจจัยและรูปแบบแท่งเทียนเป็นภาษาไทย
+ *
+ * แสดงชื่อไทยนำ แล้ววงเล็บชื่ออังกฤษไว้ท้าย เพราะผู้เรียนจะไปเจอศัพท์อังกฤษ
+ * ในโปรแกรมเทรดและคลิปสอนอื่น ๆ อยู่ดี — เห็นคู่กันบ่อย ๆ จะจำได้เอง
+ */
+
+const TH = {
+  'EMA Alignment': 'การเรียงตัวของเส้นค่าเฉลี่ย',
+  'ADX / DI': 'ความแรงของแนวโน้ม',
+  MACD: 'โมเมนตัม (แรงส่งของราคา)',
+  'MACD Cross': 'จุดตัดโมเมนตัม',
+  'RSI Momentum': 'แรงซื้อ-แรงขาย',
+  'RSI Overheat': 'ราคาร้อนแรงเกินไป',
+  'RSI Oversold': 'ราคาถูกทุบเกินไป',
+  'RSI Mean-Revert': 'ราคาเหวี่ยงห่างค่ากลาง',
+  'Market Structure': 'โครงสร้างราคา',
+  'Volume Confirm': 'ปริมาณซื้อขายยืนยัน',
+  'Volume Warning': 'ปริมาณซื้อขายเบาบาง',
+  'BB Squeeze Breakout': 'กรอบบีบแคบแล้วทะลุขึ้น',
+  'BB Squeeze Breakdown': 'กรอบบีบแคบแล้วหลุดลง',
+  'BB Lower Band': 'ราคาแตะขอบล่างของกรอบ',
+  'BB Upper Band': 'ราคาแตะขอบบนของกรอบ',
+  'Band Ride': 'ราคาเกาะขอบกรอบไปเรื่อย ๆ',
+  'Support Test': 'ราคาลงมาทดสอบแนวรับ',
+  'Resistance Test': 'ราคาขึ้นไปทดสอบแนวต้าน',
+  'Resistance Break': 'ทะลุแนวต้านขึ้นไป',
+  'Support Break': 'หลุดแนวรับลงมา',
+  'Bullish Divergence': 'สัญญาณแรงขายเริ่มหมด',
+  'Bearish Divergence': 'สัญญาณแรงซื้อเริ่มหมด',
+  'VWAP Position': 'ราคาเทียบต้นทุนเฉลี่ยของวัน',
+  'Stochastic Cross': 'จุดตัดสัญญาณระยะสั้น',
+  // รูปแบบแท่งเทียน
+  'Bullish Engulfing': 'แท่งเขียวกลืนแท่งแดง',
+  'Bearish Engulfing': 'แท่งแดงกลืนแท่งเขียว',
+  'Hammer / Pin Bar': 'ค้อน — ไส้ล่างยาว',
+  'Shooting Star': 'ดาวตก — ไส้บนยาว',
+  'Strong Bull Candle': 'แท่งขึ้นแรงผิดปกติ',
+  'Strong Bear Candle': 'แท่งลงแรงผิดปกติ',
+  'Morning Star': 'ดาวรุ่ง — กลับตัวขึ้น',
+  'Evening Star': 'ดาวค่ำ — กลับตัวลง',
+  Doji: 'โดจิ — ตลาดลังเล',
+  'Inside Bar Breakout': 'บีบตัวแล้วทะลุขึ้น',
+  'Inside Bar Breakdown': 'บีบตัวแล้วหลุดลง',
+};
+
+/**
+ * แปลงชื่อปัจจัยเป็นคู่ ไทย/อังกฤษ
+ * @returns {{th:string, en:string}}
+ */
+function toThai(name) {
+  if (!name) return { th: '', en: '' };
+  const pa = name.match(/^Price Action:\s*(.+)$/);
+  if (pa) {
+    const inner = pa[1].trim();
+    return { th: `รูปแบบแท่งเทียน: ${TH[inner] || inner}`, en: inner };
+  }
+  const th = TH[name];
+  return th ? { th, en: name } : { th: name, en: '' };
+}
+
+  return {toThai};
+})();
+
 __m.app = (function () {
   const {MarketFeed, TF, mergeCandle} = __m.feed;
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS} = __m.signals;
@@ -2898,9 +3176,13 @@ __m.app = (function () {
   const {sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht} = __m.macro;
   const {levelsAt, fibLevels} = __m.levels;
   const {narrate, narrateShort} = __m.narrate;
+  const {Tour} = __m.tour;
+  const {toThai} = __m.glossary;
 /**
  * app.js — ตัวเชื่อมทุกส่วนเข้าด้วยกัน: ข้อมูลสด → วิเคราะห์ → กราฟ/เหตุผล → แจ้งเตือน
  */
+
+
 
 
 
@@ -2941,7 +3223,7 @@ const settings = {
   account: 1000, riskPct: 1,
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
-  alertMode: 'early', maxHold: 60, spread: 0.30,
+  alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
 };
 
 const feed = new MarketFeed();
@@ -2980,6 +3262,9 @@ async function init() {
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
   await reload();
+
+  // คนเปิดครั้งแรกยังไม่รู้ว่าต้องมองตรงไหน พาชมให้รอบหนึ่งก่อน
+  if (!Tour.seen()) setTimeout(() => new Tour().start(), 1200);
 }
 
 function buildStaticUI() {
@@ -3004,6 +3289,29 @@ function buildStaticUI() {
   $('setVolFilter').checked = settings.volFilter;
   $('setSessionFilter').checked = settings.sessionFilter;
   $('alertMode').value = settings.alertMode || 'early';
+  setMode(settings.simpleMode !== false);
+}
+
+/**
+ * โหมดง่าย = ซ่อนทุกอย่างที่ไม่จำเป็นสำหรับคนเปิดครั้งแรก
+ * เหลือแค่ ราคา · กราฟ · "ตอนนี้ควรทำอะไร" · คำอธิบายกราฟ
+ * คนที่อยากดูละเอียดค่อยกดเปิดโหมดเต็มเอง
+ */
+function setMode(simple) {
+  settings.simpleMode = simple;
+  saveSettings();
+  document.body.classList.toggle('simple', simple);
+  if (chart) {
+    // โหมดง่ายเหลือกราฟราคาอย่างเดียว แผง RSI/MACD เป็นของคนที่อ่านเป็นแล้ว
+    chart.panels.rsi = simple ? false : $('togRSI').checked;
+    chart.panels.macd = simple ? false : $('togMACD').checked;
+    chart.showBB = simple ? false : $('togBB').checked;
+  }
+  $('modeToggle').textContent = simple ? '🔧 โหมดเต็ม' : '🙂 โหมดง่าย';
+  $('modeToggle').title = simple
+    ? 'เปิดผลทดสอบย้อนหลัง ตั้งค่า และตัวชี้วัดทั้งหมด'
+    : 'ซ่อนเครื่องมือขั้นสูง เหลือเฉพาะสิ่งที่ต้องดู';
+  if (chart) chart.resize();
 }
 
 function bindEvents() {
@@ -3022,6 +3330,8 @@ function bindEvents() {
   });
   $('symbolSel').addEventListener('change', (e) => { settings.symbol = e.target.value; saveSettings(); reload(); });
   $('reloadBtn').addEventListener('click', () => reload());
+  $('modeToggle').addEventListener('click', () => setMode(!settings.simpleMode));
+  $('tourBtn').addEventListener('click', () => new Tour().start());
   $('resetZoom').addEventListener('click', () => chart.scrollToEnd());
 
   $('togBB').addEventListener('change', (e) => { chart.showBB = e.target.checked; chart.render(); });
@@ -3442,11 +3752,57 @@ function renderSignal() {
     parts.push(`<span style="color:var(--gold)">⛔ ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
   }
   $('candleState').innerHTML = parts.join('<br>');
+  renderPlainAdvice();
+}
+
+/**
+ * คำแนะนำภาษาชาวบ้านสำหรับโหมดง่าย
+ * ไม่ใช้ศัพท์เทคนิค ตอบแค่ว่า "ตอนนี้ควรทำอะไร" และ "ทำไม"
+ */
+function renderPlainAdvice() {
+  const el = $('plainAdvice');
+  if (!el || !state.scored) return;
+  if (!state.scored.ready) {
+    el.innerHTML = '<div class="headline">กำลังโหลดข้อมูล…</div>';
+    return;
+  }
+  const side = Math.sign(state.combined.score);
+  const ex = explain({ ...state.scored, side: side || 1 });
+  const top3 = ex.pro.slice(0, 3).map((f) => `<li>${f.reason}</li>`).join('');
+
+  if (state.action === 'buy' || state.action === 'sell') {
+    const prob = probabilityFor(state.combined.score, state.bt);
+    const s = state.setup;
+    el.innerHTML = `
+      <div class="headline" style="color:${state.action === 'buy' ? 'var(--up)' : 'var(--down)'}">
+        ${state.action === 'buy' ? '🟢 ตอนนี้เข้าซื้อได้' : '🔴 ตอนนี้เข้าขายได้'}
+      </div>
+      <div>เพราะปัจจัยหลัก ๆ ชี้ไปทางเดียวกัน${prob.p !== null ? ` และสัญญาณแบบนี้ในอดีตทำกำไรได้ ${prob.p.toFixed(0)} จาก 100 ครั้ง` : ''}:</div>
+      <ul>${top3}</ul>
+      ${s ? `<div class="next-step"><b>ทำต่อยังไง:</b> เปิดโปรแกรมเทรด ตั้งคำสั่งรอที่ราคา <b>${s.entry.toFixed(2)}</b>
+        ตั้งจุดตัดขาดทุนที่ <b>${s.sl.toFixed(2)}</b> แล้วตั้งขายทำกำไรที่ <b>${s.tp1.toFixed(2)}</b>
+        <br>ตั้งเสร็จแล้วปิดจอไปทำอย่างอื่นได้เลย ไม่ต้องเฝ้า</div>` : ''}`;
+    return;
+  }
+
+  const blocked = (state.blocks || []).length > 0;
+  const watch = [];
+  if (state.scored.resistance) watch.push(`ราคาขึ้นทะลุ <b>${state.scored.resistance.toFixed(2)}</b> → มีโอกาสไปต่อขาขึ้น`);
+  if (state.scored.support) watch.push(`ราคาหลุดลงต่ำกว่า <b>${state.scored.support.toFixed(2)}</b> → มีโอกาสไปต่อขาลง`);
+  el.innerHTML = `
+    <div class="headline" style="color:var(--muted)">⏸ ตอนนี้ยังไม่ต้องทำอะไร</div>
+    <div>${blocked
+      ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ')
+      : 'สัญญาณยังไม่ชัดพอ การอยู่เฉย ๆ ก็คือการตัดสินใจที่ถูกต้องอย่างหนึ่ง'}</div>
+    ${watch.length ? `<div class="next-step"><b>รออะไรอยู่:</b><ul style="margin-top:4px">${watch.map((w) => `<li>${w}</li>`).join('')}</ul>
+      ถ้ามีสัญญาณ ระบบจะส่งเสียงเตือนให้เอง ไม่ต้องนั่งเฝ้า</div>` : ''}`;
 }
 
 function renderPlan() {
   const box = $('planBox');
   const sizeBox = $('sizeBox');
+  const card = $('planCard');
+  if (card) card.classList.toggle('no-plan', !state.setup);
   if (!state.setup) {
     box.className = 'plan-empty';
     box.textContent = state.scored && state.scored.ready
@@ -3500,11 +3856,14 @@ function renderReasons() {
       ...(state.blocks || []).map((b) => ({ name: '⛔ เหตุผลที่ยังไม่ควรเข้า', reason: b, weight: null, cls: 'neg' })),
     ];
   }
-  list.innerHTML = items.map((f) => `
+  list.innerHTML = items.map((f) => {
+    const n = toThai(f.name);
+    return `
     <div class="reason ${f.cls}">
-      <div class="reason-head"><span>${f.name}</span>${f.weight ? `<span class="w">${f.contribution > 0 ? '+' : ''}${f.contribution.toFixed(1)} / ${f.weight}</span>` : ''}</div>
+      <div class="reason-head"><span>${n.th}${n.en ? ` <span class="en">${n.en}</span>` : ''}</span>${f.weight ? `<span class="w">${f.contribution > 0 ? '+' : ''}${f.contribution.toFixed(1)} / ${f.weight}</span>` : ''}</div>
       <p>${f.reason}</p>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function renderMTF() {

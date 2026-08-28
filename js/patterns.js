@@ -62,7 +62,7 @@ export function detectPatterns(candles, i, atrVal) {
       name: isBull(c) ? 'Strong Bull Candle' : 'Strong Bear Candle',
       side: isBull(c) ? 1 : -1,
       strength: Math.min(1, b / (a * 2)),
-      reason: `แท่งเทียนตัวใหญ่กว่า ATR ${(b / a).toFixed(1)} เท่า = มีโมเมนตัมและ volume จริงหนุนอยู่`,
+      reason: `แท่งเทียนตัวใหญ่กว่าระยะแกว่งปกติต่อแท่ง (ATR) ถึง ${(b / a).toFixed(1)} เท่า = มีแรงและปริมาณซื้อขายจริงหนุนอยู่`,
     });
   }
 

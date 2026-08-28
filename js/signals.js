@@ -161,8 +161,8 @@ export function scoreAt(ctx, i) {
   if (adxVal !== null && pDI !== null) {
     if (adxVal >= cfg.adxTrendMin) {
       const s = clamp((adxVal - 18) / 27, 0.2, 1);
-      if (pDI > mDI) push('adxTrend', 'ADX / DI', 1, s, `ADX = ${adxVal.toFixed(1)} (เกิน ${cfg.adxTrendMin} = มีเทรนด์จริง) และ +DI ${pDI.toFixed(1)} > -DI ${mDI.toFixed(1)} = แรงซื้อเหนือกว่า`);
-      else push('adxTrend', 'ADX / DI', -1, s, `ADX = ${adxVal.toFixed(1)} (เกิน ${cfg.adxTrendMin} = มีเทรนด์จริง) และ -DI ${mDI.toFixed(1)} > +DI ${pDI.toFixed(1)} = แรงขายเหนือกว่า`);
+      if (pDI > mDI) push('adxTrend', 'ADX / DI', 1, s, `ความแรงของแนวโน้ม (ADX) = ${adxVal.toFixed(1)} เกินเกณฑ์ ${cfg.adxTrendMin} แปลว่าตลาดมีทิศทางจริง ไม่ได้ออกข้าง · วัดแรงสองฝั่งแล้ว ฝั่งซื้อ ${pDI.toFixed(1)} มากกว่าฝั่งขาย ${mDI.toFixed(1)} = ผู้ซื้อกำลังคุมเกม`);
+      else push('adxTrend', 'ADX / DI', -1, s, `ความแรงของแนวโน้ม (ADX) = ${adxVal.toFixed(1)} เกินเกณฑ์ ${cfg.adxTrendMin} แปลว่าตลาดมีทิศทางจริง ไม่ได้ออกข้าง · วัดแรงสองฝั่งแล้ว ฝั่งขาย ${mDI.toFixed(1)} มากกว่าฝั่งซื้อ ${pDI.toFixed(1)} = ผู้ขายกำลังคุมเกม`);
     }
   }
 
@@ -171,25 +171,25 @@ export function scoreAt(ctx, i) {
   if (h !== null && hPrev !== null) {
     const norm = clamp(Math.abs(h) / (atrVal * 0.6), 0, 1);
     const rising = h > hPrev;
-    if (h > 0 && rising) push('macdMom', 'MACD', 1, Math.max(0.45, norm), `MACD histogram เป็นบวกและกำลังขยายตัว (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาขึ้นกำลังเร่ง`);
-    else if (h < 0 && !rising) push('macdMom', 'MACD', -1, Math.max(0.45, norm), `MACD histogram เป็นลบและกำลังขยายตัว (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาลงกำลังเร่ง`);
-    else if (h > 0 && !rising) push('macdMom', 'MACD', 1, 0.2, `MACD ยังเป็นบวกแต่เริ่มหดตัว = ขาขึ้นยังอยู่ แต่แรงส่งเริ่มแผ่ว ระวังพักฐาน`);
-    else if (h < 0 && rising) push('macdMom', 'MACD', -1, 0.2, `MACD ยังเป็นลบแต่เริ่มหดตัว = ขาลงยังอยู่ แต่แรงขายเริ่มลด ระวังเด้ง`);
-    if (hPrev <= 0 && h > 0) push('macdMom', 'MACD Cross', 1, 0.9, 'MACD ตัดขึ้นเหนือเส้นสัญญาณในแท่งนี้ = จุดกลับตัวโมเมนตัมฝั่งซื้อ');
-    if (hPrev >= 0 && h < 0) push('macdMom', 'MACD Cross', -1, 0.9, 'MACD ตัดลงใต้เส้นสัญญาณในแท่งนี้ = จุดกลับตัวโมเมนตัมฝั่งขาย');
+    if (h > 0 && rising) push('macdMom', 'MACD', 1, Math.max(0.45, norm), `แรงส่งของราคา (MACD) เป็นบวกและกำลังเพิ่มขึ้น (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาขึ้นกำลังเร่ง`);
+    else if (h < 0 && !rising) push('macdMom', 'MACD', -1, Math.max(0.45, norm), `แรงส่งของราคา (MACD) เป็นลบและกำลังเพิ่มขึ้น (${hPrev.toFixed(2)} → ${h.toFixed(2)}) = โมเมนตัมขาลงกำลังเร่ง`);
+    else if (h > 0 && !rising) push('macdMom', 'MACD', 1, 0.2, `แรงส่งของราคายังเป็นบวกแต่เริ่มลดลง = ขาขึ้นยังอยู่ แต่แรงส่งเริ่มแผ่ว ระวังพักฐาน`);
+    else if (h < 0 && rising) push('macdMom', 'MACD', -1, 0.2, `แรงส่งของราคายังเป็นลบแต่เริ่มลดลง = ขาลงยังอยู่ แต่แรงขายเริ่มลด ระวังเด้ง`);
+    if (hPrev <= 0 && h > 0) push('macdMom', 'MACD Cross', 1, 0.9, 'เส้นแรงส่ง (MACD) ตัดขึ้นเหนือเส้นสัญญาณในแท่งนี้ = จุดที่แรงซื้อเริ่มชนะ');
+    if (hPrev >= 0 && h < 0) push('macdMom', 'MACD Cross', -1, 0.9, 'เส้นแรงส่ง (MACD) ตัดลงใต้เส้นสัญญาณในแท่งนี้ = จุดที่แรงขายเริ่มชนะ');
   }
 
   // ── 4) RSI (ตีความตาม regime) ───────────────────────────────────────────
   const r = ctx.rsi[i];
   if (r !== null) {
     if (regime === 'trend') {
-      if (r > 55 && r < 78) push('rsiMom', 'RSI Momentum', 1, clamp((r - 50) / 25, 0, 1), `RSI = ${r.toFixed(1)} อยู่โซนแข็งแรงฝั่งซื้อ (55-78) ในตลาดมีเทรนด์ = ไปต่อได้ ไม่ใช่สัญญาณขาย`);
-      else if (r < 45 && r > 22) push('rsiMom', 'RSI Momentum', -1, clamp((50 - r) / 25, 0, 1), `RSI = ${r.toFixed(1)} อยู่โซนอ่อนแรง (22-45) ในตลาดมีเทรนด์ = แรงขายยังคุม`);
-      else if (r >= 78) push('rsiMom', 'RSI Overheat', -1, 0.3, `RSI = ${r.toFixed(1)} ร้อนแรงเกินไป เสี่ยงย่อพักตัว ไม่ควรไล่ราคาซื้อตรงนี้`);
-      else if (r <= 22) push('rsiMom', 'RSI Oversold', 1, 0.3, `RSI = ${r.toFixed(1)} ขายมากเกินไป เสี่ยงเด้งกลับ ไม่ควรไล่ขายตรงนี้`);
+      if (r > 55 && r < 78) push('rsiMom', 'RSI Momentum', 1, clamp((r - 50) / 25, 0, 1), `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} อยู่ในโซนที่ฝั่งซื้อแข็งแรง (55-78) ขณะตลาดมีแนวโน้มชัด = ไปต่อได้ ไม่ใช่สัญญาณขาย`);
+      else if (r < 45 && r > 22) push('rsiMom', 'RSI Momentum', -1, clamp((50 - r) / 25, 0, 1), `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} อยู่ในโซนอ่อนแรง (22-45) ขณะตลาดมีแนวโน้มชัด = แรงขายยังคุม`);
+      else if (r >= 78) push('rsiMom', 'RSI Overheat', -1, 0.3, `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} ร้อนแรงเกินไป เสี่ยงย่อพักตัว ไม่ควรไล่ราคาซื้อตรงนี้`);
+      else if (r <= 22) push('rsiMom', 'RSI Oversold', 1, 0.3, `มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} ถูกเทขายมากเกินไป เสี่ยงเด้งกลับ ไม่ควรไล่ขายตรงนี้`);
     } else {
-      if (r < 32) push('rsiMom', 'RSI Mean-Revert', 1, clamp((32 - r) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + RSI = ${r.toFixed(1)} ต่ำกว่า 32 = ราคาถูกกดลงเกินไป สถิติมักเด้งกลับเข้าค่ากลาง`);
-      else if (r > 68) push('rsiMom', 'RSI Mean-Revert', -1, clamp((r - 68) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + RSI = ${r.toFixed(1)} สูงกว่า 68 = ราคาถูกดันขึ้นเกินไป สถิติมักย่อกลับ`);
+      if (r < 32) push('rsiMom', 'RSI Mean-Revert', 1, clamp((32 - r) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} ต่ำกว่า 32 = ราคาถูกกดลงเกินไป สถิติมักเด้งกลับเข้าค่ากลาง`);
+      else if (r > 68) push('rsiMom', 'RSI Mean-Revert', -1, clamp((r - 68) / 20, 0.3, 1), `ตลาดออกข้าง (ADX ${adxVal ? adxVal.toFixed(1) : '-'}) + มาตรวัดแรงซื้อ-แรงขาย (RSI) = ${r.toFixed(1)} สูงกว่า 68 = ราคาถูกดันขึ้นเกินไป สถิติมักย่อกลับ`);
     }
   }
 
@@ -223,23 +223,23 @@ export function scoreAt(ctx, i) {
   const bbU = ctx.bb.upper[i], bbL = ctx.bb.lower[i], pctB = ctx.bb.pctB[i], w = ctx.bb.width[i];
   if (bbU !== null && pctB !== null) {
     const squeeze = ctx.bbWidthLow[i] !== null && w <= ctx.bbWidthLow[i] * 1.08;
-    if (squeeze && c.c > bbU) push('bands', 'BB Squeeze Breakout', 1, 0.95, `แบนด์บีบแคบสุดในรอบ 20 แท่ง (width ${w.toFixed(2)}%) แล้วราคาปิดทะลุขอบบน = พลังงานที่สะสมไว้ระเบิดออกฝั่งขึ้น`);
-    else if (squeeze && c.c < bbL) push('bands', 'BB Squeeze Breakdown', -1, 0.95, `แบนด์บีบแคบสุดในรอบ 20 แท่ง (width ${w.toFixed(2)}%) แล้วราคาปิดหลุดขอบล่าง = พลังงานที่สะสมไว้ระเบิดออกฝั่งลง`);
-    else if (regime === 'range' && pctB <= 0.05) push('bands', 'BB Lower Band', 1, 0.7, `ราคาแตะขอบล่าง Bollinger (%B = ${pctB.toFixed(2)}) ในตลาดออกข้าง = โซนรับเชิงสถิติ`);
-    else if (regime === 'range' && pctB >= 0.95) push('bands', 'BB Upper Band', -1, 0.7, `ราคาแตะขอบบน Bollinger (%B = ${pctB.toFixed(2)}) ในตลาดออกข้าง = โซนต้านเชิงสถิติ`);
-    else if (regime === 'trend' && pctB > 0.75 && pctB < 1.05) push('bands', 'Band Ride', 1, 0.35, `ราคาเกาะครึ่งบนของ Bollinger (%B = ${pctB.toFixed(2)}) = พฤติกรรม "band riding" ของเทรนด์ขาขึ้นที่แข็งแรง`);
-    else if (regime === 'trend' && pctB < 0.25 && pctB > -0.05) push('bands', 'Band Ride', -1, 0.35, `ราคาเกาะครึ่งล่างของ Bollinger (%B = ${pctB.toFixed(2)}) = พฤติกรรมของเทรนด์ขาลงที่แข็งแรง`);
+    if (squeeze && c.c > bbU) push('bands', 'BB Squeeze Breakout', 1, 0.95, `กรอบความผันผวนบีบแคบที่สุดในรอบ 20 แท่ง แล้วราคาปิดทะลุขอบบน = พลังงานที่สะสมไว้ระเบิดออกฝั่งขึ้น`);
+    else if (squeeze && c.c < bbL) push('bands', 'BB Squeeze Breakdown', -1, 0.95, `กรอบความผันผวนบีบแคบที่สุดในรอบ 20 แท่ง แล้วราคาปิดหลุดขอบล่าง = พลังงานที่สะสมไว้ระเบิดออกฝั่งลง`);
+    else if (regime === 'range' && pctB <= 0.05) push('bands', 'BB Lower Band', 1, 0.7, `ราคาลงมาแตะขอบล่างของกรอบความผันผวน (Bollinger Band) ในตลาดที่ออกข้าง = สถิติบอกว่าราคามักเด้งกลับเข้ากรอบ`);
+    else if (regime === 'range' && pctB >= 0.95) push('bands', 'BB Upper Band', -1, 0.7, `ราคาขึ้นไปแตะขอบบนของกรอบความผันผวน (Bollinger Band) ในตลาดที่ออกข้าง = สถิติบอกว่าราคามักย่อกลับเข้ากรอบ`);
+    else if (regime === 'trend' && pctB > 0.75 && pctB < 1.05) push('bands', 'Band Ride', 1, 0.35, `ราคาเกาะครึ่งบนของกรอบความผันผวนไปเรื่อย ๆ = พฤติกรรมเฉพาะของแนวโน้มขาขึ้นที่แข็งแรงจริง`);
+    else if (regime === 'trend' && pctB < 0.25 && pctB > -0.05) push('bands', 'Band Ride', -1, 0.35, `ราคาเกาะครึ่งล่างของกรอบความผันผวนไปเรื่อย ๆ = พฤติกรรมเฉพาะของแนวโน้มขาลงที่แข็งแรงจริง`);
   }
 
   // ── 9) แนวรับ-แนวต้าน ───────────────────────────────────────────────────
   const { support, resistance } = nearestLevels(ctx.zones, price, i);
   if (support && (price - support.price) / atrVal < 0.6 && ms.side >= 0) {
     push('levels', 'Support Test', 1, clamp(support.touches / 4, 0.35, 1),
-      `ราคาอยู่ห่างแนวรับ ${support.price.toFixed(2)} เพียง ${((price - support.price) / atrVal).toFixed(2)} ATR และแนวนี้ถูกทดสอบมาแล้ว ${support.touches} ครั้ง = โซนที่มีคำสั่งซื้อรออยู่จริง (ความเสี่ยงต่อไม้ต่ำเพราะตั้ง SL ใต้แนวได้ใกล้)`);
+      `ราคาอยู่ห่างแนวรับ ${support.price.toFixed(2)} เพียง ${((price - support.price) / atrVal).toFixed(2)} เท่าของระยะแกว่งปกติต่อแท่ง และแนวนี้ถูกทดสอบมาแล้ว ${support.touches} ครั้ง = โซนที่มีคำสั่งซื้อรออยู่จริง (ความเสี่ยงต่อไม้ต่ำ เพราะวางจุดตัดขาดทุนใต้แนวนี้ได้ใกล้)`);
   }
   if (resistance && (resistance.price - price) / atrVal < 0.6 && ms.side <= 0) {
     push('levels', 'Resistance Test', -1, clamp(resistance.touches / 4, 0.35, 1),
-      `ราคาอยู่ห่างแนวต้าน ${resistance.price.toFixed(2)} เพียง ${((resistance.price - price) / atrVal).toFixed(2)} ATR และแนวนี้ถูกทดสอบมาแล้ว ${resistance.touches} ครั้ง = โซนที่มีคำสั่งขายรออยู่จริง`);
+      `ราคาอยู่ห่างแนวต้าน ${resistance.price.toFixed(2)} เพียง ${((resistance.price - price) / atrVal).toFixed(2)} เท่าของระยะแกว่งปกติต่อแท่ง และแนวนี้ถูกทดสอบมาแล้ว ${resistance.touches} ครั้ง = โซนที่มีคำสั่งขายรออยู่จริง`);
   }
   // เบรกแนวต้าน/หลุดแนวรับด้วยแท่งปิด
   const prevClose = candles[i - 1].c;
@@ -260,7 +260,7 @@ export function scoreAt(ctx, i) {
     const dev = (price - ctx.vwap[i]) / atrVal;
     if (Math.abs(dev) > 0.15) {
       push('vwap', 'VWAP Position', Math.sign(dev), clamp(Math.abs(dev) / 2, 0.2, 1),
-        `ราคาอยู่${dev > 0 ? 'เหนือ' : 'ใต้'} VWAP ของวัน (${ctx.vwap[i].toFixed(2)}) ${Math.abs(dev).toFixed(2)} ATR = ต้นทุนเฉลี่ยของคนที่ถืออยู่${dev > 0 ? 'กำไร ฝั่งซื้อได้เปรียบ' : 'ขาดทุน ฝั่งขายได้เปรียบ'}`);
+        `ราคาอยู่${dev > 0 ? 'เหนือ' : 'ใต้'}ราคาต้นทุนเฉลี่ยของวัน (VWAP ${ctx.vwap[i].toFixed(2)}) อยู่ ${Math.abs(dev).toFixed(2)} ช่วงแกว่ง = ต้นทุนเฉลี่ยของคนที่ถืออยู่${dev > 0 ? 'กำไร ฝั่งซื้อได้เปรียบ' : 'ขาดทุน ฝั่งขายได้เปรียบ'}`);
     }
   }
 
@@ -337,14 +337,14 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     const structDist = entryPrice - lastLow.price + atrVal * 0.15;
     if (structDist > slDist && structDist <= atrVal * cfg.maxSlAtrMult) {
       slDist = structDist;
-      notes.push(`ขยาย SL ไปใต้ swing low ที่ ${lastLow.price.toFixed(2)} เพื่อไม่ให้โดนไส้เทียนเขี่ยออกก่อนราคาไปตามทาง`);
+      notes.push(`ขยายจุดตัดขาดทุนลงไปใต้จุดต่ำล่าสุดที่ ${lastLow.price.toFixed(2)} เพื่อไม่ให้โดนไส้เทียนเขี่ยออกก่อนราคาไปตามทาง`);
     }
   }
   if (side < 0 && lastHigh && entryPrice < lastHigh.price) {
     const structDist = lastHigh.price - entryPrice + atrVal * 0.15;
     if (structDist > slDist && structDist <= atrVal * cfg.maxSlAtrMult) {
       slDist = structDist;
-      notes.push(`ขยาย SL ไปเหนือ swing high ที่ ${lastHigh.price.toFixed(2)} เพื่อกันการ stop hunt`);
+      notes.push(`ขยายจุดตัดขาดทุนขึ้นไปเหนือจุดสูงล่าสุดที่ ${lastHigh.price.toFixed(2)} เพื่อกันการ stop hunt`);
     }
   }
   slDist = Math.min(slDist, atrVal * cfg.maxSlAtrMult);

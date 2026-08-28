@@ -124,13 +124,13 @@ export function rsiDivergence(candles, rsiSeries, pivots, i, maxLookback = 60) {
   if (lows.length === 2) {
     const [a, b] = lows;
     if (b.price < a.price && rsiSeries[b.index] !== null && rsiSeries[a.index] !== null && rsiSeries[b.index] > rsiSeries[a.index] + 2) {
-      return { side: 1, type: 'Bullish Divergence', detail: `ราคาทำจุดต่ำใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่ RSI กลับยกสูงขึ้น (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงขายเริ่มหมด` };
+      return { side: 1, type: 'Bullish Divergence', detail: `ราคาทำจุดต่ำใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่มาตรวัดแรงซื้อ-แรงขาย (RSI) กลับยกสูงขึ้น (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงขายเริ่มหมด` };
     }
   }
   if (highs.length === 2) {
     const [a, b] = highs;
     if (b.price > a.price && rsiSeries[b.index] !== null && rsiSeries[a.index] !== null && rsiSeries[b.index] < rsiSeries[a.index] - 2) {
-      return { side: -1, type: 'Bearish Divergence', detail: `ราคาทำจุดสูงใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่ RSI กลับต่ำลง (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงซื้อเริ่มหมด` };
+      return { side: -1, type: 'Bearish Divergence', detail: `ราคาทำจุดสูงใหม่ (${a.price.toFixed(2)} → ${b.price.toFixed(2)}) แต่มาตรวัดแรงซื้อ-แรงขาย (RSI) กลับต่ำลง (${rsiSeries[a.index].toFixed(0)} → ${rsiSeries[b.index].toFixed(0)}) = แรงซื้อเริ่มหมด` };
     }
   }
   return null;

@@ -47,6 +47,8 @@
       </select>
     </label>
     <button id="reloadBtn" class="btn">↻ โหลดใหม่</button>
+    <button id="tourBtn" class="btn" title="พาชมหน้าจอทีละจุด">❓ สอนใช้</button>
+    <button id="modeToggle" class="btn">🔧 โหมดเต็ม</button>
   </div>
 </header>
 
@@ -56,11 +58,13 @@
       <div class="tf-group" id="tfGroup"></div>
       <div class="countdown" id="countdown" title="เวลาที่เหลือก่อนแท่งเทียนปัจจุบันจะปิด">แท่งนี้ปิดในอีก <b>—</b></div>
       <div class="spacer"></div>
-      <label class="chk"><input type="checkbox" id="togBB" checked> Bollinger</label>
-      <label class="chk"><input type="checkbox" id="togLevels" checked> แนวรับ-ต้าน</label>
-      <label class="chk"><input type="checkbox" id="togRSI" checked> RSI</label>
-      <label class="chk"><input type="checkbox" id="togMACD" checked> MACD</label>
-      <label class="chk"><input type="checkbox" id="togMarkers" checked> จุดสัญญาณย้อนหลัง</label>
+      <span data-adv style="display:contents">
+        <label class="chk"><input type="checkbox" id="togBB" checked> Bollinger</label>
+        <label class="chk"><input type="checkbox" id="togLevels" checked> แนวรับ-ต้าน</label>
+        <label class="chk"><input type="checkbox" id="togRSI" checked> RSI</label>
+        <label class="chk"><input type="checkbox" id="togMACD" checked> MACD</label>
+        <label class="chk"><input type="checkbox" id="togMarkers" checked> จุดสัญญาณย้อนหลัง</label>
+      </span>
       <button id="resetZoom" class="btn small">⟲ ล่าสุด</button>
     </div>
     <div class="canvas-wrap"><canvas id="chart"></canvas></div>
@@ -78,24 +82,25 @@
     <div class="card signal-card" id="signalCard">
       <div class="signal-head">
         <div class="action" id="actionText">รอสัญญาณ</div>
-        <div class="grade" id="gradeText">—</div>
+        <div class="grade" id="gradeText" data-adv>—</div>
       </div>
-      <div class="gauge">
+      <div class="gauge" data-adv>
         <div class="gauge-bar"><div class="gauge-fill" id="gaugeFill"></div><div class="gauge-zero"></div></div>
         <div class="gauge-labels"><span>ขาย -100</span><span id="scoreText">0</span><span>+100 ซื้อ</span></div>
       </div>
-      <div class="prob-row">
+      <div class="prob-row" data-adv>
         <div class="prob">
           <span class="prob-label">โอกาสถึงเป้าแรก (1R) ก่อนโดน SL</span>
           <span class="prob-value" id="probValue">—</span>
         </div>
         <div class="prob-note" id="probNote">ยังไม่ได้ทดสอบย้อนหลัง</div>
       </div>
-      <div class="candle-state" id="candleState"></div>
+      <div class="candle-state" id="candleState" data-adv></div>
+      <div class="plain-advice" id="plainAdvice"></div>
     </div>
 
     <!-- แผนเทรด -->
-    <div class="card">
+    <div class="card" id="planCard">
       <h2>แผนเข้า–ออก</h2>
       <div id="planBox" class="plan-empty">ยังไม่มีแผน — รอคะแนนถึงเกณฑ์</div>
       <div class="risk-inputs">
@@ -107,7 +112,7 @@
 
     <!-- เหตุผล -->
     <div class="card">
-      <h2>เหตุผลประกอบ <small id="reasonCount"></small></h2>
+      <h2>เหตุผลประกอบ <small id="reasonCount" data-adv></small></h2>
       <div class="reason-tabs">
         <button class="rtab active" data-r="pro">สนับสนุน</button>
         <button class="rtab" data-r="con">ค้าน</button>
@@ -117,7 +122,7 @@
     </div>
 
     <!-- หลายกรอบเวลา -->
-    <div class="card">
+    <div class="card" data-adv>
       <h2>หลายกรอบเวลา (Multi-Timeframe)</h2>
       <div id="mtfBox" class="mtf-box"></div>
       <p class="tiny">กรอบใหญ่บอก "กระแสน้ำ" กรอบเล็กบอก "จังหวะกระโดดลงน้ำ" — เทรดสวนกรอบใหญ่คืออัตราชนะที่ต่ำลง</p>
@@ -137,7 +142,7 @@
   <p class="tiny">คำอธิบายนี้สร้างจากตัวเลขจริงบนกราฟ ณ วินาทีนี้ และอัปเดตตัวเองตลอดเวลา — ใช้สำหรับเรียนรู้ว่าแต่ละตัวชี้วัดกำลังบอกอะไร ไม่ใช่คำแนะนำให้ซื้อขาย</p>
 </section>
 
-<section class="tabs-section">
+<section class="tabs-section" data-adv>
   <div class="tabbar">
     <button class="tab active" data-tab="backtest">📊 ผลทดสอบย้อนหลัง</button>
     <button class="tab" data-tab="alerts">🔔 แจ้งเตือน</button>

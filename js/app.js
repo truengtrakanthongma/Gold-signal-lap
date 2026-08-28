@@ -10,6 +10,8 @@ import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
 import { levelsAt, fibLevels } from './levels.js';
 import { narrate, narrateShort } from './narrate.js';
+import { Tour } from './tour.js';
+import { toThai } from './glossary.js';
 
 const $ = (id) => document.getElementById(id);
 const LS_SETTINGS = 'goldtrader.settings.v1';
@@ -41,7 +43,7 @@ const settings = {
   account: 1000, riskPct: 1,
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
-  alertMode: 'early', maxHold: 60, spread: 0.30,
+  alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
 };
 
 const feed = new MarketFeed();
@@ -80,6 +82,9 @@ async function init() {
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
   await reload();
+
+  // คนเปิดครั้งแรกยังไม่รู้ว่าต้องมองตรงไหน พาชมให้รอบหนึ่งก่อน
+  if (!Tour.seen()) setTimeout(() => new Tour().start(), 1200);
 }
 
 function buildStaticUI() {
@@ -104,6 +109,29 @@ function buildStaticUI() {
   $('setVolFilter').checked = settings.volFilter;
   $('setSessionFilter').checked = settings.sessionFilter;
   $('alertMode').value = settings.alertMode || 'early';
+  setMode(settings.simpleMode !== false);
+}
+
+/**
+ * โหมดง่าย = ซ่อนทุกอย่างที่ไม่จำเป็นสำหรับคนเปิดครั้งแรก
+ * เหลือแค่ ราคา · กราฟ · "ตอนนี้ควรทำอะไร" · คำอธิบายกราฟ
+ * คนที่อยากดูละเอียดค่อยกดเปิดโหมดเต็มเอง
+ */
+function setMode(simple) {
+  settings.simpleMode = simple;
+  saveSettings();
+  document.body.classList.toggle('simple', simple);
+  if (chart) {
+    // โหมดง่ายเหลือกราฟราคาอย่างเดียว แผง RSI/MACD เป็นของคนที่อ่านเป็นแล้ว
+    chart.panels.rsi = simple ? false : $('togRSI').checked;
+    chart.panels.macd = simple ? false : $('togMACD').checked;
+    chart.showBB = simple ? false : $('togBB').checked;
+  }
+  $('modeToggle').textContent = simple ? '🔧 โหมดเต็ม' : '🙂 โหมดง่าย';
+  $('modeToggle').title = simple
+    ? 'เปิดผลทดสอบย้อนหลัง ตั้งค่า และตัวชี้วัดทั้งหมด'
+    : 'ซ่อนเครื่องมือขั้นสูง เหลือเฉพาะสิ่งที่ต้องดู';
+  if (chart) chart.resize();
 }
 
 function bindEvents() {
@@ -122,6 +150,8 @@ function bindEvents() {
   });
   $('symbolSel').addEventListener('change', (e) => { settings.symbol = e.target.value; saveSettings(); reload(); });
   $('reloadBtn').addEventListener('click', () => reload());
+  $('modeToggle').addEventListener('click', () => setMode(!settings.simpleMode));
+  $('tourBtn').addEventListener('click', () => new Tour().start());
   $('resetZoom').addEventListener('click', () => chart.scrollToEnd());
 
   $('togBB').addEventListener('change', (e) => { chart.showBB = e.target.checked; chart.render(); });
@@ -542,11 +572,57 @@ function renderSignal() {
     parts.push(`<span style="color:var(--gold)">⛔ ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
   }
   $('candleState').innerHTML = parts.join('<br>');
+  renderPlainAdvice();
+}
+
+/**
+ * คำแนะนำภาษาชาวบ้านสำหรับโหมดง่าย
+ * ไม่ใช้ศัพท์เทคนิค ตอบแค่ว่า "ตอนนี้ควรทำอะไร" และ "ทำไม"
+ */
+function renderPlainAdvice() {
+  const el = $('plainAdvice');
+  if (!el || !state.scored) return;
+  if (!state.scored.ready) {
+    el.innerHTML = '<div class="headline">กำลังโหลดข้อมูล…</div>';
+    return;
+  }
+  const side = Math.sign(state.combined.score);
+  const ex = explain({ ...state.scored, side: side || 1 });
+  const top3 = ex.pro.slice(0, 3).map((f) => `<li>${f.reason}</li>`).join('');
+
+  if (state.action === 'buy' || state.action === 'sell') {
+    const prob = probabilityFor(state.combined.score, state.bt);
+    const s = state.setup;
+    el.innerHTML = `
+      <div class="headline" style="color:${state.action === 'buy' ? 'var(--up)' : 'var(--down)'}">
+        ${state.action === 'buy' ? '🟢 ตอนนี้เข้าซื้อได้' : '🔴 ตอนนี้เข้าขายได้'}
+      </div>
+      <div>เพราะปัจจัยหลัก ๆ ชี้ไปทางเดียวกัน${prob.p !== null ? ` และสัญญาณแบบนี้ในอดีตทำกำไรได้ ${prob.p.toFixed(0)} จาก 100 ครั้ง` : ''}:</div>
+      <ul>${top3}</ul>
+      ${s ? `<div class="next-step"><b>ทำต่อยังไง:</b> เปิดโปรแกรมเทรด ตั้งคำสั่งรอที่ราคา <b>${s.entry.toFixed(2)}</b>
+        ตั้งจุดตัดขาดทุนที่ <b>${s.sl.toFixed(2)}</b> แล้วตั้งขายทำกำไรที่ <b>${s.tp1.toFixed(2)}</b>
+        <br>ตั้งเสร็จแล้วปิดจอไปทำอย่างอื่นได้เลย ไม่ต้องเฝ้า</div>` : ''}`;
+    return;
+  }
+
+  const blocked = (state.blocks || []).length > 0;
+  const watch = [];
+  if (state.scored.resistance) watch.push(`ราคาขึ้นทะลุ <b>${state.scored.resistance.toFixed(2)}</b> → มีโอกาสไปต่อขาขึ้น`);
+  if (state.scored.support) watch.push(`ราคาหลุดลงต่ำกว่า <b>${state.scored.support.toFixed(2)}</b> → มีโอกาสไปต่อขาลง`);
+  el.innerHTML = `
+    <div class="headline" style="color:var(--muted)">⏸ ตอนนี้ยังไม่ต้องทำอะไร</div>
+    <div>${blocked
+      ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ')
+      : 'สัญญาณยังไม่ชัดพอ การอยู่เฉย ๆ ก็คือการตัดสินใจที่ถูกต้องอย่างหนึ่ง'}</div>
+    ${watch.length ? `<div class="next-step"><b>รออะไรอยู่:</b><ul style="margin-top:4px">${watch.map((w) => `<li>${w}</li>`).join('')}</ul>
+      ถ้ามีสัญญาณ ระบบจะส่งเสียงเตือนให้เอง ไม่ต้องนั่งเฝ้า</div>` : ''}`;
 }
 
 function renderPlan() {
   const box = $('planBox');
   const sizeBox = $('sizeBox');
+  const card = $('planCard');
+  if (card) card.classList.toggle('no-plan', !state.setup);
   if (!state.setup) {
     box.className = 'plan-empty';
     box.textContent = state.scored && state.scored.ready
@@ -600,11 +676,14 @@ function renderReasons() {
       ...(state.blocks || []).map((b) => ({ name: '⛔ เหตุผลที่ยังไม่ควรเข้า', reason: b, weight: null, cls: 'neg' })),
     ];
   }
-  list.innerHTML = items.map((f) => `
+  list.innerHTML = items.map((f) => {
+    const n = toThai(f.name);
+    return `
     <div class="reason ${f.cls}">
-      <div class="reason-head"><span>${f.name}</span>${f.weight ? `<span class="w">${f.contribution > 0 ? '+' : ''}${f.contribution.toFixed(1)} / ${f.weight}</span>` : ''}</div>
+      <div class="reason-head"><span>${n.th}${n.en ? ` <span class="en">${n.en}</span>` : ''}</span>${f.weight ? `<span class="w">${f.contribution > 0 ? '+' : ''}${f.contribution.toFixed(1)} / ${f.weight}</span>` : ''}</div>
       <p>${f.reason}</p>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function renderMTF() {
