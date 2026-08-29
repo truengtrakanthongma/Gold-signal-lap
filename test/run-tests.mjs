@@ -1129,6 +1129,57 @@ section('16) แหล่งราคาทองอื่น — ตัวแ�
   }
 }
 
+// ── ระบบออกแบบ ──────────────────────────────────────────────────────
+section('17) ระบบออกแบบ — ความสม่ำเสมอคือสิ่งที่ทำให้ดูมืออาชีพ');
+{
+  const fs = await import('node:fs');
+  const css = fs.readFileSync('styles.css', 'utf8');
+  const html = fs.readFileSync('index.html', 'utf8');
+
+  /* ก่อนหน้านี้ไฟล์นี้มีขนาดตัวอักษร 15 ค่า (10.5, 11.8, 12.3, 13.2, 13.6, 14.5 ...)
+     ซึ่งเป็นการหยิบตัวเลขมาใช้ตามใจ สายตาจับได้ว่าไม่มีระบบแม้อธิบายไม่ถูกว่าทำไม
+     เทสต์นี้กันไม่ให้ค่อย ๆ ไหลกลับไปเป็นแบบเดิม */
+  const rawSizes = [...css.matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => m[1]);
+  ok('ไม่มีขนาดตัวอักษรดิบหลงเหลือ — ต้องใช้โทเคนสเกลเท่านั้น',
+    rawSizes.length === 0, `เจอ ${rawSizes.length} จุด: ${[...new Set(rawSizes)].join(', ')}`);
+
+  const scaleTokens = [...css.matchAll(/--fs-([a-z0-9]+):/g)].map((m) => m[1]);
+  ok('สเกลตัวอักษรมีไม่เกิน 8 ขนาด', scaleTokens.length <= 8, `มี ${scaleTokens.length}`);
+  const used = new Set([...css.matchAll(/var\(--fs-([a-z0-9]+)\)/g)].map((m) => m[1]));
+  ok('ทุกขนาดที่ใช้อยู่ในสเกลที่ประกาศไว้',
+    [...used].every((u) => scaleTokens.includes(u)), [...used].filter((u) => !scaleTokens.includes(u)).join(','));
+
+  /* อิโมจิเป็นสัญญาณที่ชัดที่สุดของงานที่ไม่ได้ผ่านการออกแบบ:
+     หน้าตาต่างกันทุกระบบปฏิบัติการ คุมขนาด/น้ำหนักเส้น/สีไม่ได้เลย
+     ในหน้าจอหลักจึงต้องเป็น SVG ทั้งหมด (ยกเว้นในข้อความแจ้งเตือนของระบบปฏิบัติการ) */
+  const emojiInUi = [...html].filter((ch) => {
+    const o = ch.codePointAt(0);
+    return (o >= 0x1F300 && o <= 0x1FAFF) || (o >= 0x2600 && o <= 0x27BF)
+        || (o >= 0x23E9 && o <= 0x23FA) || o === 0x26A0 || o === 0xFE0F;
+  });
+  ok('หน้าจอหลักไม่มีอิโมจิเหลือ — ใช้ไอคอน SVG แทนทั้งหมด',
+    emojiInUi.length === 0, `เจอ ${emojiInUi.length}: ${[...new Set(emojiInUi)].join(' ')}`);
+  ok('มีชุดไอคอน SVG ใช้งานจริง', (html.match(/class="ico/g) || []).length >= 10);
+
+  /* สีต้องมาจากโทเคน ไม่งั้นเปลี่ยนธีมทีเดียวไม่ได้ และสีจะค่อย ๆ เพี้ยนกันเอง
+     อนุญาตเฉพาะในบล็อก :root ที่เป็นที่นิยามโทเคน */
+  const afterRoot = css.slice(css.indexOf('* { box-sizing'));
+  const hardCoded = [...afterRoot.matchAll(/(?:^|[^-\w])(#[0-9a-fA-F]{3,8})\b/g)]
+    .map((m) => m[1]).filter((c) => !/^#(fff|000)$/i.test(c));
+  ok('สีในส่วนคอมโพเนนต์มาจากโทเคนเกือบทั้งหมด',
+    hardCoded.length <= 12, `ยังเหลือ ${hardCoded.length}: ${[...new Set(hardCoded)].slice(0, 8).join(' ')}`);
+
+  ok('ตัวเลขทุกตัวใช้ความกว้างเท่ากัน (tabular-nums) — จำเป็นกับหน้าจอการเงิน',
+    /font-variant-numeric:\s*tabular-nums/.test(css));
+  ok('มีไอคอนประจำเว็บและสีธีมสำหรับแถบเบราว์เซอร์',
+    /rel="icon"/.test(html) && /name="theme-color"/.test(html));
+  ok('มีคำอธิบายหน้าเว็บสำหรับการแชร์/ค้นหา', /name="description"/.test(html));
+
+  /* ปุ่มต้องสูงเท่ากันหมด ไม่งั้นแถบเครื่องมือจะดูขรุขระ */
+  ok('ปุ่มและช่องกรอกกำหนดความสูงไว้เท่ากัน',
+    /\.btn\s*{[^}]*height:\s*32px/.test(css) && /input\[type=number\][^{]*{[^}]*height:\s*32px/.test(css));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

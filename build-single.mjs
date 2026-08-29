@@ -83,27 +83,33 @@ console.log(`สร้าง gold-signal-lab.html สำเร็จ (${kb} KB, 
 const banner = `
 <style>
   .demo-banner {
-    display: flex; align-items: center; justify-content: center; gap: 10px 18px;
-    flex-wrap: wrap; text-align: center;
-    background: linear-gradient(90deg, #4a370c, #6b4f10 50%, #4a370c);
-    border-bottom: 1px solid #f0b429;
-    color: #ffe9b0; padding: 9px 16px; font-size: 13px; line-height: 1.5;
+    display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap;
+    padding: 9px 16px;
+    background: rgba(201,154,46,.07);
+    border-bottom: 1px solid rgba(201,154,46,.25);
+    color: #cbd2de; font-size: 12px; line-height: 1.5;
+    font-family: 'IBM Plex Sans Thai', system-ui, -apple-system, sans-serif;
   }
-  .demo-banner b { color: #fff2cc; }
+  .demo-banner b { color: #e8d9a8; font-weight: 600; }
   .demo-banner .tag {
-    background: #f0b429; color: #241a02; font-weight: 700;
-    border-radius: 20px; padding: 2px 11px; font-size: 12px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+    background: transparent; color: #d9b64a;
+    border: 1px solid rgba(201,154,46,.45); border-radius: 3px;
+    padding: 2px 8px; font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
   }
-  .demo-banner a { color: #ffd980; }
+  .demo-banner .sep { color: rgba(255,255,255,.18); }
+  .demo-banner a { color: #d9b64a; }
   @media (max-width: 720px) {
-    .demo-banner { font-size: 12.5px; padding: 7px 10px; gap: 5px 12px; line-height: 1.45; }
-    .demo-banner .tag { font-size: 11.5px; padding: 2px 9px; }
+    .demo-banner { font-size: 11.5px; padding: 8px 12px; gap: 6px 12px; }
+    .demo-banner .sep { display: none; }
   }
-</style>
+  </style>
 <div class="demo-banner">
-  <span class="tag">หน้าตัวอย่างเพื่อการเรียนรู้</span>
-  <span>ตัวเลขราคาทั้งหมดในหน้านี้เป็น <b>ข้อมูลจำลอง ไม่ใช่ราคาทองคำจริง</b> — ใช้ดูวิธีอ่านกราฟและฝึกใช้เครื่องมือ <b>ห้ามใช้ตัดสินใจซื้อขายจริง</b></span>
-  <span>อยากได้ราคาจริง: ดาวน์โหลด <b>gold-signal-lab.html</b> ไปเปิดในเครื่อง</span>
+  <span class="tag">ตัวอย่าง</span>
+  <span>ราคาในหน้านี้เป็น<b>ข้อมูลจำลอง</b> สำหรับเรียนวิธีอ่านกราฟและทดลองใช้เครื่องมือ — ไม่ใช่ราคาทองคำจริง</span>
+  <span class="sep">|</span>
+  <span>ต้องการราคาจริง: ดาวน์โหลด <b>gold-signal-lab.html</b> เปิดในเครื่อง</span>
 </div>`;
 
 const demoOnly = html

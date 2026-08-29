@@ -172,7 +172,7 @@ function setMode(simple) {
     chart.panels.macd = simple ? false : $('togMACD').checked;
     chart.showBB = simple ? false : $('togBB').checked;
   }
-  $('modeToggle').textContent = simple ? '🔧 โหมดเต็ม' : '🙂 โหมดง่าย';
+  $('modeToggle').innerHTML = simple ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11M6 2.5v4M11 9.5v4"/></svg> โหมดเต็ม` : `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M5.6 9.4a3 3 0 0 0 4.8 0M6 6.4v.01M10 6.4v.01"/></svg> โหมดง่าย`;
   $('modeToggle').title = simple
     ? 'เปิดผลทดสอบย้อนหลัง ตั้งค่า และตัวชี้วัดทั้งหมด'
     : 'ซ่อนเครื่องมือขั้นสูง เหลือเฉพาะสิ่งที่ต้องดู';
@@ -649,7 +649,7 @@ function renderSignal() {
   card.className = 'card signal-card ' + (state.action === 'wait' ? '' : state.action);
   const act = $('actionText');
   act.className = 'action ' + state.action;
-  act.textContent = state.action === 'buy' ? '🟢 เข้าซื้อ (BUY)' : state.action === 'sell' ? '🔴 เข้าขาย (SELL)' : '⏸ รอจังหวะ';
+  act.innerHTML = state.action === 'buy' ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12.5V3.5M4 7.5L8 3.5l4 4"/></svg> เข้าซื้อ (BUY)` : state.action === 'sell' ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.5v9M4 8.5l4 4 4-4"/></svg> เข้าขาย (SELL)` : `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 4v8M10 4v8"/></svg> รอจังหวะ`;
   $('gradeText').className = 'grade ' + lbl.cls;
   $('gradeText').textContent = lbl.text;
   $('scoreText').textContent = score.toFixed(1);
@@ -676,12 +676,12 @@ function renderSignal() {
   const last = state.candles[state.candles.length - 1];
   const closedInfo = last && last.closed === false ? 'แท่งปัจจุบันยังไม่ปิด — คะแนนอาจเปลี่ยนได้จนกว่าแท่งจะปิด' : 'คำนวณจากแท่งที่ปิดแล้ว';
   const parts = [];
-  parts.push(`⏱ ${closedInfo}`);
+  parts.push(`<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M8 4.6V8l2.2 1.3"/></svg> ${closedInfo}`);
   if (state.scored && state.scored.ready) {
     parts.push(`สภาพตลาด: <b>${state.scored.regime === 'trend' ? 'มีเทรนด์ (ใช้กลยุทธ์ตามแนวโน้ม)' : 'ออกข้าง (ใช้กลยุทธ์เด้งกลับค่าเฉลี่ย)'}</b> · ADX ${state.scored.adx ? state.scored.adx.toFixed(1) : '-'} · ATR ${state.scored.atr.toFixed(2)} (${state.scored.atrPct.toFixed(2)}%)`);
   }
   if (state.blocks && state.blocks.length) {
-    parts.push(`<span style="color:var(--gold)">⛔ ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
+    parts.push(`<span style="color:var(--gold)"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M3.8 3.8l8.4 8.4"/></svg> ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
   }
   if (state.wf && state.wf.ok && state.wf.verdict.level === 'bad') {
     parts.push('<span style="color:var(--down)">⚠ ระบบสอบไม่ผ่านบนข้อมูลที่ไม่เคยเห็น — กฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ ดูรายละเอียดในแท็บผลทดสอบย้อนหลัง</span>');
@@ -731,7 +731,7 @@ function renderPlainAdvice() {
   if (state.scored.resistance) watch.push(`ราคาขึ้นทะลุ <b>${state.scored.resistance.toFixed(2)}</b> → มีโอกาสไปต่อขาขึ้น`);
   if (state.scored.support) watch.push(`ราคาหลุดลงต่ำกว่า <b>${state.scored.support.toFixed(2)}</b> → มีโอกาสไปต่อขาลง`);
   el.innerHTML = failWarn + `
-    <div class="headline" style="color:var(--muted)">⏸ ตอนนี้ยังไม่ต้องทำอะไร</div>
+    <div class="headline" style="color:var(--text-2)">ตอนนี้ยังไม่ต้องทำอะไร</div>
     <div>${blocked
       ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ')
       : 'สัญญาณยังไม่ชัดพอ การอยู่เฉย ๆ ก็คือการตัดสินใจที่ถูกต้องอย่างหนึ่ง'}</div>
@@ -920,7 +920,7 @@ function renderReasons() {
       ...state.combined.notes.map((n) => ({ name: 'หลายกรอบเวลา', reason: n, weight: null, cls: '' })),
       ...ex.neutral.map((f) => ({ name: f.name, reason: f.reason, weight: null, cls: '' })),
       ...(risk.upcoming.length ? [{ name: 'ข่าวที่กำลังจะมา', reason: risk.upcoming.map((e) => `${e.title} — ${thTime(e.time)}`).join(' · '), weight: null, cls: '' }] : []),
-      ...(state.blocks || []).map((b) => ({ name: '⛔ เหตุผลที่ยังไม่ควรเข้า', reason: b, weight: null, cls: 'neg' })),
+      ...(state.blocks || []).map((b) => ({ name: '<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M3.8 3.8l8.4 8.4"/></svg> เหตุผลที่ยังไม่ควรเข้า', reason: b, weight: null, cls: 'neg' })),
     ];
   }
   list.innerHTML = items.map((f) => {
@@ -944,7 +944,7 @@ function renderMTF() {
     const w = Math.min(50, Math.abs(sc) / 2);
     const color = sc > 0 ? 'var(--up)' : sc < 0 ? 'var(--down)' : 'var(--muted)';
     return `<div class="mtf-row">
-      <span>${r.tf}${r.main ? ' ★' : ''}</span>
+      <span>${r.tf}${r.main ? ' ●' : ''}</span>
       <div class="mtf-bar"><i style="background:${color}; ${sc >= 0 ? `left:50%;width:${w}%` : `left:${50 - w}%;width:${w}%`}"></i></div>
       <span class="mtf-val" style="color:${color}">${r.s && r.s.ready ? sc.toFixed(0) : '—'}</span>
     </div>`;
@@ -1012,7 +1012,7 @@ function renderWalkForward() {
           <div class="sub">${io.n} ไม้ · ค่าคาดหวัง ${r(io.expectancy)}</div>
         </div>
         <div class="wf-side trusted">
-          <h4>⭐ ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
+          <h4><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg> ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
           <div class="big" style="color:${oo.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${pct(oo.winRate)}</div>
           <div class="sub">${oo.n} ไม้ · ค่าคาดหวัง ${r(oo.expectancy)}</div>
         </div>
@@ -1176,7 +1176,7 @@ function renderAdapt() {
       <td class="num" style="color:var(--muted)">${r(f.fixed.expectancy)}</td>
     </tr>`).join('');
 
-  const stabLabel = { stable: 'นิ่ง ✓', mixed: 'แกว่งปานกลาง', unstable: 'แกว่งมาก ✗', unknown: 'บอกไม่ได้' }[rwf.stability.level];
+  const stabLabel = { stable: 'นิ่ง', mixed: 'แกว่งปานกลาง', unstable: 'แกว่งมาก', unknown: 'บอกไม่ได้' }[rwf.stability.level];
   const stabColor = { stable: 'var(--up)', mixed: 'var(--gold)', unstable: 'var(--down)', unknown: 'var(--muted)' }[rwf.stability.level];
 
   const story = explainAdaptation(A).map((sec) => `
@@ -1526,7 +1526,7 @@ function fibHtml() {
   const price = state.candles[i].c;
   const rows = fib.levels.map((l) => {
     const hit = Math.abs(l.price - price) < (state.scored && state.scored.atr ? state.scored.atr * 0.4 : 0);
-    return `<div class="kv"><span>${hit ? '➤ ' : ''}Fib ${(l.ratio * 100).toFixed(1)}%</span><span${hit ? ' style="color:var(--gold)"' : ''}>${l.price.toFixed(2)}</span></div>`;
+    return `<div class="kv"><span>${hit ? '→ ' : ''}Fib ${(l.ratio * 100).toFixed(1)}%</span><span${hit ? ' style="color:var(--gold)"' : ''}>${l.price.toFixed(2)}</span></div>`;
   }).join('');
   return `<div style="margin-top:8px"><b style="font-size:11.5px;color:var(--muted)">แนวย่อ Fibonacci ของขา${fib.direction === 'up' ? 'ขึ้น' : 'ลง'}ล่าสุด (${fib.from.toFixed(2)} → ${fib.to.toFixed(2)})</b>${rows}</div>`;
 }

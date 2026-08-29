@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gold Signal Lab — วิเคราะห์ทองคำเรียลไทม์</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d111a'/%3E%3Cpath d='M6 22.5L11.5 13l5 6 4-7L26 22.5' fill='none' stroke='%23c9a227' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#080b12">
+<meta name="description" content="เครื่องมือวิเคราะห์ราคาทองคำเรียลไทม์ พร้อมเหตุผลประกอบทุกสัญญาณ ทดสอบย้อนหลังแบบแบ่งข้อมูล และระบบแจ้งเตือน">
+<meta name="color-scheme" content="dark">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -16,7 +20,7 @@
   <div class="brand">
     <span class="dot" id="statusDot"></span>
     <div>
-      <h1>Gold Signal Lab</h1>
+      <h1><span class="wm-1">GOLD</span><span class="wm-2">SIGNAL</span></h1>
       <p id="statusText">กำลังเริ่มระบบ…</p>
     </div>
   </div>
@@ -50,9 +54,9 @@
         <option value="XAUTUSDT">XAUT/USDT</option>
       </select>
     </label>
-    <button id="reloadBtn" class="btn">↻ โหลดใหม่</button>
-    <button id="tourBtn" class="btn" title="พาชมหน้าจอทีละจุด">❓ สอนใช้</button>
-    <button id="modeToggle" class="btn">🔧 โหมดเต็ม</button>
+    <button id="reloadBtn" class="btn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3"/></svg> โหลดใหม่</button>
+    <button id="tourBtn" class="btn" title="พาชมหน้าจอทีละจุด"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6a2 2 0 1 1 2.7 1.9c-.5.2-.7.6-.7 1.1v.4M8 11.6v.01"/></svg> สอนใช้</button>
+    <button id="modeToggle" class="btn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11M6 2.5v4M11 9.5v4"/></svg> โหมดเต็ม</button>
   </div>
 </header>
 
@@ -137,7 +141,7 @@
 
 <section class="narration">
   <div class="narration-head">
-    <h2>📖 กราฟตอนนี้กำลังบอกอะไร</h2>
+    <h2><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2.8h4a2 2 0 0 1 2 2v8.4a1.6 1.6 0 0 0-1.6-1.6H3zM13 2.8H9a2 2 0 0 0-2 2v8.4a1.6 1.6 0 0 1 1.6-1.6H13z"/></svg> กราฟตอนนี้กำลังบอกอะไร</h2>
     <div class="narration-meta">
       <span id="narrationTime"></span>
       <button id="toggleNarration" class="btn small">ย่อ</button>
@@ -149,16 +153,16 @@
 
 <section class="tabs-section" data-adv>
   <div class="tabbar">
-    <button class="tab active" data-tab="backtest">📊 ผลทดสอบย้อนหลัง</button>
-    <button class="tab" data-tab="alerts">🔔 แจ้งเตือน</button>
-    <button class="tab" data-tab="context">🌐 บริบทตลาด &amp; ข่าว</button>
-    <button class="tab" data-tab="settings">⚙️ ตั้งค่า</button>
-    <button class="tab" data-tab="howto">📘 วิธีใช้ &amp; ข้อจำกัด</button>
+    <button class="tab active" data-tab="backtest"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13.5v-5M6.5 13.5v-9M10.5 13.5v-6M14 13.5v-3"/></svg> ผลทดสอบย้อนหลัง</button>
+    <button class="tab" data-tab="alerts"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.2 6.8a3.8 3.8 0 0 1 7.6 0c0 3 1.2 3.9 1.2 3.9H3s1.2-.9 1.2-3.9M6.6 12.8a1.6 1.6 0 0 0 2.8 0"/></svg> แจ้งเตือน</button>
+    <button class="tab" data-tab="context"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4A6.2 6.2 0 0 0 8 1.8M1.8 8h12.4M8 1.8c1.6 1.7 2.4 3.8 2.4 6.2S9.6 12.5 8 14.2C6.4 12.5 5.6 10.4 5.6 8S6.4 3.5 8 1.8"/></svg> บริบทตลาด &amp; ข่าว</button>
+    <button class="tab" data-tab="settings"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10.1a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2M12.9 9.9l.9.7-1.1 1.9-1.1-.4a4.9 4.9 0 0 1-1.2.7L10.1 14H7.9l-.3-1.2a4.9 4.9 0 0 1-1.2-.7l-1.1.4-1.1-1.9.9-.7a5 5 0 0 1 0-1.4l-.9-.7 1.1-1.9 1.1.4c.4-.3.8-.5 1.2-.7L7.9 2h2.2l.3 1.2c.4.2.8.4 1.2.7l1.1-.4 1.1 1.9-.9.7a5 5 0 0 1 0 1.8"/></svg> ตั้งค่า</button>
+    <button class="tab" data-tab="howto"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2.8h4a2 2 0 0 1 2 2v8.4a1.6 1.6 0 0 0-1.6-1.6H3zM13 2.8H9a2 2 0 0 0-2 2v8.4a1.6 1.6 0 0 1 1.6-1.6H13z"/></svg> วิธีใช้ &amp; ข้อจำกัด</button>
   </div>
 
   <div class="tab-panel active" id="tab-backtest">
     <div class="bt-controls">
-      <button id="runBt" class="btn primary">▶ ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
+      <button id="runBt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
       <label>คะแนนขั้นต่ำ <input type="number" id="thresholdInput" value="35" min="10" max="90" step="1"></label>
       <label>ถือได้สูงสุด (แท่ง) <input type="number" id="maxHoldInput" value="60" min="5" max="300" step="5"></label>
       <label>สเปรด (USD) <input type="number" id="spreadInput" value="0.30" min="0" max="3" step="0.05"></label>
@@ -173,7 +177,7 @@
       <div><h3>ปัจจัยไหนทำนายได้จริง</h3><div id="btFactors"></div></div>
     </div>
     <details class="learn-box" id="adaptBoxWrap" open>
-      <summary>🎓 ให้ระบบศึกษาตลาดนี้เอง แล้วปรับกลยุทธ์ตามที่เรียนรู้</summary>
+      <summary><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.2v9.6M8 4.4a2.2 2.2 0 0 0-4 1.3c-1 .4-1.4 1.6-.8 2.5-.6 1 0 2.4 1.2 2.6.2 1.1 1.5 1.7 2.5 1.1M8 4.4a2.2 2.2 0 0 1 4 1.3c1 .4 1.4 1.6.8 2.5.6 1 0 2.4-1.2 2.6-.2 1.1-1.5 1.7-2.5 1.1"/></svg> ให้ระบบศึกษาตลาดนี้เอง แล้วปรับกลยุทธ์ตามที่เรียนรู้</summary>
       <p class="tiny">
         ค่าตั้งต้นทุกตัว (คะแนนขั้นต่ำ 35, จุดตัดขาดทุน 1.5 เท่า ATR, เป้า 2 เท่า) เป็นค่ากลาง ๆ ที่ตั้งไว้ล่วงหน้า
         ไม่ได้ดูตลาดที่คุณโหลดมาเลย ปุ่มนี้จะให้ระบบ<b>ศึกษาตลาดนี้เอง</b>:
@@ -182,9 +186,9 @@
         แล้ว<b>เทียบกับค่าคงที่บนช่วงเดียวกัน</b> — จึงตอบได้ว่าการปรับตัวเองช่วยจริงหรือไม่
       </p>
       <div class="bt-controls">
-        <button id="runAdapt" class="btn primary">▶ ให้ระบบศึกษาตลาดแล้วปรับกลยุทธ์เอง</button>
-        <button id="applyAdapt" class="btn" hidden>✓ ใช้ค่าที่ระบบเรียนรู้มา</button>
-        <button id="resetAdapt" class="btn" hidden>↺ กลับไปใช้ค่าตั้งต้น</button>
+        <button id="runAdapt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ให้ระบบศึกษาตลาดแล้วปรับกลยุทธ์เอง</button>
+        <button id="applyAdapt" class="btn" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg> ใช้ค่าที่ระบบเรียนรู้มา</button>
+        <button id="resetAdapt" class="btn" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2v3h3"/></svg> กลับไปใช้ค่าตั้งต้น</button>
         <label class="chk"><input type="checkbox" id="togAnchored" checked> จำอดีตทั้งหมด (ไม่ติ๊ก = ลืมอดีตไกล ๆ)</label>
         <span id="adaptStatus" class="tiny"></span>
       </div>
@@ -192,7 +196,7 @@
     </details>
 
     <details class="learn-box">
-      <summary>🧪 ตรวจสอบน้ำหนักปัจจัย — น้ำหนักที่ตั้งไว้ถูกจริงไหม?</summary>
+      <summary><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.4 2h3.2M7 2v4.2L3.6 12a1.2 1.2 0 0 0 1 1.9h6.8a1.2 1.2 0 0 0 1-1.9L9 6.2V2M5.3 9.5h5.4"/></svg> ตรวจสอบน้ำหนักปัจจัย — น้ำหนักที่ตั้งไว้ถูกจริงไหม?</summary>
       <p class="tiny">
         คะแนนสัญญาณมาจากการถ่วงน้ำหนัก 12 ปัจจัย (เส้นค่าเฉลี่ย 16, ความแรงแนวโน้ม 12, …)
         ตัวเลขชุดนี้ตั้งจากตำราและประสบการณ์ ไม่ใช่จากข้อมูลของคุณ
@@ -201,9 +205,9 @@
         ถ้าสอบไม่ผ่าน ระบบจะไม่ให้ใช้ — ไม่ว่าตัวเลขตอนเรียนรู้จะสวยแค่ไหน
       </p>
       <div class="bt-controls">
-        <button id="runLearn" class="btn">▶ เรียนรู้แล้วสอบน้ำหนักชุดใหม่</button>
-        <button id="applyLearn" class="btn primary" hidden>✓ ใช้น้ำหนักชุดใหม่</button>
-        <button id="resetLearn" class="btn" hidden>↺ กลับไปใช้น้ำหนักเดิม</button>
+        <button id="runLearn" class="btn"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> เรียนรู้แล้วสอบน้ำหนักชุดใหม่</button>
+        <button id="applyLearn" class="btn primary" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg> ใช้น้ำหนักชุดใหม่</button>
+        <button id="resetLearn" class="btn" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2v3h3"/></svg> กลับไปใช้น้ำหนักเดิม</button>
         <span id="learnStatus" class="tiny"></span>
       </div>
       <div id="learnBox"></div>
@@ -266,7 +270,7 @@
 
   <div class="tab-panel" id="tab-settings">
     <div class="card" style="margin-bottom:16px">
-      <h2>🔎 ทดสอบแหล่งราคาทอง — อันไหนใช้ได้จากเครื่องคุณ</h2>
+      <h2><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.3 12.1a4.8 4.8 0 1 0 0-9.6 4.8 4.8 0 0 0 0 9.6M13.5 13.5l-2.8-2.8"/></svg> ทดสอบแหล่งราคาทอง — อันไหนใช้ได้จากเครื่องคุณ</h2>
       <p class="tiny">
         ราคาทองคำสปอต (XAU/USD) เป็นข้อมูลมีลิขสิทธิ์ เจ้าที่แจกฟรีจึงต้องขอให้สมัครคีย์เสมอ
         ส่วนที่ฟรีจริงไม่ต้องใช้คีย์คือ<b>โทเคนที่หนุนด้วยทองคำ</b>ในตลาดคริปโต
@@ -277,7 +281,7 @@
         <b>ผมทดสอบแทนไม่ได้</b> — ปุ่มนี้จะยิงทดสอบจากเบราว์เซอร์คุณเองแล้วรายงานว่าอันไหนใช้ได้จริง
       </p>
       <div class="bt-controls">
-        <button id="testSources" class="btn primary">▶ ทดสอบทุกแหล่งเดี๋ยวนี้</button>
+        <button id="testSources" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบทุกแหล่งเดี๋ยวนี้</button>
         <span id="srcStatus" class="tiny"></span>
       </div>
       <div id="srcResults"></div>
@@ -335,7 +339,7 @@
         <p>เว็บนี้ต้องหาข้อมูลราคาเอง ซึ่งของฟรีมีข้อจำกัดเสมอ
           แต่มีเวอร์ชัน Pine Script ที่รันใน TradingView ได้ — ได้ XAUUSD จริงจากโบรกเกอร์คุณ
           ไม่มีโควตา มีเครื่องทดสอบย้อนหลังในตัว และแจ้งเตือนเข้ามือถือได้</p>
-        <a class="btn primary" href="tradingview.html">📱 ดูวิธีใส่ใน TradingView (ทำบนมือถือได้)</a>
+        <a class="btn primary" href="tradingview.html"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 1.8h6a1.2 1.2 0 0 1 1.2 1.2v10a1.2 1.2 0 0 1-1.2 1.2H5a1.2 1.2 0 0 1-1.2-1.2V3A1.2 1.2 0 0 1 5 1.8M7 12.4h2"/></svg> ดูวิธีใส่ใน TradingView (ทำบนมือถือได้)</a>
       </div>
       <h2>ระบบนี้ทำงานอย่างไร</h2>
       <ol>
@@ -372,7 +376,7 @@
 <div id="toastWrap" class="toast-wrap"></div>
 
 <footer>
-  <p>⚠️ เครื่องมือให้ข้อมูลเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน · ราคาจากผู้ให้บริการภายนอกอาจล่าช้าหรือคลาดเคลื่อน · ผู้ใช้รับความเสี่ยงเองทั้งหมด</p>
+  <p><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.6L14.4 13H1.6zM8 6.6v3M8 11.4v.01"/></svg> เครื่องมือให้ข้อมูลเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน · ราคาจากผู้ให้บริการภายนอกอาจล่าช้าหรือคลาดเคลื่อน · ผู้ใช้รับความเสี่ยงเองทั้งหมด</p>
 </footer>
 
 <script type="module" src="js/app.js"></script>

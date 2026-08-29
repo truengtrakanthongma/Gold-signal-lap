@@ -62,8 +62,8 @@ export function narrate({ candles, ctx, scored, combined, setup, action, blocks 
     id: 'price', title: '1. ราคาตอนนี้', tone: chg >= 0 ? 'good' : 'bad',
     text: `${instrument && !instrument.isSpot ? instrument.name : 'ทองคำ'} อยู่ที่ <b>${fmt(price)}</b> ดอลลาร์ต่อออนซ์ ${chg >= 0 ? 'ขึ้น' : 'ลง'} ${fmt(Math.abs(chg))} ดอลลาร์ (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%) เทียบกับ<b>ราคาปิดของแท่งก่อนหน้า</b>` +
       `<br><br>${candleTalk}` +
-      (instrument && !instrument.isSpot ? `<br><br><i>ℹ ${instrument.note}</i>` : '') +
-      (forming ? '<br><br><i>⏳ แท่งนี้ยังไม่ปิด ตัวเลขทั้งหมดยังเปลี่ยนได้จนกว่าจะหมดเวลาแท่ง</i>' : ''),
+      (instrument && !instrument.isSpot ? `<br><br><i>${instrument.note}</i>` : '') +
+      (forming ? '<br><br><i>แท่งนี้ยังไม่ปิด ตัวเลขทั้งหมดยังเปลี่ยนได้จนกว่าจะหมดเวลาแท่ง</i>' : ''),
   });
 
   // ── 2) ใครคุมเกม (เทรนด์) ──────────────────────────────────────────────
