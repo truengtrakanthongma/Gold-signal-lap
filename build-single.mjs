@@ -8,9 +8,9 @@
  * วิธีรวม: ห่อแต่ละโมดูลด้วย IIFE แล้วส่งออกเป็นอ็อบเจ็กต์ กันชื่อชนกันระหว่างไฟล์
  * รัน: node build-single.mjs
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
-const ORDER = ['indicators', 'patterns', 'levels', 'macro', 'signals', 'narrate', 'backtest', 'chart', 'alerts', 'feed', 'tour', 'glossary', 'instrument', 'learn', 'adapt', 'app'];
+const ORDER = ['indicators', 'patterns', 'levels', 'macro', 'signals', 'narrate', 'backtest', 'sources', 'chart', 'alerts', 'feed', 'tour', 'glossary', 'instrument', 'learn', 'adapt', 'app'];
 const IMPORT_RE = /^import\s+(?:\*\s+as\s+(\w+)|\{([^}]+)\})\s+from\s+['"]\.\/(\w+)\.js['"];?[ \t]*$/gm;
 const EXPORT_RE = /^export\s+(async\s+function|function|const|let|class)\s+(\w+)/gm;
 
@@ -26,6 +26,39 @@ function build(name) {
   const stripped = body.replace(/^export\s+/gm, '');
   return `__m.${name} = (function () {\n${prelude.join('\n')}\n${stripped}\n  return {${names.join(', ')}};\n})();`;
 }
+
+/*
+ * ตรวจลำดับโมดูลก่อนรวม
+ *
+ * ไฟล์รวมรันโมดูลเรียงตาม ORDER ทีละตัว ถ้าโมดูลไหน import จากโมดูลที่ยังไม่ได้รัน
+ * จะพังทันทีที่เปิดหน้า ด้วยข้อความ "Cannot destructure property ... as it is undefined"
+ *
+ * จุดที่อันตราย: เวอร์ชันแยกไฟล์ (index.html) ยังทำงานปกติ เพราะ ES Module
+ * จัดลำดับให้เอง บั๊กนี้จึงโผล่เฉพาะในไฟล์รวมที่ deploy ขึ้นเว็บ
+ * เคยพลาดมาแล้วสองครั้ง (adapt, sources) จึงต้องให้ตัวรวมไฟล์จับเองตั้งแต่ตอนสร้าง
+ */
+function checkOrder() {
+  const pos = new Map(ORDER.map((n, i) => [n, i]));
+  const problems = [];
+  for (const name of ORDER) {
+    const src = readFileSync(`js/${name}.js`, 'utf8');
+    for (const m of src.matchAll(IMPORT_RE)) {
+      const dep = m[3];
+      if (!pos.has(dep)) { problems.push(`${name}.js นำเข้า ${dep}.js ซึ่งไม่มีใน ORDER`); continue; }
+      if (pos.get(dep) >= pos.get(name)) {
+        problems.push(`${name}.js (ลำดับ ${pos.get(name)}) นำเข้า ${dep}.js (ลำดับ ${pos.get(dep)}) — ต้องมาก่อน`);
+      }
+    }
+  }
+  // โมดูลที่มีไฟล์อยู่แต่ลืมใส่ใน ORDER จะไม่ถูกรวมเข้าไฟล์ และพังตอนเรียกใช้
+  const onDisk = readdirSync('js').filter((f) => f.endsWith('.js')).map((f) => f.replace(/\.js$/, ''));
+  for (const f of onDisk) if (!pos.has(f)) problems.push(`js/${f}.js มีอยู่แต่ไม่ได้ใส่ใน ORDER — จะไม่ถูกรวมเข้าไฟล์`);
+  if (problems.length) {
+    console.error('ผิดพลาด: ลำดับโมดูลไม่ถูกต้อง\n  - ' + problems.join('\n  - '));
+    process.exit(1);
+  }
+}
+checkOrder();
 
 const bundle = `const __m = {};\n\n` + ORDER.map(build).join('\n\n');
 

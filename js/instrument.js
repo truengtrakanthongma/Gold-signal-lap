@@ -25,6 +25,21 @@ export const INSTRUMENTS = {
     isSpot: false,
     note: 'เช่นเดียวกับ PAXG คือวิ่งเกาะทองคำสปอตแต่ไม่เท่ากันเป๊ะ',
   },
+  PAXGUSD: {
+    name: 'PAXG/USD',
+    kind: 'โทเคนอิงทองคำ เทียบดอลลาร์จริง',
+    long: 'Paxos Gold ซื้อขายกับดอลลาร์สหรัฐโดยตรง (ไม่ผ่าน USDT)',
+    isSpot: false,
+    note: 'ใกล้ราคาทองคำสปอตกว่าคู่ที่เทียบ USDT เพราะตัดความคลาดเคลื่อนของ USDT ออกไปหนึ่งชั้น '
+        + 'แต่ยังเป็นโทเคน จึงมีส่วนต่างของตัวเองอยู่ และสภาพคล่องบางกว่า',
+  },
+  XAUTUSD: {
+    name: 'XAUT/USD',
+    kind: 'โทเคนอิงทองคำ เทียบดอลลาร์จริง',
+    long: 'Tether Gold ซื้อขายกับดอลลาร์สหรัฐโดยตรง (ไม่ผ่าน USDT)',
+    isSpot: false,
+    note: 'เช่นเดียวกับ PAXG/USD คือใกล้ราคาทองจริงกว่าคู่ที่เทียบ USDT แต่ยังไม่ใช่ทองสปอต',
+  },
   'XAU/USD': {
     name: 'XAU/USD',
     kind: 'ทองคำสปอต',
@@ -41,9 +56,23 @@ export const INSTRUMENTS = {
   },
 };
 
+const SOURCE_INSTRUMENT = {
+  demo: 'DEMO',
+  twelvedata: 'XAU/USD',
+  kraken_paxg: 'PAXGUSD',
+  bitfinex_xaut: 'XAUTUSD',
+  okx_paxg: 'PAXGUSDT',
+  binance_paxg: 'PAXGUSDT',
+};
+
+/**
+ * แหล่งข้อมูลไหน = สินทรัพย์อะไร
+ * ต้องตัดสินจากแหล่งก่อนเสมอ เพราะแหล่งเป็นตัวกำหนดว่าราคาที่ได้มาคือคู่อะไรจริง ๆ
+ * ถ้าปล่อยให้ช่องสัญลักษณ์ตัดสิน ผู้ใช้เปลี่ยนแหล่งแล้วป้ายจะค้างอยู่ที่ของเดิม
+ */
 export function instrumentOf(source, symbol) {
-  if (source === 'demo') return INSTRUMENTS.DEMO;
-  if (source === 'twelvedata') return INSTRUMENTS['XAU/USD'];
+  const key = SOURCE_INSTRUMENT[source];
+  if (key) return INSTRUMENTS[key];
   return INSTRUMENTS[symbol] || INSTRUMENTS.PAXGUSDT;
 }
 

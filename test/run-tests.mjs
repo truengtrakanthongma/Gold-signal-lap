@@ -11,6 +11,7 @@ import { runBacktest } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
+import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -1027,6 +1028,105 @@ section('15) จับราคาค้าง — สัญญาณจาก�
   ok('ค้างแล้วพยายามต่อใหม่ ไม่ใช่แค่เตือนเฉย ๆ', /staleSince[\s\S]{0,200}reload\(\)/.test(app));
   const idx = fs.readFileSync('index.html', 'utf8');
   ok('มีแถบเตือนบนสุดของหน้า', /id="staleBar"/.test(idx));
+}
+
+// ── แหล่งข้อมูลสำรอง ─────────────────────────────────────────────────
+section('16) แหล่งราคาทองอื่น — ตัวแปลงข้อมูลต้องอ่านคอลัมน์ถูกลำดับ');
+{
+  /* จำลองรูปแบบที่แต่ละเจ้าส่งกลับมาตามเอกสารของเขา
+     ยิงจริงจากเครื่องนี้ไม่ได้ แต่ "อ่านคอลัมน์ถูกไหม" ทดสอบได้ และเป็นจุดที่พังง่ายที่สุด */
+  const mkRes = (json, ok = true, status = 200) => ({ ok, status, json: async () => json });
+  const t0 = 1735689600000;   // 1 ม.ค. 2025 00:00 UTC
+  const step = 900000;
+
+  // แท่งเดียวกันในทุกเจ้า: เปิด 2600, สูงสุด 2620, ต่ำสุด 2590, ปิด 2610
+  const O = 2600, H = 2620, L = 2590, C = 2610;
+
+  const shapes = {
+    binance_paxg: [[t0, `${O}`, `${H}`, `${L}`, `${C}`, '12.5', t0 + step - 1, '0', 0, '0', '0', '0'],
+                   [t0 + step, `${C}`, `${H}`, `${L}`, `${O}`, '11.0', t0 + 2 * step - 1, '0', 0, '0', '0', '0']],
+    kraken_paxg: { error: [], result: {
+      PAXGUSD: [[t0 / 1000, `${O}`, `${H}`, `${L}`, `${C}`, '2605.0', '12.5', 40],
+                [(t0 + step) / 1000, `${C}`, `${H}`, `${L}`, `${O}`, '2605.0', '11.0', 38]], last: 123 } },
+    // Bitfinex: [เวลา, เปิด, ปิด, สูงสุด, ต่ำสุด, ปริมาณ] — ลำดับต่างจากชาวบ้าน
+    bitfinex_xaut: [[t0, O, C, H, L, 12.5], [t0 + step, C, O, H, L, -11.0]],
+    okx_paxg: { code: '0', data: [   // OKX ส่งใหม่ไปเก่า
+      [`${t0 + step}`, `${C}`, `${H}`, `${L}`, `${O}`, '11.0', '0', '0', '1'],
+      [`${t0}`, `${O}`, `${H}`, `${L}`, `${C}`, '12.5', '0', '0', '1']] },
+    twelvedata: { values: [
+      { datetime: '2025-01-01 00:00:00', open: `${O}`, high: `${H}`, low: `${L}`, close: `${C}`, volume: '12' },
+      { datetime: '2025-01-01 00:15:00', open: `${C}`, high: `${H}`, low: `${L}`, close: `${O}`, volume: '11' }] },
+  };
+
+  for (const key of Object.keys(SOURCES)) {
+    const bars = SOURCES[key].parse(shapes[key]);
+    const label = SOURCES[key].label;
+    ok(`${label}: ได้ 2 แท่ง`, bars.length === 2, `ได้ ${bars.length}`);
+    if (bars.length === 2) {
+      const b = bars[0];
+      ok(`${label}: อ่าน เปิด/สูง/ต่ำ/ปิด ถูกลำดับ`,
+        b.o === O && b.h === H && b.l === L && b.c === C,
+        `ได้ o=${b.o} h=${b.h} l=${b.l} c=${b.c} (ควรเป็น ${O}/${H}/${L}/${C})`);
+      ok(`${label}: เรียงเวลาจากเก่าไปใหม่`, bars[0].t < bars[1].t, `${bars[0].t} → ${bars[1].t}`);
+      ok(`${label}: เวลาเป็นมิลลิวินาที`, bars[0].t === t0, `ได้ ${bars[0].t}`);
+      ok(`${label}: ปริมาณไม่ติดลบ`, bars.every((x) => x.v >= 0));
+      ok(`${label}: ผ่านการตรวจความสมเหตุสมผล`, validateBars(bars, step).ok,
+        validateBars(bars, step).issues.join(' · '));
+    }
+  }
+
+  /* ตัวตรวจต้องจับ "อ่านคอลัมน์สลับ" ได้จริง ไม่ใช่ผ่านทุกอย่าง
+     ถ้าตรงนี้ไม่จับ ผู้ใช้จะได้กราฟกลับหัวโดยไม่มีอะไรบอก */
+  {
+    const swapped = [{ t: t0, o: O, h: L, l: H, c: C, v: 1 }];   // สูง/ต่ำ สลับกัน
+    const v = validateBars(swapped, step);
+    ok('ตัวตรวจจับได้เมื่อสูงสุด/ต่ำสุดสลับกัน', !v.ok && /สลับ/.test(v.issues.join(' ')));
+    const notGold = [{ t: t0, o: 1.1, h: 1.2, l: 1.0, c: 1.15, v: 1 }];
+    ok('ตัวตรวจจับได้เมื่อราคาไม่ใช่ช่วงราคาทอง', !validateBars(notGold, step).ok);
+    ok('ตัวตรวจจับได้เมื่อไม่มีข้อมูลเลย', !validateBars([], step).ok);
+  }
+
+  // testSource ต้องรายงานสาเหตุที่คนอ่านรู้เรื่อง ไม่ใช่โยน error ดิบ
+  {
+    const blocked = await testSource('kraken_paxg', { fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+    ok('โดน CORS/บล็อก → บอกสาเหตุเป็นภาษาคน ไม่ใช่ error ดิบ',
+      !blocked.ok && blocked.cors === true && /CORS|บล็อก/.test(blocked.reason), blocked.reason);
+
+    const geo = await testSource('binance_paxg', { fetchImpl: async () => ({ ok: false, status: 451 }) });
+    ok('รหัส 451 → อธิบายว่าน่าจะถูกบล็อกตามภูมิภาค', !geo.ok && /บล็อก/.test(geo.reason), geo.reason);
+
+    const good = await testSource('bitfinex_xaut', {
+      tfMs: step, fetchImpl: async () => mkRes(shapes.bitfinex_xaut) });
+    ok('ยิงสำเร็จ → รายงานจำนวนแท่งและราคาล่าสุด',
+      good.ok && good.bars === 2 && good.lastPrice === O, JSON.stringify(good).slice(0, 120));
+
+    const noKey = await testSource('twelvedata', {});
+    ok('แหล่งที่ต้องใช้คีย์ แต่ยังไม่ใส่ → บอกให้ใส่คีย์ก่อน', !noKey.ok && noKey.needsKey === true);
+
+    const noTf = await testSource('bitfinex_xaut', { interval: '4h' });
+    ok('Bitfinex ไม่มีกรอบ 4 ชั่วโมง → บอกว่าไม่รองรับ แทนที่จะยิงมั่ว',
+      !noTf.ok && noTf.unsupported === true, noTf.reason);
+  }
+
+  // เรียงลำดับ: ตัวที่ใช้ได้ต้องมาก่อน แล้วเรียงตามความใกล้เคียงราคาทองจริง
+  {
+    const all = await testAllSources({
+      fetchImpl: async (u) => {
+        if (/kraken/.test(u)) return mkRes(shapes.kraken_paxg);
+        if (/bitfinex/.test(u)) return mkRes(shapes.bitfinex_xaut);
+        throw new TypeError('Failed to fetch');
+      },
+      tfMs: step,
+    });
+    const okKeys = all.filter((r) => r.ok).map((r) => r.key);
+    ok('ทดสอบทุกแหล่งพร้อมกันได้ และคัดตัวที่ใช้ได้ขึ้นก่อน',
+      all.length === Object.keys(SOURCES).length && all[0].ok === true, okKeys.join(','));
+    ok('แหล่งที่เทียบ USD จริง ถูกจัดว่าใกล้ราคาทองมากกว่าแหล่งที่เทียบ USDT',
+      SOURCES.kraken_paxg.accuracy > SOURCES.binance_paxg.accuracy
+      && SOURCES.bitfinex_xaut.accuracy > SOURCES.okx_paxg.accuracy);
+    ok('ทองคำสปอตจริงถูกจัดว่าแม่นที่สุด',
+      SOURCES.twelvedata.accuracy === Math.max(...Object.values(SOURCES).map((x) => x.accuracy)));
+  }
 }
 
 console.log(`\n${'─'.repeat(52)}`);

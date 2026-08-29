@@ -36,8 +36,11 @@
   <div class="controls">
     <label data-adv>แหล่งข้อมูล
       <select id="sourceSel">
-        <option value="binance">Binance PAXG (ทองคำ 24 ชม. ฟรี)</option>
-        <option value="twelvedata">Twelve Data XAU/USD (ต้องมี API key)</option>
+        <option value="binance">Binance PAXG/USDT (ฟรี · เร็วที่สุด)</option>
+        <option value="kraken_paxg">Kraken PAXG/USD (ฟรี · ใกล้ทองจริงกว่า)</option>
+        <option value="bitfinex_xaut">Bitfinex XAUT/USD (ฟรี · ใกล้ทองจริงกว่า)</option>
+        <option value="okx_paxg">OKX PAXG/USDT (ฟรี · สำรอง)</option>
+        <option value="twelvedata">Twelve Data XAU/USD (ทองจริง · ต้องมี API key)</option>
         <option value="demo">โหมดจำลอง (ไม่มีเน็ตก็ใช้ได้)</option>
       </select>
     </label>
@@ -262,6 +265,23 @@
   </div>
 
   <div class="tab-panel" id="tab-settings">
+    <div class="card" style="margin-bottom:16px">
+      <h2>🔎 ทดสอบแหล่งราคาทอง — อันไหนใช้ได้จากเครื่องคุณ</h2>
+      <p class="tiny">
+        ราคาทองคำสปอต (XAU/USD) เป็นข้อมูลมีลิขสิทธิ์ เจ้าที่แจกฟรีจึงต้องขอให้สมัครคีย์เสมอ
+        ส่วนที่ฟรีจริงไม่ต้องใช้คีย์คือ<b>โทเคนที่หนุนด้วยทองคำ</b>ในตลาดคริปโต
+        ซึ่งวิ่งเกาะทองจริงแต่ไม่เท่ากันเป๊ะ<br><br>
+        <b>จุดที่คนมักมองข้าม:</b> คู่ที่เทียบกับ <b>USD จริง</b> (Kraken, Bitfinex)
+        ใกล้ราคาทองมากกว่าคู่ที่เทียบ <b>USDT</b> (Binance, OKX) เพราะตัดความคลาดเคลื่อนของ USDT ออกไปอีกชั้น<br><br>
+        แต่ละเจ้าจะยอมให้เว็บอื่นเรียกหรือไม่ และเครือข่ายบ้านคุณบล็อกอันไหน
+        <b>ผมทดสอบแทนไม่ได้</b> — ปุ่มนี้จะยิงทดสอบจากเบราว์เซอร์คุณเองแล้วรายงานว่าอันไหนใช้ได้จริง
+      </p>
+      <div class="bt-controls">
+        <button id="testSources" class="btn primary">▶ ทดสอบทุกแหล่งเดี๋ยวนี้</button>
+        <span id="srcStatus" class="tiny"></span>
+      </div>
+      <div id="srcResults"></div>
+    </div>
     <div class="settings-grid">
       <div class="card">
         <h2>เกณฑ์สัญญาณ</h2>

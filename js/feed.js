@@ -62,6 +62,8 @@ async function fetchJson(url, timeoutMs = 12000) {
   }
 }
 
+import { SOURCES } from './sources.js';
+
 export class MarketFeed {
   constructor() {
     this.source = 'binance';
@@ -120,6 +122,7 @@ export class MarketFeed {
   async loadHistory(interval = this.interval, limit = 700) {
     if (this.source === 'demo') return this._demoHistory(interval, limit);
     if (this.source === 'twelvedata') return this._tdHistory(interval, limit);
+    if (SOURCES[this.source]) return this._genericHistory(interval, limit);
     return this._binanceHistory(interval, limit);
   }
 
@@ -201,6 +204,7 @@ export class MarketFeed {
     this.stopped = false;
     if (this.source === 'demo') return this._startDemo();
     if (this.source === 'twelvedata') return this._startPolling();
+    if (SOURCES[this.source]) return this._startGenericPoll();
     return this._startBinanceWs();
   }
 
@@ -303,6 +307,45 @@ export class MarketFeed {
       };
     }
     return Promise.resolve(out);
+  }
+
+  /**
+   * โหลดประวัติจากแหล่งใดก็ได้ในทะเบียน sources.js
+   *
+   * ใช้ตัวแปลงข้อมูลชุดเดียวกับที่ปุ่มทดสอบใช้ ถ้าปุ่มทดสอบบอกว่าแหล่งนี้ผ่าน
+   * ก็แปลว่าเส้นทางนี้ใช้ได้จริง ไม่ใช่โค้ดคนละชุดที่ต้องมาลุ้นใหม่
+   */
+  async _genericHistory(interval, limit) {
+    const src = SOURCES[this.source];
+    const tf = src.tf[interval];
+    if (tf === undefined) {
+      throw new Error(`${src.label} ไม่มีกรอบเวลา ${TF[interval] ? TF[interval].label : interval} — เลือกกรอบเวลาอื่นหรือเปลี่ยนแหล่งข้อมูล`);
+    }
+    this.requestCount++;
+    const data = await fetchJson(src.url(tf, limit, this.apiKey));
+    const bars = src.parse(data);
+    if (!bars.length) throw new Error(`${src.label} ไม่ส่งข้อมูลแท่งเทียนกลับมา`);
+    return bars;
+  }
+
+  /** ดึงราคาสดเป็นรอบ สำหรับแหล่งที่ไม่มี WebSocket */
+  _startGenericPoll() {
+    const src = SOURCES[this.source];
+    const tick = async () => {
+      try {
+        const rows = await this._genericHistory(this.interval, 3);
+        rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
+        const last = rows[rows.length - 1];
+        if (last) this.onCandle({ ...last, closed: false });
+        this.lastDataAt = Date.now();
+        this.onStatus({ state: 'live',
+          message: `${src.label} · ${src.kind} · อัปเดตทุก ${Math.round(this.livePollMs / 1000)} วินาที` });
+      } catch (e) {
+        this.onStatus({ state: 'error', message: `${src.label}: ${e.message}` });
+      }
+    };
+    tick();
+    this.pollTimer = setInterval(tick, this.livePollMs);
   }
 
   _startDemo() {

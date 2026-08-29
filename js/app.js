@@ -7,6 +7,7 @@ import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLab
 import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
 import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
+import { SOURCES, testAllSources } from './sources.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -215,6 +216,7 @@ function bindEvents() {
   }));
 
   $('runBt').addEventListener('click', () => doBacktest());
+  $('testSources').addEventListener('click', () => doTestSources());
   $('runAdapt').addEventListener('click', () => doAdapt());
   $('applyAdapt').addEventListener('click', () => applyAdapt(state.adapt && state.adapt.params));
   $('resetAdapt').addEventListener('click', () => applyAdapt(null));
@@ -1021,6 +1023,56 @@ function renderWalkForward() {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * ยิงทดสอบทุกแหล่งข้อมูลจากเบราว์เซอร์ผู้ใช้
+ *
+ * ต้องทำที่นี่ ไม่ใช่ตอนพัฒนา เพราะคำถามจริงคือ
+ * "เครือข่ายและเบราว์เซอร์ของ*คุณ* ยิงถึงเจ้าไหนบ้าง"
+ * ซึ่งขึ้นกับผู้ให้บริการเน็ต ประเทศ และนโยบาย CORS ของแต่ละเจ้า
+ */
+async function doTestSources() {
+  const btn = $('testSources');
+  btn.disabled = true;
+  $('srcStatus').textContent = 'กำลังยิงทดสอบทุกแหล่งพร้อมกัน…';
+  const results = await testAllSources({
+    interval: state.tf, tfMs: TF[state.tf].ms, apiKey: settings.apiKey, limit: 120,
+  });
+  btn.disabled = false;
+  const good = results.filter((r) => r.ok).length;
+  $('srcStatus').textContent = `ใช้ได้ ${good} จาก ${results.length} แหล่ง`;
+  state.srcResults = results;
+  renderSourceResults();
+}
+
+function renderSourceResults() {
+  const el = $('srcResults');
+  const results = state.srcResults;
+  if (!results) { el.innerHTML = ''; return; }
+  const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+  el.innerHTML = `<table class="learn-table"><thead><tr>
+      <th>แหล่งข้อมูล</th><th>ใกล้ทองจริง</th><th>ผล</th><th>ราคาล่าสุด</th><th>ตอบใน</th>
+    </tr></thead><tbody>
+    ${results.map((r) => {
+      const src = SOURCES[r.key];
+      const state_ = r.ok ? 'ใช้ได้' : r.needsKey ? 'ต้องใส่คีย์' : r.unsupported ? 'ไม่มีกรอบเวลานี้' : 'ใช้ไม่ได้';
+      const col = r.ok ? 'var(--up)' : r.needsKey || r.unsupported ? 'var(--gold)' : 'var(--down)';
+      return `<tr>
+        <td><b>${src.label}</b><br><span class="tiny">${src.kind}</span></td>
+        <td class="num" title="ยิ่งดาวมาก ยิ่งใกล้ราคาทองคำสปอตจริง" style="color:var(--gold)">${stars(src.accuracy)}</td>
+        <td style="color:${col}"><b>${state_}</b>${r.reason ? `<br><span class="tiny">${r.reason}</span>` : ''}</td>
+        <td class="num">${r.lastPrice ? r.lastPrice.toFixed(2) : '—'}</td>
+        <td class="num">${r.ms ? r.ms + ' มิลลิวินาที' : '—'}</td>
+      </tr>`;
+    }).join('')}
+    </tbody></table>
+    <p class="tiny">
+      ถ้ามีหลายแหล่งที่ใช้ได้ ให้เทียบ<b>ราคาล่าสุด</b>ในตารางกับราคาทองที่โบรกเกอร์คุณแสดง
+      อันไหนใกล้ที่สุดก็เลือกอันนั้นในช่อง "แหล่งข้อมูล" ด้านบนของหน้าจอ<br>
+      ขึ้นว่า "ใช้ไม่ได้" มักไม่ใช่ความผิดของคุณ — เจ้านั้นอาจไม่อนุญาตให้เว็บอื่นเรียก
+      หรือถูกบล็อกจากประเทศ/ผู้ให้บริการเน็ตของคุณ ลองเจ้าอื่นในตารางได้เลย
+    </p>`;
 }
 
 /**
