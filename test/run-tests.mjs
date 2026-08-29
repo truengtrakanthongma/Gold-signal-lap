@@ -952,6 +952,36 @@ section('13) ปรับกลยุทธ์เอง — ต้องจู�
   }
 }
 
+// ── หน้ารับโค้ด Pine สำหรับมือถือ ───────────────────────────────────
+section('14) หน้า tradingview.html — โค้ดที่ผู้ใช้คัดลอกต้องตรงกับไฟล์จริง');
+{
+  const fs = await import('node:fs');
+  const pine = fs.readFileSync('tradingview/gold-signal-lab.pine', 'utf8');
+  const page = fs.existsSync('tradingview.html') ? fs.readFileSync('tradingview.html', 'utf8') : '';
+  ok('มีไฟล์ tradingview.html (สร้างด้วย node build-single.mjs)', !!page);
+  if (page) {
+    /* ถ้าหน้าเว็บกับไฟล์ .pine หลุดคนละเวอร์ชัน ผู้ใช้จะคัดลอกโค้ดเก่าไปใช้
+       โดยไม่มีทางรู้เลย — เทียบทีละบรรทัดหลังถอด HTML escape */
+    const unesc = (t) => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const m = page.match(/<pre id="code">([\s\S]*?)<\/pre>/);
+    ok('หน้าเว็บมีกล่องโค้ด', !!m);
+    if (m) {
+      ok('โค้ดในหน้าเว็บตรงกับไฟล์ .pine ทุกตัวอักษร', unesc(m[1]).trim() === pine.trim(),
+        `หน้าเว็บ ${unesc(m[1]).trim().length} ตัวอักษร เทียบไฟล์ ${pine.trim().length}`);
+      /* ต้องดูเฉพาะ "ข้างในกล่องโค้ด" เท่านั้น — หน้าเว็บมี <script> ของตัวเองอยู่ท้ายไฟล์
+         ถ้าค้นทั้งหน้าจะเจอตัวนั้นแล้วเข้าใจผิดว่าโค้ดรั่ว (เทสต์รอบแรกพลาดตรงนี้) */
+      ok('ไม่มีแท็กดิบหลุดเข้าไปในกล่องโค้ด (escape ครบ)',
+        !/<script|<\/pre/i.test(m[1]));
+    }
+    ok('มีปุ่มคัดลอกและมีทางสำรองเมื่อ clipboard API ใช้ไม่ได้',
+      /id="copyBtn"/.test(page) && /execCommand\('copy'\)/.test(page));
+    ok('บอกข้อจำกัดว่าแอปมือถือไม่มี Pine Editor', /ไม่มี.{0,4}Pine Editor/.test(page));
+    ok('มีคำเตือนว่าเพื่อการศึกษา', /ไม่ใช่คำแนะนำการลงทุน/.test(page));
+  }
+  const idx = fs.readFileSync('index.html', 'utf8');
+  ok('หน้าเว็บแอปมีลิงก์ไปหน้านี้ (ไม่งั้นไม่มีใครหาเจอ)', /href="tradingview\.html"/.test(idx));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

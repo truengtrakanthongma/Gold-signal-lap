@@ -102,3 +102,189 @@ const inner = html.slice(html.indexOf('const __m = {};'));
 const leftovers = [...inner.matchAll(/^\s*(import|export)\s/gm)];
 if (leftovers.length) { console.error(`ผิดพลาด: ยังเหลือ import/export ${leftovers.length} จุด`); process.exit(1); }
 console.log('ตรวจแล้ว: ไม่มี import/export หลงเหลือ');
+
+/*
+ * สร้างหน้า tradingview.html — หน้ารับโค้ด Pine สำหรับมือถือ
+ *
+ * ทำไมต้องมี: แอป TradingView บนมือถือไม่มี Pine Editor ต้องเปิดผ่านเบราว์เซอร์
+ * แล้วขั้นที่ยากที่สุดบนมือถือคือ "คัดลอกโค้ด 249 บรรทัดจาก GitHub"
+ * หน้านี้ตัดปัญหานั้นทิ้ง เหลือแค่กดปุ่มเดียว
+ *
+ * สร้างจากไฟล์ .pine โดยตรง โค้ดในหน้าเว็บจึงตรงกับไฟล์จริงเสมอ ไม่มีทางหลุดคนละเวอร์ชัน
+ */
+const pine = readFileSync('tradingview/gold-signal-lab.pine', 'utf8');
+const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const pineLines = pine.split('\n').length;
+
+const tvPage = `<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold Signal Lab — ใส่ใน TradingView</title>
+<style>
+  :root { --bg:#0b1020; --panel:#141a2e; --panel2:#1b2238; --line:#2a3350;
+          --text:#e8ecf7; --muted:#94a3b8; --gold:#f0b429; --up:#22c55e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); line-height:1.7;
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Thai",sans-serif; font-size:15px; }
+  .wrap { max-width:760px; margin:0 auto; padding:16px 14px 60px; }
+  h1 { font-size:20px; margin:0 0 4px; color:var(--gold); }
+  h2 { font-size:16px; margin:26px 0 8px; }
+  .sub { color:var(--muted); font-size:13.5px; margin:0 0 18px; }
+  .copy-bar { position:sticky; top:0; z-index:10; background:var(--bg); padding:10px 0 12px; border-bottom:1px solid var(--line); }
+  button.copy { width:100%; padding:16px; font-size:16px; font-weight:700; border-radius:12px;
+                border:none; background:var(--gold); color:#1a1200; cursor:pointer; font-family:inherit; }
+  button.copy:active { transform:scale(.99); }
+  button.copy.done { background:var(--up); color:#04210f; }
+  .steps { counter-reset:s; padding:0; margin:0; list-style:none; }
+  .steps > li { counter-increment:s; position:relative; padding:12px 0 12px 42px; border-bottom:1px solid var(--line); }
+  .steps > li::before { content:counter(s); position:absolute; left:0; top:12px; width:28px; height:28px;
+    border-radius:50%; background:var(--panel2); color:var(--gold); font-weight:700; font-size:14px;
+    display:flex; align-items:center; justify-content:center; }
+  .steps b { color:var(--gold); }
+  .note { background:var(--panel); border-left:3px solid var(--gold); border-radius:8px;
+          padding:11px 13px; margin:14px 0; font-size:13.5px; }
+  .note.warn { border-left-color:#ef4444; }
+  code { background:var(--panel2); padding:2px 6px; border-radius:5px; font-size:13px;
+         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  pre { background:#080d1a; border:1px solid var(--line); border-radius:10px; padding:12px;
+        overflow:auto; max-height:340px; font-size:11.5px; line-height:1.55;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  a { color:var(--gold); }
+  .tabs { display:flex; gap:8px; margin:14px 0 0; }
+  .tabs button { flex:1; padding:10px; border-radius:9px; border:1px solid var(--line);
+    background:var(--panel); color:var(--muted); font-size:14px; font-family:inherit; cursor:pointer; }
+  .tabs button.on { background:var(--panel2); color:var(--gold); border-color:var(--gold); font-weight:600; }
+  .pane[hidden] { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ใส่ Gold Signal Lab ใน TradingView</h1>
+  <p class="sub">ได้ราคา XAUUSD จริงจากโบรกเกอร์คุณ ไม่มีโควตา ทดสอบย้อนหลังในตัว และแจ้งเตือนเข้ามือถือ</p>
+
+  <div class="copy-bar">
+    <button class="copy" id="copyBtn">📋 คัดลอกโค้ดทั้งหมด (${pineLines} บรรทัด)</button>
+  </div>
+
+  <div class="tabs">
+    <button id="tabMobile" class="on">📱 ทำบนมือถือ</button>
+    <button id="tabDesktop">💻 ทำบนคอม</button>
+  </div>
+
+  <div class="pane" id="paneMobile">
+    <div class="note warn">
+      <b>ข้อจำกัดที่ต้องรู้ก่อน:</b> แอป TradingView บนมือถือ<b>ไม่มี Pine Editor</b>
+      จึงวางโค้ดในแอปไม่ได้ ต้องวางผ่าน<b>เบราว์เซอร์ในโหมดคอมพิวเตอร์</b> ครั้งเดียว
+      หลังจากนั้นใช้ในแอปได้ตามปกติ รวมถึงรับแจ้งเตือน
+    </div>
+    <ol class="steps">
+      <li>กดปุ่ม <b>คัดลอกโค้ดทั้งหมด</b> ข้างบน</li>
+      <li>เปิด <b>Chrome</b> (Android) หรือ <b>Safari</b> (iPhone) — <u>ไม่ใช่แอป TradingView</u></li>
+      <li>เปิดโหมดคอมพิวเตอร์:<br>
+        • <b>Chrome</b> → จุดสามจุดมุมขวาบน → ติ๊ก <code>เว็บไซต์เดสก์ท็อป</code><br>
+        • <b>Safari</b> → ไอคอน <code>ᴀA</code> ซ้ายช่อง URL → <code>ขอเว็บไซต์เดสก์ท็อป</code></li>
+      <li>ไปที่ <a href="https://www.tradingview.com/chart/" target="_blank" rel="noopener">tradingview.com/chart</a> แล้วเข้าสู่ระบบ (สมัครฟรีได้)</li>
+      <li>ค้นหาสัญลักษณ์ <code>XAUUSD</code> แล้วเลือกกรอบเวลา <b>15 นาที</b></li>
+      <li>ล่างจอมีแถบ <b>Pine Editor</b> — แตะเพื่อกางขึ้นมา
+        <div class="note">หมุนมือถือเป็น<b>แนวนอน</b>ตรงนี้จะง่ายขึ้นมาก</div></li>
+      <li>ลบโค้ดตัวอย่างที่มีอยู่ให้หมด แล้ว<b>วาง</b>โค้ดที่คัดลอกมา</li>
+      <li>กด <b>Save</b> → ตั้งชื่อ <code>Gold Signal Lab</code> → กด <b>Add to chart</b></li>
+      <li>เสร็จแล้ว! ปิดโหมดเดสก์ท็อปได้ กลับไปใช้<b>แอป TradingView</b> ตามปกติ —
+        สคริปต์จะอยู่ใน <b>Indicators → My scripts</b> เพิ่มลงกราฟได้เลย</li>
+    </ol>
+  </div>
+
+  <div class="pane" id="paneDesktop" hidden>
+    <ol class="steps">
+      <li>กดปุ่ม <b>คัดลอกโค้ดทั้งหมด</b> ข้างบน</li>
+      <li>เปิด <a href="https://www.tradingview.com/chart/" target="_blank" rel="noopener">tradingview.com/chart</a> แล้วเข้าสู่ระบบ</li>
+      <li>ค้นหา <code>XAUUSD</code> เลือกกรอบเวลา <b>15 นาที</b></li>
+      <li>ล่างจอ กด <b>Pine Editor</b></li>
+      <li>ลบโค้ดเดิมทั้งหมด แล้ววางโค้ดที่คัดลอกมา</li>
+      <li>กด <b>Save</b> ตั้งชื่อ แล้วกด <b>Add to chart</b></li>
+      <li>เปิดแท็บ <b>Strategy Tester</b> ล่างจอ เพื่อดูผลทดสอบย้อนหลังกับทองจริง</li>
+    </ol>
+  </div>
+
+  <h2>ตั้งแจ้งเตือนเข้ามือถือ</h2>
+  <ol class="steps">
+    <li>บนกราฟที่ใส่สคริปต์แล้ว กดไอคอน <b>นาฬิกาปลุก</b> (Alert)</li>
+    <li>ช่อง <b>Condition</b> เลือก <code>Gold Signal Lab</code></li>
+    <li>เลือกเงื่อนไข <b>Any alert() function call</b></li>
+    <li>ในแท็บ <b>Notifications</b> ติ๊ก <b>Push notification</b></li>
+    <li>กด <b>Create</b> — จากนี้สัญญาณจะเด้งเข้ามือถือเอง ไม่ต้องเปิดจอทิ้งไว้</li>
+  </ol>
+
+  <h2>อ่านผลทดสอบย้อนหลังยังไง</h2>
+  <div class="note">
+    ในแท็บ <b>Strategy Tester</b> ดูสามตัวนี้พอ:<br>
+    • <b>Profit Factor</b> — เกิน 1.0 คือกำไร ต่ำกว่าคือขาดทุน<br>
+    • <b>Total Closed Trades</b> — ต่ำกว่า 30 ไม้ ยังสรุปอะไรไม่ได้ ให้ถือว่าเป็นแค่ตัวอย่าง<br>
+    • <b>Max Drawdown</b> — เคยติดลบลึกสุดเท่าไร ถ้าคุณทนไม่ไหว ก็ใช้ระบบนี้ไม่ได้ ต่อให้สุดท้ายมันกำไร
+  </div>
+  <div class="note warn">
+    <b>ค่าเริ่มต้นเป็นค่ากลาง ๆ ไม่ได้จูนมาเพื่อทองคำโดยเฉพาะ</b>
+    ถ้าผลออกมาไม่ดี อย่าเพิ่งสรุปว่ากฎใช้ไม่ได้ — ลองปรับ <b>คะแนนขั้นต่ำ</b> และ <b>เป้าทำกำไร</b> ในหน้าตั้งค่าของสคริปต์ดูก่อน
+    และอย่าเชื่อค่าที่จูนจนสวยที่สุด เพราะนั่นคือการฟิตกับอดีต
+  </div>
+
+  <h2>โค้ดทั้งหมด</h2>
+  <p class="sub">ถ้าปุ่มคัดลอกใช้ไม่ได้ กดค้างในกล่องนี้แล้วเลือกทั้งหมดเองได้</p>
+  <pre id="code">${esc(pine)}</pre>
+
+  <p class="sub" style="margin-top:24px">
+    ⚠ เครื่องมือเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน ·
+    <a href="./">กลับไปหน้าเว็บแอป</a> ·
+    <a href="https://github.com/truengtrakanthongma/Gold-signal-lap" target="_blank" rel="noopener">ซอร์สโค้ด</a>
+  </p>
+</div>
+
+<script>
+(function () {
+  var btn = document.getElementById('copyBtn');
+  var code = document.getElementById('code');
+  btn.addEventListener('click', function () {
+    var text = code.textContent;
+    function done() {
+      btn.textContent = '✓ คัดลอกแล้ว — ไปวางใน Pine Editor ได้เลย';
+      btn.classList.add('done');
+      setTimeout(function () {
+        btn.textContent = '📋 คัดลอกโค้ดทั้งหมด (${pineLines} บรรทัด)';
+        btn.classList.remove('done');
+      }, 4000);
+    }
+    // clipboard API ต้องใช้ HTTPS — ถ้าไม่มี ถอยไปใช้วิธีเก่าที่ทำงานได้ทุกที่
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); }
+      catch (e) { btn.textContent = 'คัดลอกอัตโนมัติไม่ได้ — เลื่อนลงไปคัดลอกจากกล่องโค้ดด้านล่าง'; }
+      document.body.removeChild(ta);
+    }
+  });
+
+  var tm = document.getElementById('tabMobile'), td = document.getElementById('tabDesktop');
+  var pm = document.getElementById('paneMobile'), pd = document.getElementById('paneDesktop');
+  function pick(mobile) {
+    tm.classList.toggle('on', mobile); td.classList.toggle('on', !mobile);
+    pm.hidden = !mobile; pd.hidden = mobile;
+  }
+  tm.addEventListener('click', function () { pick(true); });
+  td.addEventListener('click', function () { pick(false); });
+  // เปิดบนคอมให้เลือกแท็บคอมให้เลย
+  if (!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) pick(false);
+})();
+</script>
+</body>
+</html>`;
+
+writeFileSync('tradingview.html', tvPage);
+console.log(`สร้าง tradingview.html สำเร็จ (หน้ารับโค้ด Pine ${pineLines} บรรทัด สำหรับมือถือ)`);

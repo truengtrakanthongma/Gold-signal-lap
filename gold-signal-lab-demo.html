@@ -364,6 +364,10 @@ body.simple .narr p { font-size: 13.8px; }
 .adapt-sec h4 { margin: 0 0 4px; font-size: 12.5px; color: var(--gold); font-weight: 600; }
 .adapt-sec p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); }
 
+.tv-cta { background: var(--panel-2); border: 1px solid rgba(240,180,41,.45); border-radius: 10px;
+  padding: 14px 16px; margin: 0 0 22px; }
+.tv-cta a.btn { display: inline-block; margin-top: 8px; text-decoration: none; }
+
 /* ══ มือถือ ══════════════════════════════════════════════
    บนจอเล็ก คำตอบสำคัญกว่ารูป — ต้องเห็น "ตอนนี้ควรทำอะไร"
    ทันทีที่เปิด ไม่ใช่ต้องเลื่อนผ่านกราฟลงไปครึ่งหน้าจอ      */
@@ -881,6 +885,13 @@ body.simple .narr p { font-size: 13.8px; }
 
   <div class="tab-panel" id="tab-howto">
     <div class="howto">
+      <div class="tv-cta">
+        <h2 style="margin-top:0">อยากได้ราคาทองจริงจากโบรกเกอร์? ใช้กับ TradingView ได้</h2>
+        <p>เว็บนี้ต้องหาข้อมูลราคาเอง ซึ่งของฟรีมีข้อจำกัดเสมอ
+          แต่มีเวอร์ชัน Pine Script ที่รันใน TradingView ได้ — ได้ XAUUSD จริงจากโบรกเกอร์คุณ
+          ไม่มีโควตา มีเครื่องทดสอบย้อนหลังในตัว และแจ้งเตือนเข้ามือถือได้</p>
+        <a class="btn primary" href="tradingview.html">📱 ดูวิธีใส่ใน TradingView (ทำบนมือถือได้)</a>
+      </div>
       <h2>ระบบนี้ทำงานอย่างไร</h2>
       <ol>
         <li><b>ดึงราคาเรียลไทม์</b> — ค่าเริ่มต้นใช้ PAXG/USDT บน Binance ผ่าน WebSocket (โทเคนหนุนด้วยทองคำจริง 1 เหรียญ = 1 ทรอยออนซ์ เก็บในตู้นิรภัยลอนดอน) ราคาจึงวิ่งเกาะ XAU/USD และมีข้อมูล 24 ชม. ไม่ต้องใช้ API key ถ้าต้องการ XAU/USD ของจริง ให้ใส่ API key ของ Twelve Data ในแท็บตั้งค่า</li>
