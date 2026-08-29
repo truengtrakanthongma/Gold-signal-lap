@@ -10,6 +10,7 @@ import { buildContext, scoreAt, buildSetup, DEFAULT_CFG, WEIGHTS } from '../js/s
 import { runBacktest } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
+import { MarketFeed } from '../js/feed.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -980,6 +981,52 @@ section('14) หน้า tradingview.html — โค้ดที่ผู้ใ
   }
   const idx = fs.readFileSync('index.html', 'utf8');
   ok('หน้าเว็บแอปมีลิงก์ไปหน้านี้ (ไม่งั้นไม่มีใครหาเจอ)', /href="tradingview\.html"/.test(idx));
+}
+
+// ── ตัวจับ "ราคาค้าง" ────────────────────────────────────────────────
+section('15) จับราคาค้าง — สัญญาณจากราคาที่ค้างอันตรายกว่าไม่มีสัญญาณ');
+{
+  /* WebSocket ค้างแบบ "เปิดอยู่แต่ไม่ส่งอะไรมา" เกิดบ่อยบนมือถือ
+     onclose ไม่ยิง ระบบจึงไม่รู้ตัว แล้วโชว์ราคาเก่าพร้อมสัญญาณเข้าซื้อต่อไป */
+  const f = new MarketFeed();
+
+  ok('ยังไม่เริ่ม → ไม่ฟ้องว่าค้าง (กันเตือนผิดตอนเพิ่งเปิดหน้า)',
+    f.freshness().stale === false && f.freshness().unknown === true);
+
+  f.stopped = false;
+  f.lastDataAt = Date.now();
+  ok('เพิ่งได้ข้อมูล → ไม่ค้าง', !f.freshness().stale);
+
+  f.lastDataAt = Date.now() - 60000;
+  ok('WebSocket เงียบ 1 นาที → ยังไม่ฟ้อง (ยังอยู่ในเกณฑ์)', !f.freshness().stale);
+  f.lastDataAt = Date.now() - 120000;
+  ok('WebSocket เงียบ 2 นาที → ฟ้องว่าค้าง', f.freshness().stale);
+
+  /* โหมดดึงเป็นรอบดึงทุก 3 นาทีอยู่แล้ว ถ้าใช้เกณฑ์เดียวกับ WebSocket
+     จะฟ้องผิดทุกครั้งที่รอรอบถัดไป — ผู้ใช้จะเลิกเชื่อคำเตือนภายในวันเดียว */
+  f.source = 'twelvedata';
+  f.lastDataAt = Date.now() - 200000;
+  ok('โหมดดึงเป็นรอบ: เงียบ 3.3 นาที → ยังไม่ฟ้อง (เกณฑ์ผ่อนตามจังหวะดึง)', !f.freshness().stale);
+  f.lastDataAt = Date.now() - 500000;
+  ok('โหมดดึงเป็นรอบ: เงียบ 8.3 นาที → ฟ้องว่าค้าง', f.freshness().stale);
+  ok('เกณฑ์ของโหมดดึงเป็นรอบต้องกว้างกว่าของ WebSocket',
+    f.staleAfterMs > new MarketFeed().staleAfterMs);
+
+  // ต้องบอกได้ว่าค้างมานานเท่าไร ไม่ใช่แค่ค้าง/ไม่ค้าง
+  const age = f.freshness().ageMs;
+  ok('รายงานระยะเวลาที่ค้างได้ถูกต้อง', age >= 499000 && age <= 501000, `ได้ ${age}`);
+
+  // ข้อความในหน้าเว็บต้องระงับสัญญาณจริง ไม่ใช่แค่เตือน
+  const fs = await import('node:fs');
+  const app = fs.readFileSync('js/app.js', 'utf8');
+  ok('ตัวกรอง "ข้อมูลค้าง" ถูกใส่ใน blocks (ซึ่งเป็นตัวที่ระงับสัญญาณจริง)',
+    /fresh\.stale[\s\S]{0,120}blocks\.push/.test(app));
+  ok('มีนาฬิกาเฝ้าดูเป็นรอบ', /setInterval\(checkFreshness/.test(app));
+  ok('กลับมาดูหน้าจอแล้วเช็กทันที (จังหวะที่ค้างบ่อยที่สุดบนมือถือ)',
+    /visibilitychange[\s\S]{0,120}checkFreshness/.test(app));
+  ok('ค้างแล้วพยายามต่อใหม่ ไม่ใช่แค่เตือนเฉย ๆ', /staleSince[\s\S]{0,200}reload\(\)/.test(app));
+  const idx = fs.readFileSync('index.html', 'utf8');
+  ok('มีแถบเตือนบนสุดของหน้า', /id="staleBar"/.test(idx));
 }
 
 console.log(`\n${'─'.repeat(52)}`);

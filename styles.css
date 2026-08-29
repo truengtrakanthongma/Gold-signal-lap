@@ -356,6 +356,16 @@ body.simple .narr p { font-size: 13.8px; }
   padding: 14px 16px; margin: 0 0 22px; }
 .tv-cta a.btn { display: inline-block; margin-top: 8px; text-decoration: none; }
 
+/* แถบเตือนราคาค้าง — ต้องเห็นก่อนทุกอย่าง เพราะถ้าพลาดแล้วเข้าไม้ตามราคาผิด */
+.stale-bar {
+  position: sticky; top: 0; z-index: 60;
+  background: #ef4444; color: #fff;
+  padding: 9px 14px; font-size: 13px; font-weight: 600; text-align: center;
+  animation: stalePulse 2s ease-in-out infinite;
+}
+@keyframes stalePulse { 0%,100% { background: #ef4444; } 50% { background: #c02626; } }
+@media (prefers-reduced-motion: reduce) { .stale-bar { animation: none; } }
+
 /* ══ มือถือ ══════════════════════════════════════════════
    บนจอเล็ก คำตอบสำคัญกว่ารูป — ต้องเห็น "ตอนนี้ควรทำอะไร"
    ทันทีที่เปิด ไม่ใช่ต้องเลื่อนผ่านกราฟลงไปครึ่งหน้าจอ      */

@@ -79,6 +79,29 @@ export class MarketFeed {
     this.stopped = true;
     this.demoState = null;
     this.requestCount = 0;   // นับคำขอที่ยิงออกไป เพื่อให้ผู้ใช้เห็นว่าใช้โควตาไปเท่าไร
+    this.lastDataAt = 0;     // เวลาที่ได้ข้อมูลล่าสุด — ใช้จับว่าราคาค้างหรือยัง
+  }
+
+  /*
+   * ข้อมูลค้างนานแค่ไหนถึงเรียกว่า "เชื่อไม่ได้แล้ว"
+   *
+   * ทำไมต้องมี: WebSocket ค้างแบบ "เปิดอยู่แต่ไม่ส่งอะไรมา" เกิดบ่อยมากบนมือถือ
+   * (จอดับ, สลับ WiFi เป็นเน็ตมือถือ, เข้าลิฟต์) ในกรณีนี้ onclose ไม่ยิง
+   * ระบบจึงไม่รู้ตัวว่าหลุด แล้วโชว์ราคาเก่าค้างพร้อมสัญญาณเข้าซื้อเหมือนปกติ
+   * ซึ่งอันตรายกว่าการไม่มีสัญญาณเลย
+   */
+  get staleAfterMs() {
+    if (this.source === 'demo') return 15000;
+    // โหมดดึงเป็นรอบ: ต้องเผื่อให้เกินรอบดึงพอสมควร ไม่งั้นจะเตือนผิดทุกครั้งที่รอรอบถัดไป
+    if (this.source === 'twelvedata') return this.livePollMs * 2.5;
+    return 90000;   // WebSocket ควรมีข้อมูลเข้ามาตลอด เงียบเกินหนึ่งนาทีครึ่ง = ผิดปกติ
+  }
+
+  /** ข้อมูลค้างหรือยัง และค้างมานานเท่าไร */
+  freshness(now = Date.now()) {
+    if (this.stopped || !this.lastDataAt) return { stale: false, ageMs: 0, unknown: true };
+    const ageMs = now - this.lastDataAt;
+    return { stale: ageMs > this.staleAfterMs, ageMs, limitMs: this.staleAfterMs };
   }
 
   /** จังหวะดึงราคาสด ขึ้นกับข้อจำกัดของผู้ให้บริการ */
@@ -203,6 +226,7 @@ export class MarketFeed {
         const msg = JSON.parse(ev.data);
         const k = msg.k;
         if (!k) return;
+        this.lastDataAt = Date.now();
         this.onCandle({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, closed: !!k.x });
       } catch (e) { /* ข้ามข้อความที่ parse ไม่ได้ */ }
     };
@@ -225,6 +249,7 @@ export class MarketFeed {
         rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
         const last = rows[rows.length - 1];
         if (last) this.onCandle({ ...last, closed: false });
+        this.lastDataAt = Date.now();
         this.onStatus({ state: 'live',
           message: `XAU/USD จาก Twelve Data · อัปเดตทุก ${Math.round(this.livePollMs / 60000)} นาที `
             + `(แผนฟรีจำกัดโควตา) · ใช้ไปแล้ว ${this.requestCount} คำขอ` });
@@ -286,6 +311,7 @@ export class MarketFeed {
     if (!st) return;
     this.demoTimer = setInterval(() => {
       const now = Date.now();
+      this.lastDataAt = now;
       const bucket = Math.floor(now / st.step) * st.step;
       // ความผันผวนต่อ tick ต้องลดตามรากที่สองของเวลา ไม่งั้นเต้นถี่ขึ้น = ผันผวนเกินจริง
       const move = gauss() * st.price * st.vol * 0.35 * Math.sqrt(DEMO_TICK_MS / 900);

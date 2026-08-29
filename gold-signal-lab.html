@@ -368,6 +368,16 @@ body.simple .narr p { font-size: 13.8px; }
   padding: 14px 16px; margin: 0 0 22px; }
 .tv-cta a.btn { display: inline-block; margin-top: 8px; text-decoration: none; }
 
+/* แถบเตือนราคาค้าง — ต้องเห็นก่อนทุกอย่าง เพราะถ้าพลาดแล้วเข้าไม้ตามราคาผิด */
+.stale-bar {
+  position: sticky; top: 0; z-index: 60;
+  background: #ef4444; color: #fff;
+  padding: 9px 14px; font-size: 13px; font-weight: 600; text-align: center;
+  animation: stalePulse 2s ease-in-out infinite;
+}
+@keyframes stalePulse { 0%,100% { background: #ef4444; } 50% { background: #c02626; } }
+@media (prefers-reduced-motion: reduce) { .stale-bar { animation: none; } }
+
 /* ══ มือถือ ══════════════════════════════════════════════
    บนจอเล็ก คำตอบสำคัญกว่ารูป — ต้องเห็น "ตอนนี้ควรทำอะไร"
    ทันทีที่เปิด ไม่ใช่ต้องเลื่อนผ่านกราฟลงไปครึ่งหน้าจอ      */
@@ -605,6 +615,7 @@ body.simple .narr p { font-size: 13.8px; }
   </div>
 </header>
 
+<div id="staleBar" class="stale-bar" hidden></div>
 <main>
   <section class="chart-area">
     <div class="chart-toolbar">
@@ -3455,6 +3466,29 @@ class MarketFeed {
     this.stopped = true;
     this.demoState = null;
     this.requestCount = 0;   // นับคำขอที่ยิงออกไป เพื่อให้ผู้ใช้เห็นว่าใช้โควตาไปเท่าไร
+    this.lastDataAt = 0;     // เวลาที่ได้ข้อมูลล่าสุด — ใช้จับว่าราคาค้างหรือยัง
+  }
+
+  /*
+   * ข้อมูลค้างนานแค่ไหนถึงเรียกว่า "เชื่อไม่ได้แล้ว"
+   *
+   * ทำไมต้องมี: WebSocket ค้างแบบ "เปิดอยู่แต่ไม่ส่งอะไรมา" เกิดบ่อยมากบนมือถือ
+   * (จอดับ, สลับ WiFi เป็นเน็ตมือถือ, เข้าลิฟต์) ในกรณีนี้ onclose ไม่ยิง
+   * ระบบจึงไม่รู้ตัวว่าหลุด แล้วโชว์ราคาเก่าค้างพร้อมสัญญาณเข้าซื้อเหมือนปกติ
+   * ซึ่งอันตรายกว่าการไม่มีสัญญาณเลย
+   */
+  get staleAfterMs() {
+    if (this.source === 'demo') return 15000;
+    // โหมดดึงเป็นรอบ: ต้องเผื่อให้เกินรอบดึงพอสมควร ไม่งั้นจะเตือนผิดทุกครั้งที่รอรอบถัดไป
+    if (this.source === 'twelvedata') return this.livePollMs * 2.5;
+    return 90000;   // WebSocket ควรมีข้อมูลเข้ามาตลอด เงียบเกินหนึ่งนาทีครึ่ง = ผิดปกติ
+  }
+
+  /** ข้อมูลค้างหรือยัง และค้างมานานเท่าไร */
+  freshness(now = Date.now()) {
+    if (this.stopped || !this.lastDataAt) return { stale: false, ageMs: 0, unknown: true };
+    const ageMs = now - this.lastDataAt;
+    return { stale: ageMs > this.staleAfterMs, ageMs, limitMs: this.staleAfterMs };
   }
 
   /** จังหวะดึงราคาสด ขึ้นกับข้อจำกัดของผู้ให้บริการ */
@@ -3579,6 +3613,7 @@ class MarketFeed {
         const msg = JSON.parse(ev.data);
         const k = msg.k;
         if (!k) return;
+        this.lastDataAt = Date.now();
         this.onCandle({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, closed: !!k.x });
       } catch (e) { /* ข้ามข้อความที่ parse ไม่ได้ */ }
     };
@@ -3601,6 +3636,7 @@ class MarketFeed {
         rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
         const last = rows[rows.length - 1];
         if (last) this.onCandle({ ...last, closed: false });
+        this.lastDataAt = Date.now();
         this.onStatus({ state: 'live',
           message: `XAU/USD จาก Twelve Data · อัปเดตทุก ${Math.round(this.livePollMs / 60000)} นาที `
             + `(แผนฟรีจำกัดโควตา) · ใช้ไปแล้ว ${this.requestCount} คำขอ` });
@@ -3662,6 +3698,7 @@ class MarketFeed {
     if (!st) return;
     this.demoTimer = setInterval(() => {
       const now = Date.now();
+      this.lastDataAt = now;
       const bucket = Math.floor(now / st.step) * st.step;
       // ความผันผวนต่อ tick ต้องลดตามรากที่สองของเวลา ไม่งั้นเต้นถี่ขึ้น = ผันผวนเกินจริง
       const move = gauss() * st.price * st.vol * 0.35 * Math.sqrt(DEMO_TICK_MS / 900);
@@ -4852,6 +4889,23 @@ async function init() {
   renderContextTab();
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
+  setInterval(checkFreshness, 5000);
+  /*
+   * ที่จับสำหรับตรวจสอบและทดสอบ
+   *
+   * เหตุผลที่ยอมเปิดออกมา: ตัวจับ "ราคาค้าง" เป็นกลไกความปลอดภัย ถ้าทดสอบไม่ได้
+   * มันจะพังเงียบ ๆ วันหนึ่งโดยไม่มีใครรู้ ซึ่งแย่กว่าการไม่มีเลย
+   * ไม่ได้เปิดอะไรใหม่ให้ใคร — API key อยู่ใน localStorage ซึ่งเปิดคอนโซลก็เห็นอยู่แล้ว
+   *
+   * ผู้ใช้ทั่วไปใช้ตรวจอาการได้: เปิดคอนโซลแล้วพิมพ์ __gsl.feed.freshness()
+   */
+  window.__gsl = { feed, state, settings, checkFreshness, analyze };
+  /*
+   * มือถือพักจอแล้วกลับมา เป็นจังหวะที่ข้อมูลค้างบ่อยที่สุด
+   * ต้องเช็กทันทีที่กลับมาดู ไม่ใช่รอรอบถัดไปอีก 5 วินาที
+   */
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkFreshness(true); });
+  window.addEventListener('online', () => checkFreshness(true));
   await reload();
 
   // คนเปิดครั้งแรกยังไม่รู้ว่าต้องมองตรงไหน พาชมให้รอบหนึ่งก่อน
@@ -5121,6 +5175,19 @@ function analyze(candleClosed, allowAlert = true) {
   // ตัวกรองความปลอดภัย
   const blocks = [];
   const sess = sessionInfo(new Date());
+  /*
+   * ข้อมูลค้าง = ห้ามให้สัญญาณ ต้องมาก่อนตัวกรองอื่นทั้งหมด
+   *
+   * ถ้าราคาหยุดอัปเดตแล้วระบบยังบอก "เข้าซื้อ" ต่อไป นั่นอันตรายกว่าการไม่มีสัญญาณเลย
+   * เพราะผู้ใช้จะเข้าไม้ตามราคาที่ไม่มีอยู่จริงแล้ว
+   */
+  const fresh = feed.freshness();
+  if (fresh.stale) {
+    blocks.push(`ราคาหยุดอัปเดตมา ${Math.round(fresh.ageMs / 1000)} วินาที (ปกติไม่ควรเกิน `
+      + `${Math.round(fresh.limitMs / 1000)} วินาที) — ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบันแล้ว `
+      + 'ระบบจึงระงับสัญญาณไว้จนกว่าข้อมูลจะกลับมา');
+  }
+
   const risk = riskWindow(new Date(), state.events, 30);
   if (settings.newsFilter && risk.blocked) {
     blocks.push(`อยู่ในช่วง ±30 นาทีรอบข่าว: ${risk.active.map((e) => e.title).join(', ')} — สเปรดถ่างและราคาสวิงสองทาง สถิติของสัญญาณเทคนิคใช้ไม่ได้ในช่วงนี้`);
@@ -6246,6 +6313,41 @@ function toast(entry) {
   el.innerHTML = `<b>${entry.title}</b><p>${(entry.body || '').replace(/\n/g, '<br>')}</p>`;
   $('toastWrap').appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; setTimeout(() => el.remove(), 400); }, 9000);
+}
+
+/**
+ * เฝ้าดูว่าราคายังไหลอยู่หรือค้างไปแล้ว
+ *
+ * ไม่ใช่แค่เตือน — ถ้าค้างจริงต้องพยายามต่อใหม่ให้ด้วย
+ * เพราะสาเหตุที่พบบ่อยที่สุด (WebSocket ครึ่งใบ) แก้ได้ด้วยการต่อใหม่เท่านั้น
+ */
+let staleSince = 0;
+function checkFreshness(force = false) {
+  const f = feed.freshness();
+  const bar = $('staleBar');
+  if (!bar) return;
+  if (!f.stale) {
+    if (staleSince) {   // เพิ่งกลับมาปกติ — คำนวณใหม่ทันที ไม่ต้องรอแท่งถัดไป
+      staleSince = 0;
+      bar.hidden = true;
+      analyze(false, false);
+    }
+    if (force && f.unknown) return;
+    return;
+  }
+  const secs = Math.round(f.ageMs / 1000);
+  bar.hidden = false;
+  bar.textContent = `⚠ ราคาหยุดอัปเดตมา ${secs > 90 ? Math.round(secs / 60) + ' นาที' : secs + ' วินาที'} — `
+    + 'ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบัน ระบบระงับสัญญาณไว้แล้ว กำลังต่อใหม่…';
+  if (!staleSince) {
+    staleSince = Date.now();
+    analyze(false, false);   // ให้ตัวกรอง "ข้อมูลค้าง" มีผลทันที
+  }
+  // ต่อใหม่ทุก 20 วินาทีระหว่างที่ยังค้าง แต่ไม่ถี่กว่านั้น จะได้ไม่กระหน่ำเซิร์ฟเวอร์
+  if (force || Date.now() - staleSince > 20000) {
+    staleSince = Date.now();
+    reload();
+  }
 }
 
 function setStatus(stateName, msg) {

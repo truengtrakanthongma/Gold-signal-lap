@@ -106,6 +106,23 @@ async function init() {
   renderContextTab();
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
+  setInterval(checkFreshness, 5000);
+  /*
+   * ที่จับสำหรับตรวจสอบและทดสอบ
+   *
+   * เหตุผลที่ยอมเปิดออกมา: ตัวจับ "ราคาค้าง" เป็นกลไกความปลอดภัย ถ้าทดสอบไม่ได้
+   * มันจะพังเงียบ ๆ วันหนึ่งโดยไม่มีใครรู้ ซึ่งแย่กว่าการไม่มีเลย
+   * ไม่ได้เปิดอะไรใหม่ให้ใคร — API key อยู่ใน localStorage ซึ่งเปิดคอนโซลก็เห็นอยู่แล้ว
+   *
+   * ผู้ใช้ทั่วไปใช้ตรวจอาการได้: เปิดคอนโซลแล้วพิมพ์ __gsl.feed.freshness()
+   */
+  window.__gsl = { feed, state, settings, checkFreshness, analyze };
+  /*
+   * มือถือพักจอแล้วกลับมา เป็นจังหวะที่ข้อมูลค้างบ่อยที่สุด
+   * ต้องเช็กทันทีที่กลับมาดู ไม่ใช่รอรอบถัดไปอีก 5 วินาที
+   */
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkFreshness(true); });
+  window.addEventListener('online', () => checkFreshness(true));
   await reload();
 
   // คนเปิดครั้งแรกยังไม่รู้ว่าต้องมองตรงไหน พาชมให้รอบหนึ่งก่อน
@@ -375,6 +392,19 @@ function analyze(candleClosed, allowAlert = true) {
   // ตัวกรองความปลอดภัย
   const blocks = [];
   const sess = sessionInfo(new Date());
+  /*
+   * ข้อมูลค้าง = ห้ามให้สัญญาณ ต้องมาก่อนตัวกรองอื่นทั้งหมด
+   *
+   * ถ้าราคาหยุดอัปเดตแล้วระบบยังบอก "เข้าซื้อ" ต่อไป นั่นอันตรายกว่าการไม่มีสัญญาณเลย
+   * เพราะผู้ใช้จะเข้าไม้ตามราคาที่ไม่มีอยู่จริงแล้ว
+   */
+  const fresh = feed.freshness();
+  if (fresh.stale) {
+    blocks.push(`ราคาหยุดอัปเดตมา ${Math.round(fresh.ageMs / 1000)} วินาที (ปกติไม่ควรเกิน `
+      + `${Math.round(fresh.limitMs / 1000)} วินาที) — ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบันแล้ว `
+      + 'ระบบจึงระงับสัญญาณไว้จนกว่าข้อมูลจะกลับมา');
+  }
+
   const risk = riskWindow(new Date(), state.events, 30);
   if (settings.newsFilter && risk.blocked) {
     blocks.push(`อยู่ในช่วง ±30 นาทีรอบข่าว: ${risk.active.map((e) => e.title).join(', ')} — สเปรดถ่างและราคาสวิงสองทาง สถิติของสัญญาณเทคนิคใช้ไม่ได้ในช่วงนี้`);
@@ -1500,6 +1530,41 @@ function toast(entry) {
   el.innerHTML = `<b>${entry.title}</b><p>${(entry.body || '').replace(/\n/g, '<br>')}</p>`;
   $('toastWrap').appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; setTimeout(() => el.remove(), 400); }, 9000);
+}
+
+/**
+ * เฝ้าดูว่าราคายังไหลอยู่หรือค้างไปแล้ว
+ *
+ * ไม่ใช่แค่เตือน — ถ้าค้างจริงต้องพยายามต่อใหม่ให้ด้วย
+ * เพราะสาเหตุที่พบบ่อยที่สุด (WebSocket ครึ่งใบ) แก้ได้ด้วยการต่อใหม่เท่านั้น
+ */
+let staleSince = 0;
+function checkFreshness(force = false) {
+  const f = feed.freshness();
+  const bar = $('staleBar');
+  if (!bar) return;
+  if (!f.stale) {
+    if (staleSince) {   // เพิ่งกลับมาปกติ — คำนวณใหม่ทันที ไม่ต้องรอแท่งถัดไป
+      staleSince = 0;
+      bar.hidden = true;
+      analyze(false, false);
+    }
+    if (force && f.unknown) return;
+    return;
+  }
+  const secs = Math.round(f.ageMs / 1000);
+  bar.hidden = false;
+  bar.textContent = `⚠ ราคาหยุดอัปเดตมา ${secs > 90 ? Math.round(secs / 60) + ' นาที' : secs + ' วินาที'} — `
+    + 'ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบัน ระบบระงับสัญญาณไว้แล้ว กำลังต่อใหม่…';
+  if (!staleSince) {
+    staleSince = Date.now();
+    analyze(false, false);   // ให้ตัวกรอง "ข้อมูลค้าง" มีผลทันที
+  }
+  // ต่อใหม่ทุก 20 วินาทีระหว่างที่ยังค้าง แต่ไม่ถี่กว่านั้น จะได้ไม่กระหน่ำเซิร์ฟเวอร์
+  if (force || Date.now() - staleSince > 20000) {
+    staleSince = Date.now();
+    reload();
+  }
 }
 
 function setStatus(stateName, msg) {
