@@ -890,6 +890,36 @@ section('13) ปรับกลยุทธ์เอง — ต้องจู�
       !r.ok || r.diff === null || r.diff < 0.08, r.ok ? `ได้ ${r.diff.toFixed(3)}R` : r.reason);
   }
 
+  /* 13.3ข ตัวควบคุมที่สำคัญกว่า: ข้อมูลที่ "เหมือนตลาดจริง"
+
+     บทเรียน: เครื่องปั่นข้อมูลชุดแรกเปลี่ยน regime เป็นขั้นทุก ~500 แท่ง
+     ซึ่งเอื้อกับการจูนใหม่ทุกช่วงเกินจริง (วัดได้ +0.103 R/ไม้ t=5.12)
+     พอเปลี่ยนเป็นข้อมูลที่ความผันผวนเกาะกลุ่ม (GARCH) หางอ้วน และเทรนด์
+     ค่อย ๆ เปลี่ยนแบบต่อเนื่อง ประโยชน์หายไปหมด (-0.027 R/ไม้ t=-1.64)
+
+     ตลาดจริงไม่ประกาศว่ากำลังเปลี่ยน regime เทสต์นี้จึงกันไม่ให้กลับไปอ้าง
+     ตัวเลขที่มาจากข้อมูลจำลองที่เข้าข้างตัวเองอีก */
+  {
+    const rnd = mulberry(2027);
+    const gauss = () => { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    const fatTail = () => { let q = 0; for (let i = 0; i < 4; i++) { const g = gauss(); q += g * g; }
+      return gauss() / Math.sqrt(q / 4); };
+    const bars = []; let p = 3300, sigma2 = 4, drift = 0;
+    for (let i = 0; i < 4000; i++) {
+      drift += -0.02 * drift + 0.035 * gauss();
+      const shock = Math.sqrt(sigma2) * fatTail() * 0.8;
+      sigma2 = 0.15 + 0.08 * shock * shock + 0.90 * sigma2;
+      const o = p, c = p + shock + drift, wick = Math.sqrt(sigma2) * 0.35;
+      bars.push({ t: 17e11 + i * 9e5, o, h: Math.max(o, c) + rnd() * wick,
+        l: Math.min(o, c) - rnd() * wick, c, v: 100 + rnd() * 400, closed: true });
+      p = c;
+    }
+    const r = rollingWalkForward(buildContext(bars, DEFAULT_CFG), { folds: 4 });
+    ok('ข้อมูลเสมือนตลาดจริง → ไม่อ้างว่าการปรับตัวเองช่วยได้มาก',
+      !r.ok || r.diff === null || r.diff < 0.08, r.ok ? `ได้ ${r.diff.toFixed(3)}R` : r.reason);
+  }
+
   // 13.4 ข้อมูลน้อย → บอกตรง ๆ ว่าทำไม่ได้ ไม่ใช่คืนตัวเลขมั่ว
   {
     const tiny = rollingWalkForward(buildContext(makeCandles(900, 12), DEFAULT_CFG), { folds: 4 });
