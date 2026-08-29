@@ -168,6 +168,25 @@
       <div><h3>เส้นทุน (หน่วย R)</h3><canvas id="equityCanvas" height="150"></canvas></div>
       <div><h3>ปัจจัยไหนทำนายได้จริง</h3><div id="btFactors"></div></div>
     </div>
+    <details class="learn-box" id="adaptBoxWrap" open>
+      <summary>🎓 ให้ระบบศึกษาตลาดนี้เอง แล้วปรับกลยุทธ์ตามที่เรียนรู้</summary>
+      <p class="tiny">
+        ค่าตั้งต้นทุกตัว (คะแนนขั้นต่ำ 35, จุดตัดขาดทุน 1.5 เท่า ATR, เป้า 2 เท่า) เป็นค่ากลาง ๆ ที่ตั้งไว้ล่วงหน้า
+        ไม่ได้ดูตลาดที่คุณโหลดมาเลย ปุ่มนี้จะให้ระบบ<b>ศึกษาตลาดนี้เอง</b>:
+        แบ่งข้อมูลเป็นหลายช่วงตามเวลา แล้ว<b>จูนใหม่ทุกช่วงโดยดูได้แค่อดีตของช่วงนั้น</b>
+        เอาผลทุกช่วงมาต่อกันเป็นผลจริงของ "ระบบที่ปรับตัวเอง"
+        แล้ว<b>เทียบกับค่าคงที่บนช่วงเดียวกัน</b> — จึงตอบได้ว่าการปรับตัวเองช่วยจริงหรือไม่
+      </p>
+      <div class="bt-controls">
+        <button id="runAdapt" class="btn primary">▶ ให้ระบบศึกษาตลาดแล้วปรับกลยุทธ์เอง</button>
+        <button id="applyAdapt" class="btn" hidden>✓ ใช้ค่าที่ระบบเรียนรู้มา</button>
+        <button id="resetAdapt" class="btn" hidden>↺ กลับไปใช้ค่าตั้งต้น</button>
+        <label class="chk"><input type="checkbox" id="togAnchored" checked> จำอดีตทั้งหมด (ไม่ติ๊ก = ลืมอดีตไกล ๆ)</label>
+        <span id="adaptStatus" class="tiny"></span>
+      </div>
+      <div id="adaptBox"></div>
+    </details>
+
     <details class="learn-box">
       <summary>🧪 ตรวจสอบน้ำหนักปัจจัย — น้ำหนักที่ตั้งไว้ถูกจริงไหม?</summary>
       <p class="tiny">

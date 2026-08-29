@@ -10,7 +10,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const ORDER = ['indicators', 'patterns', 'levels', 'macro', 'signals', 'narrate', 'backtest', 'chart', 'alerts', 'feed', 'tour', 'glossary', 'instrument', 'learn', 'app'];
+const ORDER = ['indicators', 'patterns', 'levels', 'macro', 'signals', 'narrate', 'backtest', 'chart', 'alerts', 'feed', 'tour', 'glossary', 'instrument', 'learn', 'adapt', 'app'];
 const IMPORT_RE = /^import\s+(?:\*\s+as\s+(\w+)|\{([^}]+)\})\s+from\s+['"]\.\/(\w+)\.js['"];?[ \t]*$/gm;
 const EXPORT_RE = /^export\s+(async\s+function|function|const|let|class)\s+(\w+)/gm;
 

@@ -6,6 +6,7 @@ import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS } from './signals.js';
 import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
 import { learnAndValidate } from './learn.js';
+import { autoTune, explainAdaptation } from './adapt.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -50,6 +51,7 @@ const settings = {
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
   smartSession: true, historyBars: 3000,
   learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
+  adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
 };
 
 const feed = new MarketFeed();
@@ -76,6 +78,16 @@ function cfg() {
   return base;
 }
 
+/**
+ * เป้าหมายที่ใช้จริง
+ * ค่าที่ระบบศึกษาตลาดแล้วจูนเองมาก่อน เพราะมันถูกวัดผลกับหลายช่วงเวลา
+ * ส่วน optimizeExits วัดกับการแบ่งครั้งเดียว จึงเป็นตัวสำรอง
+ */
+function activeTargetR() {
+  if (settings.adaptParams && Number.isFinite(settings.adaptParams.targetR)) return settings.adaptParams.targetR;
+  return state.opt && state.opt.ok ? state.opt.best.targetR : null;
+}
+
 // ── เริ่มระบบ ────────────────────────────────────────────────────────────
 async function init() {
   loadSettings();
@@ -90,6 +102,7 @@ async function init() {
   renderAlertUI();
   renderWeights();
   renderLearn();   // ถ้าเคยยืนยันน้ำหนักชุดใหม่ไว้ ต้องบอกให้เห็นตั้งแต่เปิดหน้า
+  renderAdapt();
   renderContextTab();
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
@@ -185,6 +198,9 @@ function bindEvents() {
   }));
 
   $('runBt').addEventListener('click', () => doBacktest());
+  $('runAdapt').addEventListener('click', () => doAdapt());
+  $('applyAdapt').addEventListener('click', () => applyAdapt(state.adapt && state.adapt.params));
+  $('resetAdapt').addEventListener('click', () => applyAdapt(null));
   $('runLearn').addEventListener('click', () => doLearn());
   $('applyLearn').addEventListener('click', () => applyLearned(state.learn && state.learn.weights));
   $('resetLearn').addEventListener('click', () => applyLearned(null));
@@ -389,8 +405,8 @@ function analyze(candleClosed, allowAlert = true) {
   state.setup = state.scored.ready && Math.abs(score) >= settings.threshold
     ? buildSetup(state.ctx, last, { ...state.scored, side: Math.sign(score) }, {
         account: settings.account, riskPct: settings.riskPct, entryPrice: livePrice, side: Math.sign(score),
-        targetR: state.opt && state.opt.ok ? state.opt.best.targetR : null,
-        slAtrMult: state.opt && state.opt.ok ? state.opt.best.slAtrMult : null,
+        targetR: activeTargetR(),
+        slAtrMult: settings.slAtr,
       })
     : null;
 
@@ -975,6 +991,140 @@ function renderWalkForward() {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * ให้ระบบศึกษาตลาดที่โหลดมา แล้วจูนกลยุทธ์เอง
+ *
+ * งานหนักพอจะทำให้หน้าจอค้างได้ (จำลองการเทรดหลายร้อยรอบ)
+ * จึงหน่วงหนึ่งเฟรมให้เบราว์เซอร์วาดข้อความ "กำลังศึกษา" ก่อน
+ */
+function doAdapt() {
+  if (!state.ctx || state.candles.length < 1200) {
+    $('adaptStatus').textContent = `ต้องมีข้อมูลอย่างน้อย ~1,200 แท่งถึงจะแบ่งหลายช่วงได้ (ตอนนี้ ${state.candles.length}) — `
+      + 'ไปที่แท็บตั้งค่าแล้วเพิ่มจำนวนแท่งย้อนหลัง หรือเปลี่ยนไปกรอบเวลาที่เล็กลง';
+    return;
+  }
+  $('adaptStatus').textContent = 'กำลังศึกษาตลาด… จูนใหม่ทีละช่วงแล้วสอบทุกช่วง ใช้เวลาสักครู่';
+  $('applyAdapt').hidden = true;
+  setTimeout(() => {
+    const t0 = performance.now();
+    state.adapt = autoTune(state.ctx, {
+      folds: 4,
+      anchored: $('togAnchored').checked,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+    });
+    $('adaptStatus').textContent = `ศึกษาเสร็จใน ${((performance.now() - t0) / 1000).toFixed(1)} วินาที`;
+    renderAdapt();
+  }, 30);
+}
+
+function applyAdapt(params) {
+  if (params) {
+    // จำค่าที่ผู้ใช้ตั้งไว้ก่อนหน้า เพื่อให้กด "กลับไปใช้ค่าตั้งต้น" แล้วได้ของเดิมจริง ๆ
+    // ไม่ใช่ค่ากลางที่ผู้ใช้ไม่เคยเลือก
+    if (!settings.adaptPrev) settings.adaptPrev = { threshold: settings.threshold, slAtr: settings.slAtr };
+    settings.threshold = params.threshold;
+    settings.slAtr = params.slAtrMult;
+    settings.adaptParams = { threshold: params.threshold, slAtrMult: params.slAtrMult, targetR: params.targetR };
+  } else {
+    const prev = settings.adaptPrev;
+    if (prev) { settings.threshold = prev.threshold; settings.slAtr = prev.slAtr; }
+    settings.adaptParams = null;
+    settings.adaptPrev = null;
+  }
+  // ช่องกรอกต้องขยับตาม ไม่งั้นผู้ใช้เห็นเลขเก่าแต่ระบบใช้เลขใหม่
+  $('thresholdInput').value = settings.threshold;
+  $('setThreshold').value = settings.threshold;
+  $('setSlAtr').value = settings.slAtr;
+  saveSettings();
+  analyze(false, false);
+  doBacktest();
+  renderAdapt();
+}
+
+function renderAdapt() {
+  const el = $('adaptBox');
+  const A = state.adapt;
+  const using = !!settings.adaptParams;
+  $('resetAdapt').hidden = !using;
+  if (!A) {
+    el.innerHTML = using
+      ? `<div class="wf-card ok"><div class="wf-verdict">กำลังใช้ค่าที่ระบบเรียนรู้มา</div>
+         <div class="tiny" style="margin:0">คะแนนขั้นต่ำ ${settings.adaptParams.threshold} ·
+         จุดตัดขาดทุน ${settings.adaptParams.slAtrMult} เท่าของ ATR · เป้า ${settings.adaptParams.targetR} เท่าของความเสี่ยง</div></div>`
+      : '';
+    return;
+  }
+  if (!A.ok || !A.rwf.ok) {
+    $('applyAdapt').hidden = true;
+    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังศึกษาตลาดไม่ได้</div>
+      <div class="tiny" style="margin:0">${A.reason || A.rwf.reason}</div></div>`;
+    return;
+  }
+  const rwf = A.rwf;
+  // ให้ใช้ได้เมื่อการปรับตัวเองไม่ได้แย่ลง และสิ่งที่เรียนรู้ยังนิ่งพอ
+  const usable = rwf.verdict.level !== 'bad' && rwf.stability.level !== 'unstable';
+  $('applyAdapt').hidden = !usable || using;
+  $('applyAdapt').className = rwf.verdict.level === 'good' ? 'btn primary' : 'btn';
+
+  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
+  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
+  const d = (ts) => (ts ? new Date(ts).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '—');
+  const good = rwf.folds.filter((f) => f.ok);
+
+  const foldRows = good.map((f) => `<tr>
+      <td>${f.fold}</td>
+      <td class="tiny">${d(f.t0)} – ${d(f.t1)}</td>
+      <td class="num">${f.params.threshold}</td>
+      <td class="num">${f.params.slAtrMult}</td>
+      <td class="num">${f.params.targetR}</td>
+      <td class="num">${f.adapt.n}</td>
+      <td class="num" style="color:${f.adapt.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${r(f.adapt.expectancy)}</td>
+      <td class="num" style="color:var(--muted)">${r(f.fixed.expectancy)}</td>
+    </tr>`).join('');
+
+  const stabLabel = { stable: 'นิ่ง ✓', mixed: 'แกว่งปานกลาง', unstable: 'แกว่งมาก ✗', unknown: 'บอกไม่ได้' }[rwf.stability.level];
+  const stabColor = { stable: 'var(--up)', mixed: 'var(--gold)', unstable: 'var(--down)', unknown: 'var(--muted)' }[rwf.stability.level];
+
+  const story = explainAdaptation(A).map((sec) => `
+    <div class="adapt-sec">
+      <h4>${sec.title}</h4>
+      <p>${sec.body.replace(/\n\n/g, '<br><br>')}</p>
+    </div>`).join('');
+
+  el.innerHTML = `
+    <div class="wf-card ${rwf.verdict.level === 'good' ? 'good' : rwf.verdict.level === 'bad' ? 'bad' : 'ok'}">
+      <div class="wf-verdict">${rwf.verdict.text}</div>
+      <div class="wf-compare">
+        <div class="wf-side ${rwf.verdict.level === 'good' ? 'trusted' : ''}">
+          <h4>ระบบปรับตัวเอง (ทุกช่วงจูนจากอดีตล้วน)</h4>
+          <div class="big" style="color:${rwf.adapt.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${r(rwf.adapt.expectancy)}</div>
+          <div class="sub">${rwf.adapt.n} ไม้ · ชนะ ${pct(rwf.adapt.winRate)} · รวม ${r(rwf.adapt.totalR)}</div>
+        </div>
+        <div class="wf-side">
+          <h4>ค่าคงที่ (ช่วงเวลาเดียวกันเป๊ะ)</h4>
+          <div class="big">${r(rwf.fixed.expectancy)}</div>
+          <div class="sub">${rwf.fixed.n} ไม้ · ชนะ ${pct(rwf.fixed.winRate)} · รวม ${r(rwf.fixed.totalR)}</div>
+        </div>
+        <div class="wf-side">
+          <h4>สิ่งที่เรียนรู้นิ่งแค่ไหน</h4>
+          <div class="big" style="color:${stabColor}">${stabLabel}</div>
+          <div class="sub">ค่าที่จูนได้ต่างกันระหว่างช่วงเฉลี่ย ${rwf.stability.avgCv === null ? '—' : (rwf.stability.avgCv * 100).toFixed(0) + '%'}</div>
+        </div>
+      </div>
+    </div>
+
+    <table class="learn-table"><thead><tr>
+      <th>ช่วงสอบ</th><th>ช่วงเวลา</th><th>คะแนนขั้นต่ำ</th><th>SL (×ATR)</th><th>เป้า (×เสี่ยง)</th>
+      <th>ไม้</th><th>ผล (ปรับเอง)</th><th>ผล (คงที่)</th>
+    </tr></thead><tbody>${foldRows}</tbody></table>
+    <p class="tiny">
+      ทุกแถวคือช่วงที่ระบบ<b>ไม่เคยเห็นตอนจูน</b> — ค่าในคอลัมน์กลางจูนจากข้อมูลก่อนหน้าช่วงนั้นเท่านั้น
+      และหยุดรับไม้ก่อนถึงเส้นแบ่ง ${settings.maxHold} แท่ง เพื่อให้ไม้ทุกไม้ที่ใช้จูนปิดก่อนเส้นแบ่งแน่นอน
+    </p>
+
+    <div class="adapt-story">${story}</div>`;
 }
 
 /**

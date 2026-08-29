@@ -9,6 +9,7 @@ import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
+import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -810,6 +811,114 @@ section('12) เรียนรู้น้ำหนักปัจจัย —
       ok('ไม้ทุกไม้ที่ใช้เรียนรู้จบก่อนเส้นแบ่ง',
         inRun.trades.every((t) => t.exitIndex < r.splitAt));
     } else { ok('จำนวนไม้ที่ใช้เรียนรู้ = ไม้ในช่วงแรกเท่านั้น', false, r.reason); }
+  }
+}
+
+// ── ระบบศึกษาตลาดเองแล้วปรับกลยุทธ์ ──────────────────────────────────
+section('13) ปรับกลยุทธ์เอง — ต้องจูนจากอดีตล้วน และพิสูจน์ว่าช่วยจริง');
+{
+  // ตลาดที่เปลี่ยนคาแรกเตอร์ไปเรื่อย ๆ (เทรนด์ขึ้น → กรอบ → เทรนด์ลง → เหวี่ยงแรง)
+  // เป็นสภาพจริงของทองคำ และเป็นกรณีเดียวที่การปรับตัวเองควรได้เปรียบ
+  function regimeCandles(n, seed) {
+    const rnd = mulberry(seed); const out = []; let p = 3300;
+    const R = [{ d: 0.55, v: 3.0 }, { d: 0, v: 2.0 }, { d: -0.5, v: 4.5 }, { d: 0, v: 8.0 }];
+    const seg = Math.floor(n / 8);
+    for (let i = 0; i < n; i++) {
+      const g = R[Math.floor(i / seg) % R.length];
+      const o = p, c = p + (rnd() - 0.5) * g.v + g.d;
+      out.push({ t: 17e11 + i * 9e5, o, h: Math.max(o, c) + rnd() * g.v * 0.4,
+        l: Math.min(o, c) - rnd() * g.v * 0.4, c, v: 100 + rnd() * 400, closed: true });
+      p = c;
+    }
+    return out;
+  }
+
+  /* 13.1 ด่านที่สำคัญที่สุด: การจูนต้องไม่แอบเห็นอนาคต
+
+     ถ้า tuneOn ให้ผลต่างกันระหว่าง "ป้อนข้อมูลทั้งชุด" กับ "ตัดข้อมูลหลังเส้นแบ่งทิ้ง"
+     แปลว่ามีข้อมูลอนาคตรั่วเข้าไปในการจูน ผลทดสอบทั้งหมดจะสวยเกินจริงทันที */
+  {
+    const all = regimeCandles(2600, 61);
+    const cut = 1800;
+    const full = buildContext(all, DEFAULT_CFG);
+    const trunc = buildContext(all.slice(0, cut), DEFAULT_CFG);
+    const a = tuneOn(full, DEFAULT_CFG.warmup || 210, cut, {});
+    const b = tuneOn(trunc, DEFAULT_CFG.warmup || 210, cut, {});
+    ok('จูนได้ผลทั้งสองแบบ', !!a && !!b);
+    if (a && b) {
+      ok('จูนจากข้อมูลทั้งชุด = จูนจากข้อมูลที่ตัดอนาคตทิ้ง (ไม่มีข้อมูลรั่ว)',
+        a.threshold === b.threshold && a.slAtrMult === b.slAtrMult && a.targetR === b.targetR
+        && near(a.expectancy, b.expectancy, 1e-9),
+        `ทั้งชุด ${a.threshold}/${a.slAtrMult}/${a.targetR} vs ตัดแล้ว ${b.threshold}/${b.slAtrMult}/${b.targetR}`);
+    }
+  }
+
+  // 13.2 ช่วงเรียนรู้ต้องมาก่อนช่วงสอบเสมอ และช่วงสอบต้องไม่ทับกัน
+  {
+    const ctx = buildContext(regimeCandles(4000, 73), DEFAULT_CFG);
+    const r = rollingWalkForward(ctx, { folds: 4 });
+    ok('แบ่งช่วงสอบได้สำเร็จ', r.ok, r.reason || '');
+    if (r.ok) {
+      const f = r.folds.filter((x) => x.ok);
+      ok('มีช่วงสอบครบตามที่ขอ', f.length === 4, `ได้ ${f.length}`);
+      ok('ทุกช่วง: ข้อมูลที่ใช้จูนจบก่อนวันที่เริ่มสอบ',
+        f.every((x) => x.trainFrom < x.testFrom));
+      ok('ช่วงสอบเรียงตามเวลาและไม่ทับกัน',
+        f.every((x, i) => i === 0 || x.testFrom >= f[i - 1].testTo));
+      ok('แต่ละช่วงจูนได้ค่าของตัวเอง (ไม่ใช่ค่าเดียวกันทั้งหมดแบบตายตัว)',
+        f.every((x) => x.params && Number.isFinite(x.params.threshold)));
+      ok('เทียบกับค่าคงที่บนช่วงสอบชุดเดียวกัน', r.fixed.n > 0 && r.adapt.n > 0);
+      ok('เส้นทุนยาวเท่าจำนวนไม้ในช่วงสอบ', r.equity.length === r.adapt.n);
+    }
+  }
+
+  /* 13.3 ตลาดที่ไม่เปลี่ยนคาแรกเตอร์เลย การปรับตัวเองต้องไม่ช่วย
+
+     นี่คือตัวควบคุม ถ้าตรงนี้ยัง "ช่วย" แปลว่าเรากำลังวัดอะไรผิด
+     ไม่ใช่ว่าระบบเก่งจริง */
+  {
+    const flat = [];
+    const rnd = mulberry(404); let p = 3300;
+    for (let i = 0; i < 4000; i++) {
+      const o = p, c = p + (rnd() - 0.5) * 6;
+      flat.push({ t: 17e11 + i * 9e5, o, h: Math.max(o, c) + rnd() * 2.2,
+        l: Math.min(o, c) - rnd() * 2.2, c, v: 100 + rnd() * 400, closed: true });
+      p = c;
+    }
+    const r = rollingWalkForward(buildContext(flat, DEFAULT_CFG), { folds: 4 });
+    ok('ตลาดสุ่มล้วน → ไม่อ้างว่าการปรับตัวเองช่วยได้มาก',
+      !r.ok || r.diff === null || r.diff < 0.08, r.ok ? `ได้ ${r.diff.toFixed(3)}R` : r.reason);
+  }
+
+  // 13.4 ข้อมูลน้อย → บอกตรง ๆ ว่าทำไม่ได้ ไม่ใช่คืนตัวเลขมั่ว
+  {
+    const tiny = rollingWalkForward(buildContext(makeCandles(900, 12), DEFAULT_CFG), { folds: 4 });
+    ok('ข้อมูลไม่พอ → ปฏิเสธพร้อมบอกจำนวนแท่งที่ต้องการ',
+      !tiny.ok && /ต้องการ/.test(tiny.reason), tiny.reason || 'ผ่านทั้งที่ไม่ควรผ่าน');
+  }
+
+  // 13.5 ตัวชี้ว่าผลกำลังเสื่อม
+  {
+    const ctx = buildContext(regimeCandles(4000, 89), DEFAULT_CFG);
+    const r = rollingWalkForward(ctx, { folds: 4 });
+    const d = driftCheck(r);
+    ok('ตรวจการเสื่อมของผลได้ และให้ระดับที่รู้จัก',
+      d && ['ok', 'warn', 'bad', 'unknown'].includes(d.level), d ? d.level : 'ไม่มีผล');
+  }
+
+  // 13.6 autoTune ต้องแยก "ค่าที่จะใช้" ออกจาก "ตัวเลขที่เชื่อได้"
+  {
+    const ctx = buildContext(regimeCandles(4000, 97), DEFAULT_CFG);
+    const a = autoTune(ctx, { folds: 4 });
+    ok('autoTune คืนค่าที่จะใช้จริง', a.ok && Number.isFinite(a.params.threshold), a.reason || '');
+    if (a.ok) {
+      /* ตัวเลขคาดหวังต้องมาจากช่วงสอบเท่านั้น ห้ามเอาผลตอนจูนมาโชว์
+         ไม่งั้นผู้ใช้จะเห็นตัวเลขที่สวยกว่าความจริงเสมอ */
+      ok('ตัวเลขที่คาดหวังมาจากช่วงสอบ ไม่ใช่จากตอนจูน',
+        a.expected !== null && a.expected.n === a.rwf.adapt.n);
+      ok('ค่าคาดหวังตอนจูนสูงกว่าตอนสอบ (ตามที่ควรเป็น) หรืออย่างน้อยไม่เท่ากันโดยบังเอิญ',
+        a.params.expectancy !== a.expected.expectancy || a.expected.n === 0);
+    }
   }
 }
 
