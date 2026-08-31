@@ -7,7 +7,7 @@
  */
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
-import { runBacktest } from '../js/backtest.js';
+import { runBacktest, optimizeExits } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
@@ -1178,6 +1178,70 @@ section('17) ระบบออกแบบ — ความสม่ำเส�
   /* ปุ่มต้องสูงเท่ากันหมด ไม่งั้นแถบเครื่องมือจะดูขรุขระ */
   ok('ปุ่มและช่องกรอกกำหนดความสูงไว้เท่ากัน',
     /\.btn\s*{[^}]*height:\s*32px/.test(css) && /input\[type=number\][^{]*{[^}]*height:\s*32px/.test(css));
+}
+
+// ── ชนะแล้วต้องได้กำไรจริง ───────────────────────────────────────────
+section('18) ชนะแล้วต้องคุ้มที่เสี่ยงไป — ไม่งั้นชนะไปก็ไม่มีความหมาย');
+{
+  const ctx = buildContext(makeCandles(3000, 55, 0.25), DEFAULT_CFG);
+
+  /* เสี่ยง 1 เพื่อได้ 0.75 แปลว่าต้องชนะเกิน 57% ถึงจะเสมอตัว
+     พลาดไม่กี่ไม้ กำไรทั้งวันหายหมด — ระบบต้องไม่ยอมให้เลือกแบบนั้นเลย */
+  {
+    const o = optimizeExits(ctx, {});
+    ok('ตัวหาค่าที่ดีที่สุดไม่เลือกเป้าต่ำกว่า 1R',
+      !o.ok || o.best.targetR >= 1, o.ok ? `เลือก ${o.best.targetR}R` : o.reason);
+    if (o.ok) {
+      ok('ผลการกวาดหาไม่มีเป้าต่ำกว่า 1R ปรากฏเลย (กันการเผลอหยิบไปใช้)',
+        o.grid.every((g) => g.targetR >= 1), `ต่ำสุด ${Math.min(...o.grid.map((g) => g.targetR))}`);
+    }
+    // ตั้งพื้นสูงขึ้นแล้วต้องเคารพด้วย
+    const strict = optimizeExits({ ...ctx, cfg: { ...ctx.cfg, minTargetR: 2 } }, {});
+    ok('ตั้งพื้นเป็น 2R แล้วระบบไม่เลือกอะไรต่ำกว่านั้น',
+      !strict.ok || strict.best.targetR >= 2, strict.ok ? `เลือก ${strict.best.targetR}R` : strict.reason);
+  }
+
+  // แผนเทรดสดก็ต้องเคารพพื้นเดียวกัน
+  {
+    const i = ctx.candles.length - 5;
+    const sc = scoreAt(ctx, i);
+    const plan = buildSetup(ctx, i, { ...sc, side: 1 }, { entryPrice: ctx.candles[i].c, targetR: 0.5, side: 1 });
+    ok('สั่งเป้า 0.5R มา แผนเทรดก็ยังไม่ยอมต่ำกว่า 1R', !plan || plan.mainR >= 1, plan ? `ได้ ${plan.mainR}` : 'ไม่มีแผน');
+  }
+
+  /* วิธีบริหารไม้เป็นตัวกำหนดว่า "ชนะ" แล้วได้เท่าไรจริง ๆ
+     ปิดครึ่งที่ 1R ทำให้ไม้ที่ถูกเขี่ยกลับมาที่ทุนได้แค่ +0.5R
+     ซึ่งคือกำไรครึ่งเดียวของที่เสี่ยงไป ทั้งที่ตอนแพ้เสียเต็ม */
+  {
+    const partial = runBacktest(ctx, { threshold: 30, exitStyle: 'partial' });
+    const full = runBacktest(ctx, { threshold: 30, exitStyle: 'full' });
+    ok('แบบปิดครึ่ง: มีไม้ที่จบด้วยกำไรครึ่งเดียวของที่เสี่ยง',
+      partial.trades.some((t) => t.result === 'win1R-be' && near(t.rMultiple, 0.5)));
+
+    const smallWinsFull = full.trades.filter((t) => t.result !== 'timeout' && t.rMultiple > 0 && t.rMultiple < 1);
+    ok('แบบถือเต็มไม้: ไม่มีไม้ที่ปิดเองแล้วได้กำไรน้อยกว่าที่เสี่ยงไป',
+      smallWinsFull.length === 0, `เจอ ${smallWinsFull.length} ไม้`);
+
+    const pSmall = partial.stats.smallWinShare, fSmall = full.stats.smallWinShare;
+    ok('แบบถือเต็มไม้มีสัดส่วนไม้กำไรจิ๊บจ๊อยน้อยกว่าแบบปิดครึ่ง',
+      fSmall < pSmall, `เต็มไม้ ${fSmall.toFixed(1)}% เทียบกับปิดครึ่ง ${pSmall.toFixed(1)}%`);
+    ok('แบบถือเต็มไม้ได้กำไรเฉลี่ยตอนชนะสูงกว่า',
+      full.stats.avgWin > partial.stats.avgWin,
+      `เต็มไม้ ${full.stats.avgWin.toFixed(2)}R เทียบกับปิดครึ่ง ${partial.stats.avgWin.toFixed(2)}R`);
+  }
+
+  /* อัตราชนะที่รายงานต้องแยกให้ชัดระหว่าง "ไม่ขาดทุน" กับ "ได้กำไรคุ้มที่เสี่ยง"
+     ไม่งั้นตัวเลขจะดูดีกว่าความจริงเสมอ */
+  {
+    const bt = runBacktest(ctx, { threshold: 30, exitStyle: 'partial' });
+    const manual = bt.trades.filter((t) => t.rMultiple >= 1).length / bt.stats.n * 100;
+    ok('อัตราชนะจริงนับเฉพาะไม้ที่ได้กำไร ≥ 1R', near(bt.stats.realWinRate, manual, 1e-9));
+    ok('อัตราชนะจริงต้องไม่สูงกว่าอัตราแตะเป้า 1R', bt.stats.realWinRate <= bt.stats.winRate + 1e-9,
+      `จริง ${bt.stats.realWinRate.toFixed(1)}% แตะเป้า ${bt.stats.winRate.toFixed(1)}%`);
+    const wins = bt.trades.filter((t) => t.rMultiple > 0);
+    ok('กำไรเฉลี่ยตอนชนะคำนวณถูก',
+      near(bt.stats.avgWin, wins.reduce((a, t) => a + t.rMultiple, 0) / wins.length, 1e-9));
+  }
 }
 
 console.log(`\n${'─'.repeat(52)}`);

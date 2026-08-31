@@ -53,6 +53,17 @@ const settings = {
   smartSession: true, historyBars: 3000,
   learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
   adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
+  /*
+   * วิธีบริหารไม้ — ค่าตั้งต้นคือ 'full' (ถือเต็มไม้ถึงเป้า)
+   *
+   * เดิมเป็น 'partial' (ปิดครึ่งที่ 1R) ซึ่งทำให้ 19% ของไม้ทั้งหมดจบที่ +0.5R
+   * คือ "ชนะ" ที่ได้กำไรครึ่งเดียวของที่เสี่ยงไป ตอนแพ้เสียเต็ม 1R
+   *
+   * อีกเหตุผลที่สำคัญไม่แพ้กัน: ตัวหาเป้าหมายที่ดีที่สุด (evaluateTarget)
+   * คำนวณแบบถือเต็มไม้มาตลอด ถ้า backtest หลักปิดครึ่ง ตัวเลขสองที่จะคนละฐาน
+   * เทียบกันไม่ได้ — ตั้งเป็น 'full' ทำให้ทั้งระบบพูดภาษาเดียวกัน
+   */
+  exitStyle: 'full',
 };
 
 const feed = new MarketFeed();
@@ -215,6 +226,11 @@ function bindEvents() {
     if (state.scored) { renderPlan(); }
   }));
 
+  $('exitStyleSel').value = settings.exitStyle || 'full';
+  $('exitStyleSel').addEventListener('change', (e) => {
+    settings.exitStyle = e.target.value; saveSettings();
+    analyze(false, false); doBacktest();
+  });
   $('runBt').addEventListener('click', () => doBacktest());
   $('testSources').addEventListener('click', () => doTestSources());
   $('runAdapt').addEventListener('click', () => doAdapt());
@@ -961,14 +977,14 @@ function doBacktest() {
   setTimeout(() => {
     const t0 = performance.now();
     state.opt = optimizeExits(state.ctx, {
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     state.wf = walkForward(state.ctx, {
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     state.bt = runBacktest(state.ctx, {
       threshold: settings.threshold, maxHold: settings.maxHold,
-      spread: settings.spread, useFilters: settings.volFilter,
+      spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     $('btStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที · ข้อมูล ${state.candles.length} แท่ง (${TF[state.tf].label})`;
     renderBacktest();
@@ -1094,7 +1110,7 @@ function doAdapt() {
     state.adapt = autoTune(state.ctx, {
       folds: 4,
       anchored: $('togAnchored').checked,
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     $('adaptStatus').textContent = `ศึกษาเสร็จใน ${((performance.now() - t0) / 1000).toFixed(1)} วินาที`;
     renderAdapt();
@@ -1240,7 +1256,7 @@ function doLearn() {
     const baseCtx = { ...state.ctx, cfg: { ...state.ctx.cfg, weights: undefined } };
     state.learn = learnAndValidate(baseCtx, {
       keys: Object.keys(WEIGHTS), baseWeights: WEIGHTS, threshold: settings.threshold,
-      backtest: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
+      backtest: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle },
     });
     $('learnStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที`;
     renderLearn();
@@ -1365,7 +1381,12 @@ function renderBacktest() {
   const stat = (label, value, cls = '') => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
   $('btSummary').innerHTML = [
     stat('จำนวนไม้ที่ระบบเข้า', s.n),
-    stat('อัตราถึงเป้า 1R', `${s.winRate.toFixed(1)}%`, s.expectancy > 0 ? 'good' : 'bad'),
+    stat('ชนะจริง (กำไร ≥ 1R)', `${s.realWinRate === null ? '—' : s.realWinRate.toFixed(1) + '%'}`,
+      s.expectancy > 0 ? 'good' : 'bad'),
+    stat('กำไรเฉลี่ยตอนชนะ', s.avgWin === null ? '—' : `${s.avgWin.toFixed(2)}R`, s.avgWin >= 1 ? 'good' : 'bad'),
+    stat('ไม้ที่กำไรน้อยกว่าทุน', s.smallWinShare === null ? '—' : `${s.smallWinShare.toFixed(1)}%`,
+      s.smallWinShare > 15 ? 'bad' : ''),
+    stat('แตะเป้า 1R', `${s.winRate.toFixed(1)}%`),
     stat('ช่วงเชื่อมั่น 95%', ci ? `${ci.low.toFixed(0)}–${ci.high.toFixed(0)}%` : '—'),
     stat('ค่าคาดหวังต่อไม้', `${s.expectancy.toFixed(3)}R`, s.expectancy > 0 ? 'good' : 'bad'),
     stat('กำไรรวม', `${s.totalR.toFixed(1)}R`, s.totalR > 0 ? 'good' : 'bad'),

@@ -162,6 +162,13 @@
 
   <div class="tab-panel active" id="tab-backtest">
     <div class="bt-controls">
+      <label>วิธีบริหารไม้
+        <select id="exitStyleSel">
+          <option value="full">ถือเต็มไม้ถึงเป้า — ชนะทีได้เต็ม</option>
+          <option value="partial">ปิดครึ่งที่ 1R — ผลนุ่มกว่า แต่กำไรต่อไม้น้อย</option>
+          <option value="full-be">ถือเต็มไม้ + เลื่อน SL กันทุน</option>
+        </select>
+      </label>
       <button id="runBt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
       <label>คะแนนขั้นต่ำ <input type="number" id="thresholdInput" value="35" min="10" max="90" step="1"></label>
       <label>ถือได้สูงสุด (แท่ง) <input type="number" id="maxHoldInput" value="60" min="5" max="300" step="5"></label>

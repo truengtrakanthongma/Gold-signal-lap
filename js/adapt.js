@@ -29,7 +29,7 @@ import { runBacktest, evaluateTarget, DEFAULT_BT, wilsonInterval } from './backt
 export const TUNE_GRID = {
   thresholds: [25, 30, 35, 40, 45, 50],
   slMults: [1.0, 1.25, 1.5, 2.0, 2.5],
-  targets: [0.75, 1, 1.25, 1.5, 2, 2.5, 3],
+  targets: [1, 1.25, 1.5, 2, 2.5, 3],
 };
 
 /**
@@ -54,13 +54,16 @@ export function tuneOn(ctx, from, to, opts = {}) {
   if (bars < 150) return null;
   const minTrades = opts.minTrades || Math.max(8, Math.round(bars / 40));
 
+  const floorR = ctx.cfg.minTargetR === undefined ? 1.0 : ctx.cfg.minTargetR;
+  const useTargets = grid.targets.filter((t) => t >= floorR);
+
   const points = [];
   for (const slAtrMult of grid.slMults) {
     const tuned = { ...ctx, cfg: { ...ctx.cfg, slAtrMult } };
     for (const threshold of grid.thresholds) {
       const r = runBacktest(tuned, { ...o, threshold, fromIndex: from, toIndex: entryTo });
       if (r.stats.n < minTrades) continue;
-      for (const targetR of grid.targets) {
+      for (const targetR of useTargets) {
         const ev = evaluateTarget(r.trades, targetR, 0);
         if (ev) points.push({ slAtrMult, threshold, targetR, expectancy: ev.expectancy, n: ev.n, hitRate: ev.hitRate });
       }
@@ -76,7 +79,7 @@ export function tuneOn(ctx, from, to, opts = {}) {
     const near = points.filter((q) =>
       adjacent(q.slAtrMult, p.slAtrMult, grid.slMults)
       && adjacent(q.threshold, p.threshold, grid.thresholds)
-      && adjacent(q.targetR, p.targetR, grid.targets));
+      && adjacent(q.targetR, p.targetR, useTargets));
     p.robust = near.reduce((a, q) => a + q.expectancy, 0) / near.length;
     p.neighbours = near.length;
   }

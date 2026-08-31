@@ -37,6 +37,17 @@ export const DEFAULT_BT = {
   slippage: 0.10,     // สลิปเพจตอนโดน SL
   warmup: 210,        // ต้องมีแท่งพอให้ EMA200 นิ่งก่อน
   useFilters: true,
+  /*
+   * วิธีบริหารไม้หลังเข้า — เป็นตัวกำหนดว่า "ชนะ" แล้วได้เท่าไรจริง ๆ
+   *
+   *  'partial'  ปิดครึ่งที่ 1R เลื่อน SL มาที่ทุน ที่เหลือวิ่งต่อ
+   *             → อัตราชนะดูสูง แต่ไม้ที่ถูกเขี่ยที่ทุนได้แค่ +0.5R
+   *  'full'     ถือเต็มไม้ถึงเป้า ไม่ปิดบางส่วน ไม่เลื่อน SL
+   *             → ชนะทีได้เต็มเป้า แพ้ทีเสีย 1R เต็ม ไม่มีไม้กำไรจิ๊บจ๊อย
+   *  'full-be'  ถือเต็มไม้ แต่เลื่อน SL มาที่ทุนเมื่อผ่าน 1R
+   *             → ชนะได้เต็มเป้า ไม้ที่ย้อนกลับมาได้ 0R (เสมอตัว) แทนที่จะขาดทุน
+   */
+  exitStyle: 'partial',
 };
 
 export function runBacktest(ctx, opts = {}) {
@@ -89,6 +100,22 @@ export function runBacktest(ctx, opts = {}) {
       // ต้องบันทึกก่อนเส้นทาง break อื่น ๆ ไม่งั้นไม้ที่ปิดกำไรจะถูกบันทึกค่าต่ำกว่าจริง
       // (บั๊กนี้ทำให้ตารางบอกว่าเป้าไกล ๆ ไปไม่ถึงเลยสักไม้)
       favBeforeStop = maxFav;
+      if (o.exitStyle === 'full' || o.exitStyle === 'full-be') {
+        /*
+         * ถือเต็มไม้ถึงเป้าเดียว — ไม่ปิดบางส่วน
+         *
+         * เหตุผล: การปิดครึ่งที่ 1R ทำให้ "ชนะ" ครึ่งหนึ่งได้แค่ +0.5R
+         * ทั้งที่ตอนแพ้เสียเต็ม -1R อัตราชนะที่ต้องได้จึงสูงกว่าที่ตาเห็นมาก
+         * แบบนี้ชนะทีได้เต็มเป้า ตัวเลขที่เห็นจึงตรงกับสิ่งที่เกิดขึ้นจริง
+         */
+        if (hitTP1) hit1R = true;
+        if (hitTP2) { exitIdx = j; result = 'win2R'; rMultiple = 2; break; }
+        if (o.exitStyle === 'full-be' && hit1R) {
+          const hitBE = side > 0 ? b.l <= entry : b.h >= entry;
+          if (hitBE) { exitIdx = j; result = 'be'; rMultiple = 0; break; }
+        }
+        continue;
+      }
       if (hitTP1 && !hit1R) {
         hit1R = true;
         // แผนบริหารไม้: ปิดครึ่งที่ 1R แล้วเลื่อน SL มาที่ทุน
@@ -107,7 +134,9 @@ export function runBacktest(ctx, opts = {}) {
       const last = candles[exitIdx].c;
       const openR = side > 0 ? (last - entry) / slDist : (entry - last) / slDist;
       result = 'timeout';
-      rMultiple = hit1R ? 0.5 + Math.max(0, openR) * 0.5 : openR;
+      rMultiple = (o.exitStyle === 'full' || o.exitStyle === 'full-be')
+        ? openR                                     // ถือเต็มไม้: ปิดที่ราคาตลาดตรง ๆ
+        : (hit1R ? 0.5 + Math.max(0, openR) * 0.5 : openR);
     }
 
     const d = new Date(candles[i + 1].t);
@@ -210,6 +239,21 @@ function summarize(trades, o) {
     stats: {
       n,
       winRate: n ? (wins1R / n) * 100 : null,
+      /*
+       * อัตราชนะที่มีความหมายจริง
+       *
+       * "ชนะ" ที่ได้กำไร 0.5R ตอนที่แพ้ทีเสีย 1R ไม่ใช่ชนะจริง — ต้องชนะสองไม้
+       * ถึงจะลบล้างการแพ้หนึ่งไม้ได้ ตัวเลขอัตราชนะจึงหลอกตาได้ง่ายมาก
+       *
+       * realWinRate นับเฉพาะไม้ที่ได้กำไร "อย่างน้อยเท่าที่เสี่ยงไป" (>= 1R)
+       * ซึ่งเป็นเส้นแบ่งที่ทำให้ชนะหนึ่งไม้ลบล้างแพ้หนึ่งไม้ได้พอดี
+       */
+      realWinRate: n ? (trades.filter((t) => t.rMultiple >= 1).length / n) * 100 : null,
+      avgWin: (() => {
+        const w = trades.filter((t) => t.rMultiple > 0);
+        return w.length ? w.reduce((a, t) => a + t.rMultiple, 0) / w.length : null;
+      })(),
+      smallWinShare: n ? (trades.filter((t) => t.rMultiple > 0 && t.rMultiple < 1).length / n) * 100 : null,
       expectancy: n ? totalR / n : null,
       totalR,
       profitFactor: grossLoss > 0 ? grossWin / grossLoss : null,
@@ -275,7 +319,10 @@ export function optimizeExits(ctx, opts = {}) {
 
   const slMults = o.slMults || [1.0, 1.25, 1.5, 2.0, 2.5];
   const thresholds = o.thresholds || [20, 25, 30, 35, 40, 45, 50];
-  const targets = o.targets || [0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
+  // พื้นขั้นต่ำของเป้าหมาย — เป้าที่เตี้ยกว่านี้ไม่ให้เข้ารอบเลย
+  // ไม่ใช่แค่ไม่เลือก แต่ไม่ให้ปรากฏในผลการกวาดหาด้วย จะได้ไม่มีใครเผลอหยิบไปใช้
+  const floorR = ctx.cfg.minTargetR === undefined ? 1.0 : ctx.cfg.minTargetR;
+  const targets = (o.targets || [0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4]).filter((t) => t >= floorR);
   // จำนวนไม้ขั้นต่ำต้องปรับตามข้อมูลที่มี — ถ้าตั้งไว้ตายตัวสูงเกินไป
   // ระบบจะหาไม่เจอเลยแล้วถอยไปใช้ค่าตั้งต้นเงียบ ๆ ซึ่งเสียประโยชน์ทั้งหมด
   const usableBars = splitAt - o.warmup;

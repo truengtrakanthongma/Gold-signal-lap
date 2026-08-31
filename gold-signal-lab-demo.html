@@ -957,6 +957,13 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
 
   <div class="tab-panel active" id="tab-backtest">
     <div class="bt-controls">
+      <label>วิธีบริหารไม้
+        <select id="exitStyleSel">
+          <option value="full">ถือเต็มไม้ถึงเป้า — ชนะทีได้เต็ม</option>
+          <option value="partial">ปิดครึ่งที่ 1R — ผลนุ่มกว่า แต่กำไรต่อไม้น้อย</option>
+          <option value="full-be">ถือเต็มไม้ + เลื่อน SL กันทุน</option>
+        </select>
+      </label>
       <button id="runBt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
       <label>คะแนนขั้นต่ำ <input type="number" id="thresholdInput" value="35" min="10" max="90" step="1"></label>
       <label>ถือได้สูงสุด (แท่ง) <input type="number" id="maxHoldInput" value="60" min="5" max="300" step="5"></label>
@@ -1855,6 +1862,19 @@ const DEFAULT_CFG = {
   slAtrMult: 1.5,
   maxSlAtrMult: 3.0,
   minEntryRR: 1.2,     // ได้:เสีย ต่ำกว่านี้ = ไม่คุ้มเข้า แม้สัญญาณจะยังดี
+  /*
+   * เป้าหมายต่ำสุดที่ยอมให้ระบบเลือกได้ (เท่าของความเสี่ยง)
+   *
+   * ทำไมต้องมี: ตัวหาค่าที่ดีที่สุดจะเลือกเป้าที่ "ค่าคาดหวังสูงสุด" ซึ่งมักได้เป้าเตี้ย ๆ
+   * เพราะเป้าเตี้ยแตะง่าย อัตราชนะเลยสูง ตัวเลขบนกระดาษจึงสวย
+   *
+   * แต่การเสี่ยง 1 เพื่อได้ 0.75 แปลว่าต้องชนะเกิน 57% ถึงจะเสมอตัว
+   * พลาดแค่ไม่กี่ไม้ กำไรที่สะสมมาทั้งวันก็หายหมด — ไม่ทนต่อความผิดพลาด
+   *
+   * ที่ 1R ต้องชนะเกิน 50% ซึ่งเป็นเส้นแบ่งที่มีความหมายจริง:
+   * ชนะหนึ่งไม้ลบล้างการแพ้หนึ่งไม้ได้พอดี
+   */
+  minTargetR: 1.0,
   threshold: 35,       // คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ
   adxTrendMin: 22,     // ADX เกินนี้ = โหมดเทรนด์, ต่ำกว่า = โหมดกรอบ
   minAtrPct: 0.02,     // ผันผวนต่ำกว่านี้ = ตลาดตาย ไม่คุ้มค่าสเปรด (%)
@@ -2210,8 +2230,10 @@ function buildSetup(ctx, i, scored, opts = {}) {
   const riskMoney = account * (riskPct / 100);
   const lots = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
 
-  // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี ไม่งั้นใช้ 2R ตามค่าเริ่มต้น
-  const mainR = targetR || 2;
+  // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี แต่ห้ามต่ำกว่าพื้นที่ตั้งไว้
+  // ถึงสถิติจะบอกว่าเป้าเตี้ยให้ค่าคาดหวังดีกว่า ก็ไม่รับ เพราะไม่ทนต่อการพลาด
+  const minTR = cfg.minTargetR === undefined ? 1.0 : cfg.minTargetR;
+  const mainR = Math.max(minTR, targetR || 2);
   const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
 
   /*
@@ -2536,6 +2558,17 @@ const DEFAULT_BT = {
   slippage: 0.10,     // สลิปเพจตอนโดน SL
   warmup: 210,        // ต้องมีแท่งพอให้ EMA200 นิ่งก่อน
   useFilters: true,
+  /*
+   * วิธีบริหารไม้หลังเข้า — เป็นตัวกำหนดว่า "ชนะ" แล้วได้เท่าไรจริง ๆ
+   *
+   *  'partial'  ปิดครึ่งที่ 1R เลื่อน SL มาที่ทุน ที่เหลือวิ่งต่อ
+   *             → อัตราชนะดูสูง แต่ไม้ที่ถูกเขี่ยที่ทุนได้แค่ +0.5R
+   *  'full'     ถือเต็มไม้ถึงเป้า ไม่ปิดบางส่วน ไม่เลื่อน SL
+   *             → ชนะทีได้เต็มเป้า แพ้ทีเสีย 1R เต็ม ไม่มีไม้กำไรจิ๊บจ๊อย
+   *  'full-be'  ถือเต็มไม้ แต่เลื่อน SL มาที่ทุนเมื่อผ่าน 1R
+   *             → ชนะได้เต็มเป้า ไม้ที่ย้อนกลับมาได้ 0R (เสมอตัว) แทนที่จะขาดทุน
+   */
+  exitStyle: 'partial',
 };
 
 function runBacktest(ctx, opts = {}) {
@@ -2588,6 +2621,22 @@ function runBacktest(ctx, opts = {}) {
       // ต้องบันทึกก่อนเส้นทาง break อื่น ๆ ไม่งั้นไม้ที่ปิดกำไรจะถูกบันทึกค่าต่ำกว่าจริง
       // (บั๊กนี้ทำให้ตารางบอกว่าเป้าไกล ๆ ไปไม่ถึงเลยสักไม้)
       favBeforeStop = maxFav;
+      if (o.exitStyle === 'full' || o.exitStyle === 'full-be') {
+        /*
+         * ถือเต็มไม้ถึงเป้าเดียว — ไม่ปิดบางส่วน
+         *
+         * เหตุผล: การปิดครึ่งที่ 1R ทำให้ "ชนะ" ครึ่งหนึ่งได้แค่ +0.5R
+         * ทั้งที่ตอนแพ้เสียเต็ม -1R อัตราชนะที่ต้องได้จึงสูงกว่าที่ตาเห็นมาก
+         * แบบนี้ชนะทีได้เต็มเป้า ตัวเลขที่เห็นจึงตรงกับสิ่งที่เกิดขึ้นจริง
+         */
+        if (hitTP1) hit1R = true;
+        if (hitTP2) { exitIdx = j; result = 'win2R'; rMultiple = 2; break; }
+        if (o.exitStyle === 'full-be' && hit1R) {
+          const hitBE = side > 0 ? b.l <= entry : b.h >= entry;
+          if (hitBE) { exitIdx = j; result = 'be'; rMultiple = 0; break; }
+        }
+        continue;
+      }
       if (hitTP1 && !hit1R) {
         hit1R = true;
         // แผนบริหารไม้: ปิดครึ่งที่ 1R แล้วเลื่อน SL มาที่ทุน
@@ -2606,7 +2655,9 @@ function runBacktest(ctx, opts = {}) {
       const last = candles[exitIdx].c;
       const openR = side > 0 ? (last - entry) / slDist : (entry - last) / slDist;
       result = 'timeout';
-      rMultiple = hit1R ? 0.5 + Math.max(0, openR) * 0.5 : openR;
+      rMultiple = (o.exitStyle === 'full' || o.exitStyle === 'full-be')
+        ? openR                                     // ถือเต็มไม้: ปิดที่ราคาตลาดตรง ๆ
+        : (hit1R ? 0.5 + Math.max(0, openR) * 0.5 : openR);
     }
 
     const d = new Date(candles[i + 1].t);
@@ -2709,6 +2760,21 @@ function summarize(trades, o) {
     stats: {
       n,
       winRate: n ? (wins1R / n) * 100 : null,
+      /*
+       * อัตราชนะที่มีความหมายจริง
+       *
+       * "ชนะ" ที่ได้กำไร 0.5R ตอนที่แพ้ทีเสีย 1R ไม่ใช่ชนะจริง — ต้องชนะสองไม้
+       * ถึงจะลบล้างการแพ้หนึ่งไม้ได้ ตัวเลขอัตราชนะจึงหลอกตาได้ง่ายมาก
+       *
+       * realWinRate นับเฉพาะไม้ที่ได้กำไร "อย่างน้อยเท่าที่เสี่ยงไป" (>= 1R)
+       * ซึ่งเป็นเส้นแบ่งที่ทำให้ชนะหนึ่งไม้ลบล้างแพ้หนึ่งไม้ได้พอดี
+       */
+      realWinRate: n ? (trades.filter((t) => t.rMultiple >= 1).length / n) * 100 : null,
+      avgWin: (() => {
+        const w = trades.filter((t) => t.rMultiple > 0);
+        return w.length ? w.reduce((a, t) => a + t.rMultiple, 0) / w.length : null;
+      })(),
+      smallWinShare: n ? (trades.filter((t) => t.rMultiple > 0 && t.rMultiple < 1).length / n) * 100 : null,
       expectancy: n ? totalR / n : null,
       totalR,
       profitFactor: grossLoss > 0 ? grossWin / grossLoss : null,
@@ -2774,7 +2840,10 @@ function optimizeExits(ctx, opts = {}) {
 
   const slMults = o.slMults || [1.0, 1.25, 1.5, 2.0, 2.5];
   const thresholds = o.thresholds || [20, 25, 30, 35, 40, 45, 50];
-  const targets = o.targets || [0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
+  // พื้นขั้นต่ำของเป้าหมาย — เป้าที่เตี้ยกว่านี้ไม่ให้เข้ารอบเลย
+  // ไม่ใช่แค่ไม่เลือก แต่ไม่ให้ปรากฏในผลการกวาดหาด้วย จะได้ไม่มีใครเผลอหยิบไปใช้
+  const floorR = ctx.cfg.minTargetR === undefined ? 1.0 : ctx.cfg.minTargetR;
+  const targets = (o.targets || [0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4]).filter((t) => t >= floorR);
   // จำนวนไม้ขั้นต่ำต้องปรับตามข้อมูลที่มี — ถ้าตั้งไว้ตายตัวสูงเกินไป
   // ระบบจะหาไม่เจอเลยแล้วถอยไปใช้ค่าตั้งต้นเงียบ ๆ ซึ่งเสียประโยชน์ทั้งหมด
   const usableBars = splitAt - o.warmup;
@@ -5015,7 +5084,7 @@ __m.adapt = (function () {
 const TUNE_GRID = {
   thresholds: [25, 30, 35, 40, 45, 50],
   slMults: [1.0, 1.25, 1.5, 2.0, 2.5],
-  targets: [0.75, 1, 1.25, 1.5, 2, 2.5, 3],
+  targets: [1, 1.25, 1.5, 2, 2.5, 3],
 };
 
 /**
@@ -5040,13 +5109,16 @@ function tuneOn(ctx, from, to, opts = {}) {
   if (bars < 150) return null;
   const minTrades = opts.minTrades || Math.max(8, Math.round(bars / 40));
 
+  const floorR = ctx.cfg.minTargetR === undefined ? 1.0 : ctx.cfg.minTargetR;
+  const useTargets = grid.targets.filter((t) => t >= floorR);
+
   const points = [];
   for (const slAtrMult of grid.slMults) {
     const tuned = { ...ctx, cfg: { ...ctx.cfg, slAtrMult } };
     for (const threshold of grid.thresholds) {
       const r = runBacktest(tuned, { ...o, threshold, fromIndex: from, toIndex: entryTo });
       if (r.stats.n < minTrades) continue;
-      for (const targetR of grid.targets) {
+      for (const targetR of useTargets) {
         const ev = evaluateTarget(r.trades, targetR, 0);
         if (ev) points.push({ slAtrMult, threshold, targetR, expectancy: ev.expectancy, n: ev.n, hitRate: ev.hitRate });
       }
@@ -5062,7 +5134,7 @@ function tuneOn(ctx, from, to, opts = {}) {
     const near = points.filter((q) =>
       adjacent(q.slAtrMult, p.slAtrMult, grid.slMults)
       && adjacent(q.threshold, p.threshold, grid.thresholds)
-      && adjacent(q.targetR, p.targetR, grid.targets));
+      && adjacent(q.targetR, p.targetR, useTargets));
     p.robust = near.reduce((a, q) => a + q.expectancy, 0) / near.length;
     p.neighbours = near.length;
   }
@@ -5406,6 +5478,17 @@ const settings = {
   smartSession: true, historyBars: 3000,
   learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
   adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
+  /*
+   * วิธีบริหารไม้ — ค่าตั้งต้นคือ 'full' (ถือเต็มไม้ถึงเป้า)
+   *
+   * เดิมเป็น 'partial' (ปิดครึ่งที่ 1R) ซึ่งทำให้ 19% ของไม้ทั้งหมดจบที่ +0.5R
+   * คือ "ชนะ" ที่ได้กำไรครึ่งเดียวของที่เสี่ยงไป ตอนแพ้เสียเต็ม 1R
+   *
+   * อีกเหตุผลที่สำคัญไม่แพ้กัน: ตัวหาเป้าหมายที่ดีที่สุด (evaluateTarget)
+   * คำนวณแบบถือเต็มไม้มาตลอด ถ้า backtest หลักปิดครึ่ง ตัวเลขสองที่จะคนละฐาน
+   * เทียบกันไม่ได้ — ตั้งเป็น 'full' ทำให้ทั้งระบบพูดภาษาเดียวกัน
+   */
+  exitStyle: 'full',
 };
 
 const feed = new MarketFeed();
@@ -5568,6 +5651,11 @@ function bindEvents() {
     if (state.scored) { renderPlan(); }
   }));
 
+  $('exitStyleSel').value = settings.exitStyle || 'full';
+  $('exitStyleSel').addEventListener('change', (e) => {
+    settings.exitStyle = e.target.value; saveSettings();
+    analyze(false, false); doBacktest();
+  });
   $('runBt').addEventListener('click', () => doBacktest());
   $('testSources').addEventListener('click', () => doTestSources());
   $('runAdapt').addEventListener('click', () => doAdapt());
@@ -6314,14 +6402,14 @@ function doBacktest() {
   setTimeout(() => {
     const t0 = performance.now();
     state.opt = optimizeExits(state.ctx, {
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     state.wf = walkForward(state.ctx, {
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     state.bt = runBacktest(state.ctx, {
       threshold: settings.threshold, maxHold: settings.maxHold,
-      spread: settings.spread, useFilters: settings.volFilter,
+      spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     $('btStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที · ข้อมูล ${state.candles.length} แท่ง (${TF[state.tf].label})`;
     renderBacktest();
@@ -6447,7 +6535,7 @@ function doAdapt() {
     state.adapt = autoTune(state.ctx, {
       folds: 4,
       anchored: $('togAnchored').checked,
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter,
+      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
     $('adaptStatus').textContent = `ศึกษาเสร็จใน ${((performance.now() - t0) / 1000).toFixed(1)} วินาที`;
     renderAdapt();
@@ -6593,7 +6681,7 @@ function doLearn() {
     const baseCtx = { ...state.ctx, cfg: { ...state.ctx.cfg, weights: undefined } };
     state.learn = learnAndValidate(baseCtx, {
       keys: Object.keys(WEIGHTS), baseWeights: WEIGHTS, threshold: settings.threshold,
-      backtest: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
+      backtest: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle },
     });
     $('learnStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที`;
     renderLearn();
@@ -6718,7 +6806,12 @@ function renderBacktest() {
   const stat = (label, value, cls = '') => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
   $('btSummary').innerHTML = [
     stat('จำนวนไม้ที่ระบบเข้า', s.n),
-    stat('อัตราถึงเป้า 1R', `${s.winRate.toFixed(1)}%`, s.expectancy > 0 ? 'good' : 'bad'),
+    stat('ชนะจริง (กำไร ≥ 1R)', `${s.realWinRate === null ? '—' : s.realWinRate.toFixed(1) + '%'}`,
+      s.expectancy > 0 ? 'good' : 'bad'),
+    stat('กำไรเฉลี่ยตอนชนะ', s.avgWin === null ? '—' : `${s.avgWin.toFixed(2)}R`, s.avgWin >= 1 ? 'good' : 'bad'),
+    stat('ไม้ที่กำไรน้อยกว่าทุน', s.smallWinShare === null ? '—' : `${s.smallWinShare.toFixed(1)}%`,
+      s.smallWinShare > 15 ? 'bad' : ''),
+    stat('แตะเป้า 1R', `${s.winRate.toFixed(1)}%`),
     stat('ช่วงเชื่อมั่น 95%', ci ? `${ci.low.toFixed(0)}–${ci.high.toFixed(0)}%` : '—'),
     stat('ค่าคาดหวังต่อไม้', `${s.expectancy.toFixed(3)}R`, s.expectancy > 0 ? 'good' : 'bad'),
     stat('กำไรรวม', `${s.totalR.toFixed(1)}R`, s.totalR > 0 ? 'good' : 'bad'),
