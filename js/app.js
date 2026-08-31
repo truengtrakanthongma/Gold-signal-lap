@@ -9,6 +9,8 @@ import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
 import { SOURCES, testAllSources } from './sources.js';
 import { fetchNews, economicCalendar, GOLD_DRIVERS } from './news.js';
+import { buildNewsIndex, evaluateNewsFilter, newsVerdict, fetchHistoricalNews } from './newsfactor.js';
+import { buildTestMessage, isValidWebhook } from './discord.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -234,6 +236,7 @@ function bindEvents() {
     analyze(false, false); doBacktest();
   });
   $('runBt').addEventListener('click', () => doBacktest());
+  $('runNewsTest').addEventListener('click', () => doNewsTest());
   $('refreshNews').addEventListener('click', () => loadNews());
   $('newsAuto').addEventListener('change', (e) => { settings.newsAuto = e.target.checked; saveSettings(); armNewsTimer(); });
   $('testSources').addEventListener('click', () => doTestSources());
@@ -299,7 +302,17 @@ function bindEvents() {
     $('toggleNarration').textContent = state.narrationOpen ? 'ย่อ' : 'ขยาย';
   });
   $('cooldownInput').addEventListener('change', (e) => { alerts.cooldownMs = (+e.target.value || 0) * 60000; alerts.save(); });
-  $('webhookInput').addEventListener('change', (e) => { alerts.webhookUrl = e.target.value.trim(); alerts.save(); });
+  $('webhookInput').addEventListener('change', (e) => {
+    alerts.webhookUrl = e.target.value.trim(); alerts.save(); renderWebhookStatus();
+  });
+  $('testWebhook').addEventListener('click', async () => {
+    const btn = $('testWebhook');
+    btn.disabled = true;
+    $('webhookStatus').textContent = 'กำลังส่ง…';
+    await alerts.testWebhook(buildTestMessage());
+    btn.disabled = false;
+  });
+  alerts.onWebhookResult = renderWebhookStatus;
   $('addRule').addEventListener('click', () => {
     const value = +$('ruleValue').value;
     if (!value) return;
@@ -1046,6 +1059,117 @@ function renderWalkForward() {
 }
 
 /**
+ * ตอบคำถาม "ข่าว + กราฟ ช่วยให้แม่นขึ้นจริงไหม" ด้วยการวัด
+ *
+ * ต้องวัดกับ *ช่วงสอบ* เท่านั้น
+ * ถ้าดูไม้ทั้งชุดแล้วบอกว่า "กลุ่มที่ข่าวหนุนทำได้ดีกว่า" นั่นคือการเลือกกลุ่มที่สวยที่สุด
+ * หลังจากเห็นคำตอบแล้ว ซึ่งได้ตัวเลขสวยเสมอและใช้กับอนาคตไม่ได้เลย
+ */
+async function doNewsTest() {
+  const btn = $('runNewsTest');
+  if (!state.ctx || !state.bt || !state.bt.trades.length) {
+    $('newsTestStatus').textContent = 'ต้องมีผลทดสอบย้อนหลังก่อน — กดปุ่มทดสอบด้านบนแล้วลองใหม่';
+    return;
+  }
+  const candles = state.candles;
+  const from = candles[0].t, to = candles[candles.length - 1].t;
+  const days = (to - from) / 86400000;
+  btn.disabled = true;
+  $('newsTestStatus').textContent = `กำลังดึงข่าวย้อนหลัง ${days.toFixed(0)} วัน…`;
+
+  const news = await fetchHistoricalNews(from, to, {
+    onProgress: (p) => {
+      $('newsTestStatus').textContent =
+        `ดึงข่าว ${(p.done / p.total * 100).toFixed(0)}% · ${p.calls} คำขอ · ได้ ${p.got} ข่าว`;
+    },
+  });
+  btn.disabled = false;
+
+  if (!news.items.length) {
+    $('newsTestStatus').textContent = '';
+    $('newsTestBox').innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ดึงข่าวย้อนหลังไม่ได้</div>
+      <div class="tiny" style="margin:0">ยิงไป ${news.calls} คำขอแต่ไม่ได้ข่าวกลับมาเลย —
+      บริการอาจไม่ยอมให้เว็บเรียก หรือไม่มีข้อมูลย้อนหลังในช่วงนี้ ทดสอบต่อไม่ได้</div></div>`;
+    return;
+  }
+
+  // แบ่งช่วงเรียนรู้/ช่วงสอบเหมือนที่ใช้ทั้งระบบ แล้ววัดเฉพาะช่วงสอบ
+  const splitAt = candles[Math.floor(candles.length * 0.6)].t;
+  const index = buildNewsIndex(news.items);
+  const outTrades = state.bt.trades.filter((t) => t.t >= splitAt);
+  const res = evaluateNewsFilter(outTrades, index);
+  const verdict = newsVerdict(res);
+  state.newsTest = { res, verdict, news, splitAt };
+  $('newsTestStatus').textContent = `เสร็จ · ${news.items.length} ข่าว · ${news.calls} คำขอ`;
+  renderNewsTest();
+}
+
+function renderNewsTest() {
+  const T = state.newsTest;
+  if (!T) return;
+  const { res, verdict } = T;
+  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
+  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
+  const row = (label, g, note = '') => `<tr>
+      <td>${label}${note ? `<br><span class="tiny">${note}</span>` : ''}</td>
+      <td class="num">${g.n}</td>
+      <td class="num">${pct(g.winRate)}</td>
+      <td class="num">${r(g.avgWin)}</td>
+      <td class="num" style="color:${g.expectancy > 0 ? 'var(--up)' : g.expectancy < 0 ? 'var(--down)' : 'var(--text-2)'}">${r(g.expectancy)}</td>
+    </tr>`;
+  $('newsTestBox').innerHTML = `
+    <div class="wf-card ${verdict.level === 'good' ? 'good' : verdict.level === 'bad' ? 'bad' : 'ok'}">
+      <div class="wf-verdict">${verdict.text}</div>
+      <div class="tiny" style="margin:0">
+        วัดกับช่วงสอบเท่านั้น (40% หลังของข้อมูล) ข่าวถูกหน่วง 15 นาทีก่อนถือว่ารู้ได้ —
+        ข่าวครอบคลุม ${res.covered.toFixed(0)}% ของไม้ ที่เหลือคือช่วงที่ไม่มีข่าวเกี่ยวข้องเลย
+      </div>
+    </div>
+    <table class="learn-table"><thead><tr>
+      <th>กลุ่ม</th><th>ไม้</th><th>ชนะ ≥1R</th><th>กำไรเฉลี่ยตอนชนะ</th><th>ค่าคาดหวัง/ไม้</th>
+    </tr></thead><tbody>
+      ${row('ทั้งหมด (ไม่ใช้ข่าว)', res.all)}
+      ${row('ข่าวหนุนทิศเดียวกับไม้', res.agree)}
+      ${row('ข่าวค้านทิศ', res.against)}
+      ${row('ข่าวเงียบ', res.quiet, 'ไม่มีข่าวเกี่ยวข้อง — ต่างจาก "ค้าน"')}
+      ${row('ถ้าตัดไม้ที่ข่าวค้านออก', res.filtered)}
+    </tbody></table>
+    <p class="tiny">
+      อ่านยังไง: ถ้าแถว <b>ข่าวค้านทิศ</b> แย่กว่าแถว <b>ข่าวหนุน</b> อย่างชัดเจน
+      แปลว่าข่าวมีข้อมูลที่กราฟยังไม่รู้ และการกรองมีประโยชน์
+      แต่ถ้าสองแถวพอ ๆ กัน แปลว่าราคาซึมซับข่าวไปแล้วก่อนที่เราจะอ่านทัน
+      ซึ่งเป็นผลที่เจอบ่อยที่สุดในตลาดที่มีสภาพคล่องสูงอย่างทองคำ
+    </p>`;
+}
+
+/**
+ * บอกผลการส่งเข้า Discord ครั้งล่าสุด
+ *
+ * จำเป็นเพราะช่องแจ้งเตือนที่ล้มเงียบ ๆ แย่กว่าไม่มีเลย —
+ * ผู้ใช้จะนั่งรอสัญญาณที่ไม่มีวันมา โดยเชื่อว่าระบบเฝ้าให้อยู่
+ */
+function renderWebhookStatus() {
+  const el = $('webhookStatus');
+  if (!el) return;
+  const r = alerts.lastWebhook;
+  if (!r) {
+    el.textContent = alerts.webhookUrl
+      ? (isValidWebhook(alerts.webhookUrl) ? 'ยังไม่เคยส่ง — กดทดสอบเพื่อยืนยันว่าใช้ได้' : 'URL ไม่ถูกรูปแบบ')
+      : '';
+    el.style.color = 'var(--text-3)';
+    return;
+  }
+  const t = new Date(r.at).toLocaleTimeString('th-TH');
+  if (r.ok) {
+    el.textContent = `ส่งสำเร็จ ${t}${r.test ? ' (ข้อความทดสอบ)' : ''} · ${r.ms} มิลลิวินาที`;
+    el.style.color = 'var(--up)';
+  } else {
+    el.textContent = `ส่งไม่สำเร็จ ${t} — ${r.reason}`;
+    el.style.color = 'var(--down)';
+  }
+}
+
+/**
  * ดึงข่าวโลกแล้ววิเคราะห์ผลต่อทอง
  *
  * ดึงทุก 10 นาทีก็พอ — ข่าวไม่ได้ออกถี่กว่านั้น และ GDELT เป็นบริการฟรี
@@ -1081,15 +1205,29 @@ function renderNews() {
   const res = state.news;
   const feed = $('newsFeed'), clim = $('newsClimate');
   if (!res) { $('newsMeta').textContent = ''; return; }
+  /* ล้มแล้วต้องบอกให้ครบว่าลองเจ้าไหนไปบ้าง และแต่ละเจ้าติดตรงไหน
+     ไม่งั้นผู้ใช้ได้แค่ "ดึงข่าวไม่ได้" ซึ่งแก้อะไรไม่ได้เลย */
   if (!res.ok) {
     $('newsMeta').textContent = '';
     clim.innerHTML = '';
-    feed.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ดึงข่าวไม่สำเร็จ</div>
-      <div class="tiny" style="margin:0">${res.reason}${res.cors
-        ? '<br>บริการข่าวที่ยอมให้เว็บเรียกตรง ๆ มีน้อยมาก ถ้าเครือข่ายคุณบล็อกอันนี้ ให้ใช้ปฏิทินข่าวด้านล่างแทนไปก่อน' : ''}</div></div>`;
+    const rows = (res.attempts || []).map((a) => `<tr>
+        <td>${a.label}</td>
+        <td style="color:${a.ok ? 'var(--up)' : 'var(--down)'}">${a.ok ? 'ใช้ได้' : 'ไม่ได้'}</td>
+        <td class="tiny">${a.reason || (a.ok ? `ได้ ${a.raw} ข่าว` : '')}</td>
+      </tr>`).join('');
+    feed.innerHTML = `<div class="wf-card weak">
+        <div class="wf-verdict">ดึงข่าวไม่สำเร็จทุกแหล่ง</div>
+        <div class="tiny" style="margin:0">ระบบลองเรียงตามลำดับแล้ว นี่คือผลของแต่ละเจ้า —
+        ถ้าทุกเจ้าขึ้น CORS แปลว่าเครือข่ายหรือเบราว์เซอร์ของคุณบล็อกคำขอข้ามโดเมนไว้</div>
+      </div>
+      <table class="learn-table"><thead><tr><th>แหล่งข่าว</th><th>ผล</th><th>รายละเอียด</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
     return;
   }
-  $('newsMeta').textContent = `${res.items.length} ข่าวที่เกี่ยวข้อง · อัปเดต ${new Date(res.at).toLocaleTimeString('th-TH')} · ใช้เวลา ${res.ms} มิลลิวินาที`;
+  const tried = (res.attempts || []).filter((a) => !a.ok).length;
+  $('newsMeta').textContent = `${res.items.length} ข่าวที่เกี่ยวข้อง · จาก ${res.label}`
+    + `${tried ? ` (ข้าม ${tried} แหล่งที่ใช้ไม่ได้)` : ''}`
+    + ` · อัปเดต ${new Date(res.at).toLocaleTimeString('th-TH')}`;
 
   const c = res.climate;
   const col = c.level === 'up' ? 'var(--up)' : c.level === 'down' ? 'var(--down)' : 'var(--text-2)';
@@ -1661,6 +1799,7 @@ function renderAlertUI() {
   $('togSound').checked = alerts.sound;
   $('togSpeak').checked = alerts.speak;
   $('webhookInput').value = alerts.webhookUrl;
+  renderWebhookStatus();
   $('cooldownInput').value = alerts.cooldownMs / 60000;
   renderRules();
   renderLog();

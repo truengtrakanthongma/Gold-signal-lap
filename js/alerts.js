@@ -5,6 +5,8 @@
 
 const LS_KEY = 'goldtrader.alerts.v1';
 
+import { sendDiscord, isValidWebhook, buildSignalMessage } from './discord.js';
+
 export class AlertCenter {
   constructor() {
     this.log = [];
@@ -13,6 +15,8 @@ export class AlertCenter {
     this.speak = false;
     this.desktop = false;
     this.webhookUrl = '';
+    this.lastWebhook = null;   // ผลการส่งครั้งล่าสุด ให้หน้าจอบอกผู้ใช้ได้ว่าใช้ได้จริงไหม
+    this.onWebhookResult = null;
     this.cooldownMs = 5 * 60 * 1000;
     this._lastSignalAt = 0;
     this._lastSignalSide = 0;
@@ -89,15 +93,43 @@ export class AlertCenter {
     } catch (e) { /* ไม่มีเสียงไทยก็ข้าม */ }
   }
 
+  /**
+   * ส่งเข้า Discord
+   *
+   * เดิมกลืน error ทิ้งทั้งหมด "เพื่อไม่รบกวนผู้ใช้" ซึ่งเป็นการตัดสินใจที่ผิด:
+   * ช่องแจ้งเตือนที่ล้มเงียบ ๆ แย่กว่าไม่มีเลย เพราะผู้ใช้จะนั่งรอสัญญาณ
+   * ที่ไม่มีวันมา โดยเชื่อว่าระบบกำลังเฝ้าให้อยู่
+   *
+   * ตอนนี้เก็บผลครั้งล่าสุดไว้ให้หน้าจอแสดงได้ว่าส่งผ่านหรือไม่ผ่าน เพราะอะไร
+   */
   async sendWebhook(payload) {
-    if (!this.webhookUrl) return;
-    try {
-      await fetch(this.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: payload.text, username: 'Gold Signal Bot', ...payload.extra }),
-      });
-    } catch (e) { /* ปลายทางบล็อก CORS ก็ไม่ต้องรบกวนผู้ใช้ */ }
+    if (!this.webhookUrl) return null;
+    const msg = payload.discord || buildSignalMessage({
+      action: payload.kind === 'buy' ? 'buy' : payload.kind === 'sell' ? 'sell' : 'wait',
+      score: payload.score, price: payload.price,
+      instrument: payload.instrument, tf: payload.tf,
+      setup: payload.setup, prob: payload.prob,
+      reasons: payload.reasons || [], blocks: payload.blocks || [],
+    });
+    const res = await sendDiscord(this.webhookUrl, msg);
+    this.lastWebhook = { ...res, at: Date.now() };
+    if (this.onWebhookResult) this.onWebhookResult(this.lastWebhook);
+    return res;
+  }
+
+  /** ส่งข้อความทดสอบ เพื่อให้ผู้ใช้เห็นว่าเชื่อมต่อได้จริงก่อนพึ่งพามัน */
+  async testWebhook(message) {
+    if (!isValidWebhook(this.webhookUrl)) {
+      const bad = { ok: false, at: Date.now(),
+        reason: 'ยังไม่ได้ใส่ URL หรือใส่ไม่ถูกรูปแบบ — ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/' };
+      this.lastWebhook = bad;
+      if (this.onWebhookResult) this.onWebhookResult(bad);
+      return bad;
+    }
+    const res = await sendDiscord(this.webhookUrl, message);
+    this.lastWebhook = { ...res, at: Date.now(), test: true };
+    if (this.onWebhookResult) this.onWebhookResult(this.lastWebhook);
+    return this.lastWebhook;
   }
 
   /** ยิงแจ้งเตือน 1 รายการ (บันทึกลง log + เสียง + desktop + webhook) */

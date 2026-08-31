@@ -190,18 +190,55 @@ export function classifyHeadline(text) {
  */
 export const NEWS_FEEDS = {
   gdelt: {
-    label: 'GDELT (ฟรี ไม่ต้องใช้คีย์)',
-    needsKey: false,
-    note: 'ฐานข้อมูลข่าวเปิดที่เก็บข่าวทั่วโลกแบบเรียลไทม์ ครอบคลุมกว้างแต่คุณภาพหัวข้อไม่สม่ำเสมอ',
+    label: 'GDELT',
+    note: 'ฐานข้อมูลข่าวเปิดของโครงการวิจัย ครอบคลุมทั่วโลก ไม่ต้องใช้คีย์',
     url: (hours) => 'https://api.gdeltproject.org/api/v2/doc/doc?query='
       + encodeURIComponent('(gold prices OR "federal reserve" OR inflation OR "interest rate") sourcelang:english')
       + `&mode=artlist&maxrecords=60&timespan=${Math.max(1, hours)}h&format=json&sort=datedesc`,
     parse: (j) => (j.articles || []).map((a) => ({
-      title: a.title, url: a.url, source: a.domain,
-      at: parseGdeltDate(a.seendate),
+      title: a.title, url: a.url, source: a.domain, at: parseGdeltDate(a.seendate),
+    })),
+  },
+
+  /*
+   * Hacker News ผ่าน Algolia — เปิด CORS แน่นอนและไม่ต้องใช้คีย์
+   * ครอบคลุมข่าวเศรษฐกิจ/การเงินที่คนในวงการเทคโนโลยีสนใจ ไม่ครบเท่าสำนักข่าวการเงินโดยตรง
+   * แต่มีข้อดีคือแทบไม่เคยล่ม และไม่เคยบล็อกเบราว์เซอร์
+   */
+  hn: {
+    label: 'Hacker News (Algolia)',
+    note: 'ค้นข่าวที่ถูกแชร์บน Hacker News — เปิดให้เว็บอื่นเรียกแน่นอน ใช้เป็นตัวสำรองที่เชื่อถือได้',
+    url: (hours) => {
+      const since = Math.floor((Date.now() - hours * 3600000) / 1000);
+      return 'https://hn.algolia.com/api/v1/search_by_date?query='
+        + encodeURIComponent('gold OR inflation OR "federal reserve"')
+        + `&tags=story&numericFilters=created_at_i>${since}&hitsPerPage=60`;
+    },
+    parse: (j) => (j.hits || []).map((h) => ({
+      title: h.title || h.story_title, url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
+      source: 'news.ycombinator.com', at: h.created_at_i ? h.created_at_i * 1000 : null,
+    })),
+  },
+
+  /*
+   * Reddit — จุดปลายทาง .json ของ Reddit เปิด CORS และไม่ต้องใช้คีย์
+   * r/economics กับ r/investing มีหัวข้อข่าวการเงินที่ตรงกว่า HN
+   */
+  reddit: {
+    label: 'Reddit (r/economics + r/investing)',
+    note: 'หัวข้อข่าวการเงินที่คนโพสต์กันจริง ตรงประเด็นกว่า Hacker News',
+    url: () => 'https://www.reddit.com/r/economics+investing+Gold/new.json?limit=80&raw_json=1',
+    parse: (j) => (((j.data || {}).children) || []).map((c) => ({
+      title: (c.data || {}).title,
+      url: (c.data || {}).url_overridden_by_dest || `https://reddit.com${(c.data || {}).permalink || ''}`,
+      source: 'reddit.com/r/' + ((c.data || {}).subreddit || ''),
+      at: (c.data || {}).created_utc ? (c.data || {}).created_utc * 1000 : null,
     })),
   },
 };
+
+/** ลำดับที่จะลอง เมื่อเจ้าแรกใช้ไม่ได้ */
+export const FEED_ORDER = ['gdelt', 'hn', 'reddit'];
 
 /** GDELT ส่งเวลามาแบบ 20260831T120000Z ซึ่ง Date.parse อ่านไม่ออก ต้องแปลงเอง */
 export function parseGdeltDate(s) {
@@ -211,27 +248,52 @@ export function parseGdeltDate(s) {
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
 }
 
-/** ดึงข่าวแล้ววิเคราะห์ทีละชิ้น เรียงข่าวที่กระทบทองแรงสุดไว้บน */
+/**
+ * ดึงข่าวแล้ววิเคราะห์ทีละชิ้น
+ *
+ * ลองทีละเจ้าตามลำดับจนกว่าจะได้ข้อมูล เพราะบริการข่าวฟรีล่มบ่อยและบางเจ้า
+ * ไม่ยอมให้เว็บอื่นเรียก (CORS) ซึ่งต่างกันไปตามเครือข่ายของผู้ใช้ด้วย
+ * เก็บสาเหตุที่แต่ละเจ้าล้มไว้รายงาน จะได้รู้ว่าติดตรงไหนจริง ๆ
+ */
 export async function fetchNews(opts = {}) {
-  const feed = NEWS_FEEDS[opts.feed || 'gdelt'];
+  const order = opts.feed ? [opts.feed] : (opts.order || FEED_ORDER);
   const doFetch = opts.fetchImpl || ((u) => fetch(u));
+  const attempts = [];
   const t0 = Date.now();
-  try {
-    const res = await doFetch(feed.url(opts.hours || 24));
-    if (!res.ok) return { ok: false, reason: `เซิร์ฟเวอร์ตอบรหัส ${res.status}`, ms: Date.now() - t0 };
-    const raw = await res.json();
-    const items = feed.parse(raw)
-      .filter((a) => a.title)
-      .map((a) => ({ ...a, analysis: classifyHeadline(a.title) }))
-      .filter((a) => a.analysis)
-      .sort((a, b) => Math.abs(b.analysis.score) - Math.abs(a.analysis.score));
-    return { ok: true, items, ms: Date.now() - t0, at: Date.now(), climate: climateOf(items) };
-  } catch (e) {
-    const msg = String((e && e.message) || e);
-    const cors = /Failed to fetch|NetworkError|Load failed/i.test(msg);
-    return { ok: false, cors, ms: Date.now() - t0,
-      reason: cors ? 'ยิงไปไม่ถึง — เซิร์ฟเวอร์อาจไม่อนุญาตให้เว็บอื่นเรียก (CORS) หรือเครือข่ายบล็อก' : msg };
+
+  for (const key of order) {
+    const feed = NEWS_FEEDS[key];
+    if (!feed) continue;
+    const s0 = Date.now();
+    try {
+      const res = await doFetch(feed.url(opts.hours || 24));
+      if (!res.ok) {
+        attempts.push({ feed: key, label: feed.label, ok: false, ms: Date.now() - s0,
+          reason: `เซิร์ฟเวอร์ตอบรหัส ${res.status}` });
+        continue;
+      }
+      const raw = await res.json();
+      const parsed = feed.parse(raw).filter((a) => a.title);
+      const items = parsed
+        .map((a) => ({ ...a, analysis: classifyHeadline(a.title) }))
+        .filter((a) => a.analysis)
+        .sort((a, b) => Math.abs(b.analysis.score) - Math.abs(a.analysis.score));
+      attempts.push({ feed: key, label: feed.label, ok: true, ms: Date.now() - s0,
+        raw: parsed.length, relevant: items.length });
+      // ได้ข้อมูลแล้วแต่ไม่มีข่าวเกี่ยวกับทองเลย ก็ยังนับว่าเจ้านี้ใช้ได้
+      if (parsed.length) {
+        return { ok: true, feed: key, label: feed.label, items, attempts,
+          ms: Date.now() - t0, at: Date.now(), climate: climateOf(items) };
+      }
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      const cors = /Failed to fetch|NetworkError|Load failed/i.test(msg);
+      attempts.push({ feed: key, label: feed.label, ok: false, cors, ms: Date.now() - s0,
+        reason: cors ? 'ยิงไปไม่ถึง — เซิร์ฟเวอร์ไม่อนุญาตให้เว็บอื่นเรียก (CORS) หรือเครือข่ายบล็อก' : msg });
+    }
   }
+  return { ok: false, attempts, ms: Date.now() - t0,
+    reason: 'ลองครบทุกแหล่งแล้วยังดึงข่าวไม่ได้' };
 }
 
 /**

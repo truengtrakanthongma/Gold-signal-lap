@@ -988,6 +988,23 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
       <div><h3>เส้นทุน (หน่วย R)</h3><canvas id="equityCanvas" height="150"></canvas></div>
       <div><h3>ปัจจัยไหนทำนายได้จริง</h3><div id="btFactors"></div></div>
     </div>
+    <details class="learn-box">
+      <summary>ข่าว + กราฟ ช่วยให้แม่นขึ้นจริงไหม</summary>
+      <p class="tiny">
+        คำถาม: ถ้าเอา<b>ข่าว</b>มาผสมกับ<b>กราฟ</b> จะคาดการณ์ได้แน่นอนกว่าเดิมไหม
+        ปุ่มนี้ตอบด้วยการวัด ไม่ใช่ด้วยความรู้สึก —
+        ดึงข่าวย้อนหลังในช่วงเวลาเดียวกับแท่งเทียนที่โหลดมา จัดเรียงตามเวลาแบบ<b>หน่วง 15 นาที</b>
+        (กันการใช้ข่าวที่ตอนนั้นยังไม่มีใครรู้) แล้วแบ่งไม้เทรดเป็นสามกลุ่ม:
+        <b>ข่าวหนุน · ข่าวค้าน · ข่าวเงียบ</b> แล้วเทียบผลกันตรง ๆ<br><br>
+        ถ้าตัดไม้ที่ข่าวค้านออกแล้วผลดีขึ้นอย่างมีนัย ระบบจะบอกว่าใช้ได้ ถ้าไม่ ก็จะบอกตรง ๆ ว่าไม่ช่วย
+      </p>
+      <div class="bt-controls">
+        <button id="runNewsTest" class="btn primary">ทดสอบว่าข่าวช่วยได้จริงไหม</button>
+        <span id="newsTestStatus" class="tiny"></span>
+      </div>
+      <div id="newsTestBox"></div>
+    </details>
+
     <details class="learn-box" id="adaptBoxWrap" open>
       <summary><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.2v9.6M8 4.4a2.2 2.2 0 0 0-4 1.3c-1 .4-1.4 1.6-.8 2.5-.6 1 0 2.4 1.2 2.6.2 1.1 1.5 1.7 2.5 1.1M8 4.4a2.2 2.2 0 0 1 4 1.3c1 .4 1.4 1.6.8 2.5.6 1 0 2.4-1.2 2.6-.2 1.1-1.5 1.7-2.5 1.1"/></svg> ให้ระบบศึกษาตลาดนี้เอง แล้วปรับกลยุทธ์ตามที่เรียนรู้</summary>
       <p class="tiny">
@@ -1041,6 +1058,8 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
       </label>
       <label>เว้นระยะเตือน (นาที) <input type="number" id="cooldownInput" value="5" min="0" max="120"></label>
       <label class="wide">Webhook (Discord) <input type="text" id="webhookInput" placeholder="https://discord.com/api/webhooks/..."></label>
+      <button id="testWebhook" class="btn">ส่งข้อความทดสอบ</button>
+      <span id="webhookStatus" class="tiny"></span>
     </div>
     <div class="rule-builder">
       <h3>กฎเตือนส่วนตัว</h3>
@@ -3801,14 +3820,153 @@ class Chart {
   return {Chart};
 })();
 
-__m.alerts = (function () {
+__m.discord = (function () {
 
+/**
+ * discord.js — ส่งสัญญาณเข้า Discord ผ่าน webhook
+ *
+ * ทำไมถึงคุ้มกว่าการแจ้งเตือนบนหน้าจอ: หน้าเว็บต้องเปิดค้างไว้ถึงจะเตือนได้
+ * แต่ Discord เด้งเข้ามือถือแม้ปิดจอ และเก็บประวัติสัญญาณย้อนหลังให้เองด้วย
+ *
+ * *** URL ของ webhook คือความลับ ***
+ * ใครได้ไปก็โพสต์เข้าห้องคุณได้ จึงเก็บใน localStorage ของเบราว์เซอร์เท่านั้น
+ * ไม่เขียนลงไฟล์ ไม่ขึ้น GitHub — กฎเดียวกับ API key
+ */
+
+/** สีของแถบข้างซ้ายใน Discord (ตัวเลขฐานสิบ) */
+const COLOR = { buy: 0x26a96a, sell: 0xdc4c4c, wait: 0x667085, warn: 0xc99a2e };
+
+/**
+ * ตรวจว่าเป็น URL ของ Discord webhook จริง
+ *
+ * ไม่ใช่แค่ความสวยงาม: ถ้าผู้ใช้วาง URL ผิดที่ไป ระบบจะยิงข้อมูลการเทรด
+ * ไปยังเซิร์ฟเวอร์ที่ไม่รู้จัก จึงต้องกันไว้ก่อนยิงครั้งแรก
+ */
+function isValidWebhook(url) {
+  if (!url) return false;
+  try {
+    const u = new URL(String(url).trim());
+    if (u.protocol !== 'https:') return false;
+    if (!/^(canary\.|ptb\.)?discord(app)?\.com$/.test(u.hostname)) return false;
+    return /^\/api\/(v\d+\/)?webhooks\/\d+\/[\w-]+$/.test(u.pathname);
+  } catch (e) { return false; }
+}
+
+/** ส่งข้อความเข้า Discord */
+async function sendDiscord(url, payload, opts = {}) {
+  if (!isValidWebhook(url)) {
+    return { ok: false, reason: 'ไม่ใช่ URL ของ Discord webhook — ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/...' };
+  }
+  const doFetch = opts.fetchImpl || ((u, i) => fetch(u, i));
+  const t0 = Date.now();
+  try {
+    const res = await doFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const ms = Date.now() - t0;
+    // Discord ตอบ 204 เมื่อสำเร็จ (ไม่มีเนื้อหาตอบกลับ)
+    if (res.status === 204 || res.ok) return { ok: true, ms, status: res.status };
+    if (res.status === 429) {
+      return { ok: false, ms, status: 429,
+        reason: 'ส่งถี่เกินไป Discord จำกัดอัตราไว้ — เว้นระยะแล้วลองใหม่' };
+    }
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      return { ok: false, ms, status: res.status,
+        reason: 'Discord ไม่รับ webhook นี้ — อาจถูกลบไปแล้วหรือ URL ผิด สร้างใหม่ในห้องแล้วคัดลอกมาใส่อีกครั้ง' };
+    }
+    return { ok: false, ms, status: res.status, reason: `Discord ตอบรหัส ${res.status}` };
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    const cors = /Failed to fetch|NetworkError|Load failed/i.test(msg);
+    return { ok: false, ms: Date.now() - t0, cors,
+      reason: cors
+        ? 'ยิงไปไม่ถึง Discord — เครือข่ายของคุณอาจบล็อก หรือเบราว์เซอร์ปฏิเสธคำขอข้ามโดเมน'
+        : msg };
+  }
+}
+
+/** ตัดข้อความให้พอดีขีดจำกัดของ Discord โดยไม่ตัดกลางคำจนอ่านไม่รู้เรื่อง */
+function clip(text, max) {
+  const t = String(text || '');
+  if (t.length <= max) return t;
+  return t.slice(0, max - 1).replace(/\s+\S*$/, '') + '…';
+}
+
+/**
+ * แปลงสัญญาณเป็นข้อความ Discord
+ *
+ * ใส่เฉพาะสิ่งที่ต้องใช้ตัดสินใจ: ทำอะไร ที่ราคาไหน ตัดขาดทุนตรงไหน เป้าตรงไหน
+ * และเหตุผลสั้น ๆ — ไม่ใช่ยัดทุกอย่างลงไปจนอ่านบนมือถือไม่ไหว
+ */
+function buildSignalMessage(o) {
+  const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [] } = o;
+  const isTrade = action === 'buy' || action === 'sell';
+  const title = action === 'buy' ? 'สัญญาณซื้อ (BUY)'
+    : action === 'sell' ? 'สัญญาณขาย (SELL)'
+    : 'ยังไม่มีสัญญาณ';
+
+  const fields = [];
+  if (setup && isTrade) {
+    fields.push(
+      { name: 'ราคาเข้า', value: '`' + setup.entry.toFixed(2) + '`', inline: true },
+      { name: 'ตัดขาดทุน', value: '`' + setup.sl.toFixed(2) + '`', inline: true },
+      { name: `เป้าหมาย (${setup.mainR}R)`, value: '`' + setup.tpMain.toFixed(2) + '`', inline: true },
+    );
+    if (setup.lots) {
+      fields.push({ name: 'ขนาดไม้', value: '`' + setup.lots.toFixed(2) + '` ล็อต', inline: true });
+    }
+    fields.push({ name: 'ได้:เสีย', value: '`' + setup.rrNow.toFixed(2) + ':1`', inline: true });
+  }
+  if (prob && prob.p !== null && prob.p !== undefined) {
+    fields.push({ name: 'อัตราชนะในอดีต', value: `\`${prob.p.toFixed(0)}%\` (${prob.n} ไม้)`, inline: true });
+  }
+  if (blocks.length) {
+    fields.push({ name: 'เหตุผลที่ยังไม่ควรเข้า', value: clip(blocks.join('\n'), 1000) });
+  }
+  if (reasons.length) {
+    fields.push({ name: 'ปัจจัยสนับสนุน', value: clip(reasons.slice(0, 5).map((r) => '• ' + r).join('\n'), 1000) });
+  }
+
+  return {
+    username: 'Gold Signal Lab',
+    embeds: [{
+      title: clip(title, 256),
+      description: `**${instrument || 'ทองคำ'}** · กรอบ ${tf || '—'} · ราคา \`${price ? price.toFixed(2) : '—'}\``
+        + `\nคะแนนสัญญาณ **${score === null || score === undefined ? '—' : score.toFixed(1)}**`,
+      color: COLOR[action] || COLOR.wait,
+      fields: fields.slice(0, 25),
+      footer: { text: 'เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
+}
+
+/** ข้อความทดสอบ ให้ผู้ใช้เห็นหน้าตาจริงก่อนใช้งาน */
+function buildTestMessage() {
+  return buildSignalMessage({
+    action: 'buy', score: 62.4, price: 3345.18, instrument: 'PAXG/USD (ทดสอบ)', tf: '15 นาที',
+    setup: { entry: 3345.18, sl: 3332.40, tpMain: 3370.74, mainR: 2, lots: 0.78, rrNow: 2.0 },
+    prob: { p: 41, n: 86 },
+    reasons: ['นี่คือข้อความทดสอบ — ถ้าเห็นข้อความนี้แปลว่าเชื่อมต่อสำเร็จ',
+              'สัญญาณจริงจะมีเหตุผลจากปัจจัยที่ระบบตรวจพบจริง'],
+  });
+}
+
+  return {isValidWebhook, sendDiscord, buildSignalMessage, buildTestMessage};
+})();
+
+__m.alerts = (function () {
+  const {sendDiscord, isValidWebhook, buildSignalMessage} = __m.discord;
 /**
  * alerts.js — ระบบแจ้งเตือน: เสียง + แจ้งเตือนเบราว์เซอร์ + พูดไทย + Webhook (Discord ฯลฯ)
  * และ "กฎเตือนส่วนตัว" เช่น ราคาทะลุ 3400 หรือ RSI ต่ำกว่า 30
  */
 
 const LS_KEY = 'goldtrader.alerts.v1';
+
+
 
 class AlertCenter {
   constructor() {
@@ -3818,6 +3976,8 @@ class AlertCenter {
     this.speak = false;
     this.desktop = false;
     this.webhookUrl = '';
+    this.lastWebhook = null;   // ผลการส่งครั้งล่าสุด ให้หน้าจอบอกผู้ใช้ได้ว่าใช้ได้จริงไหม
+    this.onWebhookResult = null;
     this.cooldownMs = 5 * 60 * 1000;
     this._lastSignalAt = 0;
     this._lastSignalSide = 0;
@@ -3894,15 +4054,43 @@ class AlertCenter {
     } catch (e) { /* ไม่มีเสียงไทยก็ข้าม */ }
   }
 
+  /**
+   * ส่งเข้า Discord
+   *
+   * เดิมกลืน error ทิ้งทั้งหมด "เพื่อไม่รบกวนผู้ใช้" ซึ่งเป็นการตัดสินใจที่ผิด:
+   * ช่องแจ้งเตือนที่ล้มเงียบ ๆ แย่กว่าไม่มีเลย เพราะผู้ใช้จะนั่งรอสัญญาณ
+   * ที่ไม่มีวันมา โดยเชื่อว่าระบบกำลังเฝ้าให้อยู่
+   *
+   * ตอนนี้เก็บผลครั้งล่าสุดไว้ให้หน้าจอแสดงได้ว่าส่งผ่านหรือไม่ผ่าน เพราะอะไร
+   */
   async sendWebhook(payload) {
-    if (!this.webhookUrl) return;
-    try {
-      await fetch(this.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: payload.text, username: 'Gold Signal Bot', ...payload.extra }),
-      });
-    } catch (e) { /* ปลายทางบล็อก CORS ก็ไม่ต้องรบกวนผู้ใช้ */ }
+    if (!this.webhookUrl) return null;
+    const msg = payload.discord || buildSignalMessage({
+      action: payload.kind === 'buy' ? 'buy' : payload.kind === 'sell' ? 'sell' : 'wait',
+      score: payload.score, price: payload.price,
+      instrument: payload.instrument, tf: payload.tf,
+      setup: payload.setup, prob: payload.prob,
+      reasons: payload.reasons || [], blocks: payload.blocks || [],
+    });
+    const res = await sendDiscord(this.webhookUrl, msg);
+    this.lastWebhook = { ...res, at: Date.now() };
+    if (this.onWebhookResult) this.onWebhookResult(this.lastWebhook);
+    return res;
+  }
+
+  /** ส่งข้อความทดสอบ เพื่อให้ผู้ใช้เห็นว่าเชื่อมต่อได้จริงก่อนพึ่งพามัน */
+  async testWebhook(message) {
+    if (!isValidWebhook(this.webhookUrl)) {
+      const bad = { ok: false, at: Date.now(),
+        reason: 'ยังไม่ได้ใส่ URL หรือใส่ไม่ถูกรูปแบบ — ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/' };
+      this.lastWebhook = bad;
+      if (this.onWebhookResult) this.onWebhookResult(bad);
+      return bad;
+    }
+    const res = await sendDiscord(this.webhookUrl, message);
+    this.lastWebhook = { ...res, at: Date.now(), test: true };
+    if (this.onWebhookResult) this.onWebhookResult(this.lastWebhook);
+    return this.lastWebhook;
   }
 
   /** ยิงแจ้งเตือน 1 รายการ (บันทึกลง log + เสียง + desktop + webhook) */
@@ -4904,18 +5092,55 @@ function classifyHeadline(text) {
  */
 const NEWS_FEEDS = {
   gdelt: {
-    label: 'GDELT (ฟรี ไม่ต้องใช้คีย์)',
-    needsKey: false,
-    note: 'ฐานข้อมูลข่าวเปิดที่เก็บข่าวทั่วโลกแบบเรียลไทม์ ครอบคลุมกว้างแต่คุณภาพหัวข้อไม่สม่ำเสมอ',
+    label: 'GDELT',
+    note: 'ฐานข้อมูลข่าวเปิดของโครงการวิจัย ครอบคลุมทั่วโลก ไม่ต้องใช้คีย์',
     url: (hours) => 'https://api.gdeltproject.org/api/v2/doc/doc?query='
       + encodeURIComponent('(gold prices OR "federal reserve" OR inflation OR "interest rate") sourcelang:english')
       + `&mode=artlist&maxrecords=60&timespan=${Math.max(1, hours)}h&format=json&sort=datedesc`,
     parse: (j) => (j.articles || []).map((a) => ({
-      title: a.title, url: a.url, source: a.domain,
-      at: parseGdeltDate(a.seendate),
+      title: a.title, url: a.url, source: a.domain, at: parseGdeltDate(a.seendate),
+    })),
+  },
+
+  /*
+   * Hacker News ผ่าน Algolia — เปิด CORS แน่นอนและไม่ต้องใช้คีย์
+   * ครอบคลุมข่าวเศรษฐกิจ/การเงินที่คนในวงการเทคโนโลยีสนใจ ไม่ครบเท่าสำนักข่าวการเงินโดยตรง
+   * แต่มีข้อดีคือแทบไม่เคยล่ม และไม่เคยบล็อกเบราว์เซอร์
+   */
+  hn: {
+    label: 'Hacker News (Algolia)',
+    note: 'ค้นข่าวที่ถูกแชร์บน Hacker News — เปิดให้เว็บอื่นเรียกแน่นอน ใช้เป็นตัวสำรองที่เชื่อถือได้',
+    url: (hours) => {
+      const since = Math.floor((Date.now() - hours * 3600000) / 1000);
+      return 'https://hn.algolia.com/api/v1/search_by_date?query='
+        + encodeURIComponent('gold OR inflation OR "federal reserve"')
+        + `&tags=story&numericFilters=created_at_i>${since}&hitsPerPage=60`;
+    },
+    parse: (j) => (j.hits || []).map((h) => ({
+      title: h.title || h.story_title, url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
+      source: 'news.ycombinator.com', at: h.created_at_i ? h.created_at_i * 1000 : null,
+    })),
+  },
+
+  /*
+   * Reddit — จุดปลายทาง .json ของ Reddit เปิด CORS และไม่ต้องใช้คีย์
+   * r/economics กับ r/investing มีหัวข้อข่าวการเงินที่ตรงกว่า HN
+   */
+  reddit: {
+    label: 'Reddit (r/economics + r/investing)',
+    note: 'หัวข้อข่าวการเงินที่คนโพสต์กันจริง ตรงประเด็นกว่า Hacker News',
+    url: () => 'https://www.reddit.com/r/economics+investing+Gold/new.json?limit=80&raw_json=1',
+    parse: (j) => (((j.data || {}).children) || []).map((c) => ({
+      title: (c.data || {}).title,
+      url: (c.data || {}).url_overridden_by_dest || `https://reddit.com${(c.data || {}).permalink || ''}`,
+      source: 'reddit.com/r/' + ((c.data || {}).subreddit || ''),
+      at: (c.data || {}).created_utc ? (c.data || {}).created_utc * 1000 : null,
     })),
   },
 };
+
+/** ลำดับที่จะลอง เมื่อเจ้าแรกใช้ไม่ได้ */
+const FEED_ORDER = ['gdelt', 'hn', 'reddit'];
 
 /** GDELT ส่งเวลามาแบบ 20260831T120000Z ซึ่ง Date.parse อ่านไม่ออก ต้องแปลงเอง */
 function parseGdeltDate(s) {
@@ -4925,27 +5150,52 @@ function parseGdeltDate(s) {
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
 }
 
-/** ดึงข่าวแล้ววิเคราะห์ทีละชิ้น เรียงข่าวที่กระทบทองแรงสุดไว้บน */
+/**
+ * ดึงข่าวแล้ววิเคราะห์ทีละชิ้น
+ *
+ * ลองทีละเจ้าตามลำดับจนกว่าจะได้ข้อมูล เพราะบริการข่าวฟรีล่มบ่อยและบางเจ้า
+ * ไม่ยอมให้เว็บอื่นเรียก (CORS) ซึ่งต่างกันไปตามเครือข่ายของผู้ใช้ด้วย
+ * เก็บสาเหตุที่แต่ละเจ้าล้มไว้รายงาน จะได้รู้ว่าติดตรงไหนจริง ๆ
+ */
 async function fetchNews(opts = {}) {
-  const feed = NEWS_FEEDS[opts.feed || 'gdelt'];
+  const order = opts.feed ? [opts.feed] : (opts.order || FEED_ORDER);
   const doFetch = opts.fetchImpl || ((u) => fetch(u));
+  const attempts = [];
   const t0 = Date.now();
-  try {
-    const res = await doFetch(feed.url(opts.hours || 24));
-    if (!res.ok) return { ok: false, reason: `เซิร์ฟเวอร์ตอบรหัส ${res.status}`, ms: Date.now() - t0 };
-    const raw = await res.json();
-    const items = feed.parse(raw)
-      .filter((a) => a.title)
-      .map((a) => ({ ...a, analysis: classifyHeadline(a.title) }))
-      .filter((a) => a.analysis)
-      .sort((a, b) => Math.abs(b.analysis.score) - Math.abs(a.analysis.score));
-    return { ok: true, items, ms: Date.now() - t0, at: Date.now(), climate: climateOf(items) };
-  } catch (e) {
-    const msg = String((e && e.message) || e);
-    const cors = /Failed to fetch|NetworkError|Load failed/i.test(msg);
-    return { ok: false, cors, ms: Date.now() - t0,
-      reason: cors ? 'ยิงไปไม่ถึง — เซิร์ฟเวอร์อาจไม่อนุญาตให้เว็บอื่นเรียก (CORS) หรือเครือข่ายบล็อก' : msg };
+
+  for (const key of order) {
+    const feed = NEWS_FEEDS[key];
+    if (!feed) continue;
+    const s0 = Date.now();
+    try {
+      const res = await doFetch(feed.url(opts.hours || 24));
+      if (!res.ok) {
+        attempts.push({ feed: key, label: feed.label, ok: false, ms: Date.now() - s0,
+          reason: `เซิร์ฟเวอร์ตอบรหัส ${res.status}` });
+        continue;
+      }
+      const raw = await res.json();
+      const parsed = feed.parse(raw).filter((a) => a.title);
+      const items = parsed
+        .map((a) => ({ ...a, analysis: classifyHeadline(a.title) }))
+        .filter((a) => a.analysis)
+        .sort((a, b) => Math.abs(b.analysis.score) - Math.abs(a.analysis.score));
+      attempts.push({ feed: key, label: feed.label, ok: true, ms: Date.now() - s0,
+        raw: parsed.length, relevant: items.length });
+      // ได้ข้อมูลแล้วแต่ไม่มีข่าวเกี่ยวกับทองเลย ก็ยังนับว่าเจ้านี้ใช้ได้
+      if (parsed.length) {
+        return { ok: true, feed: key, label: feed.label, items, attempts,
+          ms: Date.now() - t0, at: Date.now(), climate: climateOf(items) };
+      }
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      const cors = /Failed to fetch|NetworkError|Load failed/i.test(msg);
+      attempts.push({ feed: key, label: feed.label, ok: false, cors, ms: Date.now() - s0,
+        reason: cors ? 'ยิงไปไม่ถึง — เซิร์ฟเวอร์ไม่อนุญาตให้เว็บอื่นเรียก (CORS) หรือเครือข่ายบล็อก' : msg });
+    }
   }
+  return { ok: false, attempts, ms: Date.now() - t0,
+    reason: 'ลองครบทุกแหล่งแล้วยังดึงข่าวไม่ได้' };
 }
 
 /**
@@ -5016,7 +5266,238 @@ function economicCalendar(now = new Date()) {
     .sort((a, b) => (a.at || Infinity) - (b.at || Infinity));
 }
 
-  return {GOLD_DRIVERS, classifyHeadline, NEWS_FEEDS, parseGdeltDate, fetchNews, climateOf, economicCalendar};
+  return {GOLD_DRIVERS, classifyHeadline, NEWS_FEEDS, FEED_ORDER, parseGdeltDate, fetchNews, climateOf, economicCalendar};
+})();
+
+__m.newsfactor = (function () {
+  const {classifyHeadline} = __m.news;
+/**
+ * newsfactor.js — เอาข่าวมาผสมกับกราฟ แล้ววัดว่ามันช่วยจริงไหม
+ *
+ * *** กับดักที่ทำให้ระบบข่าว+กราฟส่วนใหญ่ "ดูดีแต่ใช้ไม่ได้" ***
+ *
+ * ถ้าเอาข่าวเวลา 14:00 ไปใช้กับแท่งเทียน 14:00 คุณกำลังใช้ข้อมูลอนาคต
+ * เพราะกว่าข่าวจะถูกเผยแพร่ ถูกเก็บเข้าฐานข้อมูล และคนอ่านทัน เวลาผ่านไปแล้ว
+ * ผลคือ backtest จะสวยมาก และพังทันทีที่ใช้จริง
+ *
+ * ที่แย่กว่านั้น: GDELT บันทึก "เวลาที่ระบบเห็นข่าว" (seendate) ไม่ใช่เวลาที่ข่าวเกิด
+ * ซึ่งอาจช้ากว่าเหตุการณ์จริงเป็นสิบนาที และ *ช้าไม่เท่ากันในแต่ละข่าว*
+ * ถ้าไม่เผื่อเวลาหน่วง ตัวเลขที่ได้จะเป็นการโกงตัวเองล้วน ๆ
+ *
+ * ไฟล์นี้จึงบังคับ "เวลาหน่วง" (lag) ทุกครั้ง และมีเทสต์พิสูจน์ว่าข่าวที่เกิดหลังแท่ง
+ * ไม่มีทางไหลย้อนเข้ามาในแท่งนั้นได้เลย
+ */
+
+
+
+const DEFAULT_NEWS_CFG = {
+  /*
+   * หน่วงกี่นาทีก่อนถือว่าข่าว "ใช้ได้"
+   *
+   * 15 นาทีไม่ใช่ตัวเลขสุ่ม: ข่าวต้องถูกเผยแพร่ → ถูกเก็บเข้าฐานข้อมูล → เราดึงมาได้
+   * ถ้าตั้งน้อยกว่านี้ เท่ากับสมมติว่าเรารู้ข่าวเร็วกว่าที่เป็นไปได้จริง
+   */
+  lagMin: 15,
+  /** ย้อนดูข่าวในกี่ชั่วโมง — ข่าวเก่ากว่านี้ถือว่าตลาดรับรู้ไปแล้ว */
+  windowH: 6,
+  /** ครึ่งชีวิตของอิทธิพลข่าว (ชั่วโมง) */
+  halfLifeH: 3,
+};
+
+/**
+ * สร้างดัชนีข่าวสำหรับเปิดดูตามเวลา
+ *
+ * เก็บเรียงตามเวลา แล้วเปิดดูด้วยการค้นแบบแบ่งครึ่ง เพื่อให้เรียกซ้ำหลายพันครั้งได้เร็ว
+ * (backtest เรียกทุกแท่ง ถ้าไล่ทีละตัวจะช้าจนใช้ไม่ได้)
+ */
+function buildNewsIndex(items, cfg = {}) {
+  const o = { ...DEFAULT_NEWS_CFG, ...cfg };
+  const rows = (items || [])
+    .map((it) => {
+      const a = it.analysis || classifyHeadline(it.title);
+      if (!a || !it.at) return null;
+      return { at: it.at, score: a.score, dir: a.dir, title: it.title };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.at - b.at);
+
+  return { rows, cfg: o };
+}
+
+/** ตำแหน่งแรกที่เวลา >= t (ค้นแบบแบ่งครึ่ง) */
+function lowerBound(rows, t) {
+  let lo = 0, hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].at < t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * บรรยากาศข่าว ณ เวลาหนึ่ง — ใช้ได้เฉพาะข่าวที่ "รู้ได้แล้วจริง ๆ" ตอนนั้น
+ *
+ * @param at เวลาของแท่งที่กำลังตัดสินใจ (ต้องเป็นเวลาเปิดแท่ง ไม่ใช่เวลาปิด)
+ */
+function newsAt(index, at) {
+  const { rows, cfg } = index;
+  if (!rows.length) return { score: 0, n: 0 };
+
+  // ขอบบน: ข่าวต้องเก่ากว่าเวลาปัจจุบันอย่างน้อยเท่ากับเวลาหน่วง
+  const usableUntil = at - cfg.lagMin * 60000;
+  const from = at - cfg.windowH * 3600000;
+
+  const hi = lowerBound(rows, usableUntil);
+  const lo = lowerBound(rows, from);
+  if (hi <= lo) return { score: 0, n: 0 };
+
+  let num = 0, den = 0, n = 0;
+  for (let i = lo; i < hi; i++) {
+    const ageH = (at - rows[i].at) / 3600000;
+    const w = Math.pow(0.5, ageH / cfg.halfLifeH);
+    num += rows[i].score * w;
+    den += Math.abs(rows[i].score) * w;
+    n++;
+  }
+  return { score: den ? num / den : 0, n };
+}
+
+/**
+ * ข่าวเห็นด้วยกับทิศที่กราฟจะเข้าไหม
+ *
+ * คืน 'agree' | 'against' | 'quiet'
+ * 'quiet' คือไม่มีข่าวพอจะบอกอะไร — ต่างจาก 'against' และต้องแยกให้ออก
+ */
+function newsAgreement(index, at, side, minScore = 0.25) {
+  const s = newsAt(index, at);
+  if (!s.n || Math.abs(s.score) < minScore) return { state: 'quiet', ...s };
+  return { state: Math.sign(s.score) === side ? 'agree' : 'against', ...s };
+}
+
+/**
+ * ดึงข่าวย้อนหลังจาก GDELT เป็นช่วงเวลา
+ *
+ * GDELT จำกัดผลลัพธ์ต่อคำขอ จึงต้องแบ่งช่วงเวลาเป็นก้อน ๆ
+ * และต้องหน่วงระหว่างคำขอ ไม่งั้นโดนปฏิเสธ (เป็นบริการฟรีของโครงการวิจัย)
+ */
+async function fetchHistoricalNews(fromMs, toMs, opts = {}) {
+  const doFetch = opts.fetchImpl || ((u) => fetch(u));
+  const chunkH = opts.chunkH || 24;
+  const pause = opts.pauseMs === undefined ? 1200 : opts.pauseMs;
+  const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
+  const out = [];
+  let cursor = fromMs, calls = 0;
+
+  while (cursor < toMs) {
+    const end = Math.min(cursor + chunkH * 3600000, toMs);
+    const url = 'https://api.gdeltproject.org/api/v2/doc/doc?query='
+      + encodeURIComponent('(gold OR "federal reserve" OR inflation OR "interest rate" OR dollar) sourcelang:english')
+      + `&mode=artlist&maxrecords=250&format=json&sort=datedesc`
+      + `&startdatetime=${stamp(cursor)}&enddatetime=${stamp(end)}`;
+    try {
+      const res = await doFetch(url);
+      calls++;
+      if (res.ok) {
+        const j = await res.json();
+        for (const a of (j.articles || [])) {
+          const at = parseStamp(a.seendate);
+          if (at) out.push({ title: a.title, url: a.url, source: a.domain, at });
+        }
+      }
+    } catch (e) { /* ช่วงที่ดึงไม่ได้ ข้ามไป ดีกว่าล้มทั้งงาน */ }
+    cursor = end;
+    if (pause && cursor < toMs) await new Promise((r) => setTimeout(r, pause));
+    if (opts.onProgress) opts.onProgress({ done: cursor - fromMs, total: toMs - fromMs, calls, got: out.length });
+    if (calls > (opts.maxCalls || 40)) break;
+  }
+  return { items: out, calls };
+}
+
+function parseStamp(s) {
+  const m = String(s || '').match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/);
+  if (!m) { const t = Date.parse(s); return Number.isNaN(t) ? null : t; }
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+}
+
+/**
+ * คำถามที่ต้องตอบ: "กรองด้วยข่าวแล้วดีขึ้นจริงไหม"
+ *
+ * ไม่ใช่การเดา — เอาไม้ที่ backtest ได้มาแล้ว มาแบ่งกลุ่มตามท่าทีของข่าว ณ เวลาที่เข้าไม้
+ * แล้วเทียบผลกันตรง ๆ
+ *
+ * *** ต้องวัดกับช่วงที่ไม่ได้ใช้ตั้งกฎเท่านั้น ***
+ * ถ้าดูทั้งชุดแล้วเลือกกลุ่มที่ดีที่สุด ก็แค่เลือกความบังเอิญที่สวยที่สุด
+ */
+function evaluateNewsFilter(trades, index, opts = {}) {
+  const minScore = opts.minScore === undefined ? 0.25 : opts.minScore;
+  const groups = { agree: [], against: [], quiet: [] };
+  for (const t of trades) {
+    const g = newsAgreement(index, t.t, t.side, minScore);
+    groups[g.state].push(t);
+  }
+  const summarise = (list) => {
+    if (!list.length) return { n: 0, expectancy: null, winRate: null, avgWin: null };
+    const wins = list.filter((t) => t.rMultiple >= 1);
+    return {
+      n: list.length,
+      expectancy: list.reduce((a, t) => a + t.rMultiple, 0) / list.length,
+      winRate: (wins.length / list.length) * 100,
+      avgWin: (() => {
+        const w = list.filter((t) => t.rMultiple > 0);
+        return w.length ? w.reduce((a, t) => a + t.rMultiple, 0) / w.length : null;
+      })(),
+    };
+  };
+  const all = summarise(trades);
+  const agree = summarise(groups.agree);
+  const against = summarise(groups.against);
+  const quiet = summarise(groups.quiet);
+
+  // ถ้าตัดไม้ที่ข่าวค้านออก จะเหลือผลเท่าไร
+  const kept = [...groups.agree, ...groups.quiet];
+  const filtered = summarise(kept);
+
+  return {
+    all, agree, against, quiet, filtered,
+    covered: trades.length ? ((groups.agree.length + groups.against.length) / trades.length) * 100 : 0,
+    delta: all.expectancy !== null && filtered.expectancy !== null ? filtered.expectancy - all.expectancy : null,
+  };
+}
+
+/**
+ * ตัดสินว่าควรใช้ข่าวกรองหรือไม่ — โดยดูจากช่วงที่ไม่ได้ใช้ตั้งกฎ
+ *
+ * เกณฑ์เข้มโดยตั้งใจ เพราะการเพิ่มตัวกรองมีต้นทุนเสมอ (ไม้น้อยลง = ตัวอย่างน้อยลง)
+ * ของใหม่ต้องพิสูจน์ตัวเอง ของเดิมไม่ต้องพิสูจน์ซ้ำ
+ */
+function newsVerdict(res, opts = {}) {
+  const minN = opts.minN || 30;
+  const margin = opts.margin === undefined ? 0.05 : opts.margin;
+  if (!res || res.all.n < minN) {
+    return { level: 'unknown', apply: false,
+      text: `ไม้ยังน้อยเกินไป (${res ? res.all.n : 0} ไม้ ต้องการ ${minN}) — สรุปไม่ได้ว่าข่าวช่วยหรือไม่` };
+  }
+  if (res.covered < 20) {
+    return { level: 'unknown', apply: false,
+      text: `มีข่าวครอบคลุมแค่ ${res.covered.toFixed(0)}% ของไม้ — น้อยเกินกว่าที่ข่าวจะมีผลกับผลรวม` };
+  }
+  const d = res.delta;
+  if (d !== null && d > margin) {
+    return { level: 'good', apply: true,
+      text: `ตัดไม้ที่ข่าวค้านออกแล้วดีขึ้น ${d.toFixed(3)} R ต่อไม้ `
+        + `(เหลือ ${res.filtered.n} จาก ${res.all.n} ไม้) — ข่าวช่วยได้จริงกับข้อมูลชุดนี้` };
+  }
+  if (d !== null && d < -margin) {
+    return { level: 'bad', apply: false,
+      text: `ตัดไม้ที่ข่าวค้านออกแล้วกลับแย่ลง ${Math.abs(d).toFixed(3)} R ต่อไม้ — `
+        + 'ข่าวที่จับได้ไม่ได้บอกอะไรที่กราฟยังไม่รู้ อย่าเอามากรอง' };
+  }
+  return { level: 'ok', apply: false,
+    text: `ต่างกันแค่ ${d === null ? '—' : d.toFixed(3)} R ต่อไม้ ซึ่งอยู่ในระดับความบังเอิญ — `
+      + 'กรองด้วยข่าวไม่ได้เพิ่มความแน่นอน มีแต่ทำให้ไม้น้อยลง' };
+}
+
+  return {DEFAULT_NEWS_CFG, buildNewsIndex, newsAt, newsAgreement, fetchHistoricalNews, evaluateNewsFilter, newsVerdict};
 })();
 
 __m.learn = (function () {
@@ -5746,6 +6227,8 @@ __m.app = (function () {
   const {autoTune, explainAdaptation} = __m.adapt;
   const {SOURCES, testAllSources} = __m.sources;
   const {fetchNews, economicCalendar, GOLD_DRIVERS} = __m.news;
+  const {buildNewsIndex, evaluateNewsFilter, newsVerdict, fetchHistoricalNews} = __m.newsfactor;
+  const {buildTestMessage, isValidWebhook} = __m.discord;
   const {Chart} = __m.chart;
   const {AlertCenter} = __m.alerts;
   const {sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht} = __m.macro;
@@ -5757,6 +6240,8 @@ __m.app = (function () {
 /**
  * app.js — ตัวเชื่อมทุกส่วนเข้าด้วยกัน: ข้อมูลสด → วิเคราะห์ → กราฟ/เหตุผล → แจ้งเตือน
  */
+
+
 
 
 
@@ -5990,6 +6475,7 @@ function bindEvents() {
     analyze(false, false); doBacktest();
   });
   $('runBt').addEventListener('click', () => doBacktest());
+  $('runNewsTest').addEventListener('click', () => doNewsTest());
   $('refreshNews').addEventListener('click', () => loadNews());
   $('newsAuto').addEventListener('change', (e) => { settings.newsAuto = e.target.checked; saveSettings(); armNewsTimer(); });
   $('testSources').addEventListener('click', () => doTestSources());
@@ -6055,7 +6541,17 @@ function bindEvents() {
     $('toggleNarration').textContent = state.narrationOpen ? 'ย่อ' : 'ขยาย';
   });
   $('cooldownInput').addEventListener('change', (e) => { alerts.cooldownMs = (+e.target.value || 0) * 60000; alerts.save(); });
-  $('webhookInput').addEventListener('change', (e) => { alerts.webhookUrl = e.target.value.trim(); alerts.save(); });
+  $('webhookInput').addEventListener('change', (e) => {
+    alerts.webhookUrl = e.target.value.trim(); alerts.save(); renderWebhookStatus();
+  });
+  $('testWebhook').addEventListener('click', async () => {
+    const btn = $('testWebhook');
+    btn.disabled = true;
+    $('webhookStatus').textContent = 'กำลังส่ง…';
+    await alerts.testWebhook(buildTestMessage());
+    btn.disabled = false;
+  });
+  alerts.onWebhookResult = renderWebhookStatus;
   $('addRule').addEventListener('click', () => {
     const value = +$('ruleValue').value;
     if (!value) return;
@@ -6802,6 +7298,117 @@ function renderWalkForward() {
 }
 
 /**
+ * ตอบคำถาม "ข่าว + กราฟ ช่วยให้แม่นขึ้นจริงไหม" ด้วยการวัด
+ *
+ * ต้องวัดกับ *ช่วงสอบ* เท่านั้น
+ * ถ้าดูไม้ทั้งชุดแล้วบอกว่า "กลุ่มที่ข่าวหนุนทำได้ดีกว่า" นั่นคือการเลือกกลุ่มที่สวยที่สุด
+ * หลังจากเห็นคำตอบแล้ว ซึ่งได้ตัวเลขสวยเสมอและใช้กับอนาคตไม่ได้เลย
+ */
+async function doNewsTest() {
+  const btn = $('runNewsTest');
+  if (!state.ctx || !state.bt || !state.bt.trades.length) {
+    $('newsTestStatus').textContent = 'ต้องมีผลทดสอบย้อนหลังก่อน — กดปุ่มทดสอบด้านบนแล้วลองใหม่';
+    return;
+  }
+  const candles = state.candles;
+  const from = candles[0].t, to = candles[candles.length - 1].t;
+  const days = (to - from) / 86400000;
+  btn.disabled = true;
+  $('newsTestStatus').textContent = `กำลังดึงข่าวย้อนหลัง ${days.toFixed(0)} วัน…`;
+
+  const news = await fetchHistoricalNews(from, to, {
+    onProgress: (p) => {
+      $('newsTestStatus').textContent =
+        `ดึงข่าว ${(p.done / p.total * 100).toFixed(0)}% · ${p.calls} คำขอ · ได้ ${p.got} ข่าว`;
+    },
+  });
+  btn.disabled = false;
+
+  if (!news.items.length) {
+    $('newsTestStatus').textContent = '';
+    $('newsTestBox').innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ดึงข่าวย้อนหลังไม่ได้</div>
+      <div class="tiny" style="margin:0">ยิงไป ${news.calls} คำขอแต่ไม่ได้ข่าวกลับมาเลย —
+      บริการอาจไม่ยอมให้เว็บเรียก หรือไม่มีข้อมูลย้อนหลังในช่วงนี้ ทดสอบต่อไม่ได้</div></div>`;
+    return;
+  }
+
+  // แบ่งช่วงเรียนรู้/ช่วงสอบเหมือนที่ใช้ทั้งระบบ แล้ววัดเฉพาะช่วงสอบ
+  const splitAt = candles[Math.floor(candles.length * 0.6)].t;
+  const index = buildNewsIndex(news.items);
+  const outTrades = state.bt.trades.filter((t) => t.t >= splitAt);
+  const res = evaluateNewsFilter(outTrades, index);
+  const verdict = newsVerdict(res);
+  state.newsTest = { res, verdict, news, splitAt };
+  $('newsTestStatus').textContent = `เสร็จ · ${news.items.length} ข่าว · ${news.calls} คำขอ`;
+  renderNewsTest();
+}
+
+function renderNewsTest() {
+  const T = state.newsTest;
+  if (!T) return;
+  const { res, verdict } = T;
+  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
+  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
+  const row = (label, g, note = '') => `<tr>
+      <td>${label}${note ? `<br><span class="tiny">${note}</span>` : ''}</td>
+      <td class="num">${g.n}</td>
+      <td class="num">${pct(g.winRate)}</td>
+      <td class="num">${r(g.avgWin)}</td>
+      <td class="num" style="color:${g.expectancy > 0 ? 'var(--up)' : g.expectancy < 0 ? 'var(--down)' : 'var(--text-2)'}">${r(g.expectancy)}</td>
+    </tr>`;
+  $('newsTestBox').innerHTML = `
+    <div class="wf-card ${verdict.level === 'good' ? 'good' : verdict.level === 'bad' ? 'bad' : 'ok'}">
+      <div class="wf-verdict">${verdict.text}</div>
+      <div class="tiny" style="margin:0">
+        วัดกับช่วงสอบเท่านั้น (40% หลังของข้อมูล) ข่าวถูกหน่วง 15 นาทีก่อนถือว่ารู้ได้ —
+        ข่าวครอบคลุม ${res.covered.toFixed(0)}% ของไม้ ที่เหลือคือช่วงที่ไม่มีข่าวเกี่ยวข้องเลย
+      </div>
+    </div>
+    <table class="learn-table"><thead><tr>
+      <th>กลุ่ม</th><th>ไม้</th><th>ชนะ ≥1R</th><th>กำไรเฉลี่ยตอนชนะ</th><th>ค่าคาดหวัง/ไม้</th>
+    </tr></thead><tbody>
+      ${row('ทั้งหมด (ไม่ใช้ข่าว)', res.all)}
+      ${row('ข่าวหนุนทิศเดียวกับไม้', res.agree)}
+      ${row('ข่าวค้านทิศ', res.against)}
+      ${row('ข่าวเงียบ', res.quiet, 'ไม่มีข่าวเกี่ยวข้อง — ต่างจาก "ค้าน"')}
+      ${row('ถ้าตัดไม้ที่ข่าวค้านออก', res.filtered)}
+    </tbody></table>
+    <p class="tiny">
+      อ่านยังไง: ถ้าแถว <b>ข่าวค้านทิศ</b> แย่กว่าแถว <b>ข่าวหนุน</b> อย่างชัดเจน
+      แปลว่าข่าวมีข้อมูลที่กราฟยังไม่รู้ และการกรองมีประโยชน์
+      แต่ถ้าสองแถวพอ ๆ กัน แปลว่าราคาซึมซับข่าวไปแล้วก่อนที่เราจะอ่านทัน
+      ซึ่งเป็นผลที่เจอบ่อยที่สุดในตลาดที่มีสภาพคล่องสูงอย่างทองคำ
+    </p>`;
+}
+
+/**
+ * บอกผลการส่งเข้า Discord ครั้งล่าสุด
+ *
+ * จำเป็นเพราะช่องแจ้งเตือนที่ล้มเงียบ ๆ แย่กว่าไม่มีเลย —
+ * ผู้ใช้จะนั่งรอสัญญาณที่ไม่มีวันมา โดยเชื่อว่าระบบเฝ้าให้อยู่
+ */
+function renderWebhookStatus() {
+  const el = $('webhookStatus');
+  if (!el) return;
+  const r = alerts.lastWebhook;
+  if (!r) {
+    el.textContent = alerts.webhookUrl
+      ? (isValidWebhook(alerts.webhookUrl) ? 'ยังไม่เคยส่ง — กดทดสอบเพื่อยืนยันว่าใช้ได้' : 'URL ไม่ถูกรูปแบบ')
+      : '';
+    el.style.color = 'var(--text-3)';
+    return;
+  }
+  const t = new Date(r.at).toLocaleTimeString('th-TH');
+  if (r.ok) {
+    el.textContent = `ส่งสำเร็จ ${t}${r.test ? ' (ข้อความทดสอบ)' : ''} · ${r.ms} มิลลิวินาที`;
+    el.style.color = 'var(--up)';
+  } else {
+    el.textContent = `ส่งไม่สำเร็จ ${t} — ${r.reason}`;
+    el.style.color = 'var(--down)';
+  }
+}
+
+/**
  * ดึงข่าวโลกแล้ววิเคราะห์ผลต่อทอง
  *
  * ดึงทุก 10 นาทีก็พอ — ข่าวไม่ได้ออกถี่กว่านั้น และ GDELT เป็นบริการฟรี
@@ -6837,15 +7444,29 @@ function renderNews() {
   const res = state.news;
   const feed = $('newsFeed'), clim = $('newsClimate');
   if (!res) { $('newsMeta').textContent = ''; return; }
+  /* ล้มแล้วต้องบอกให้ครบว่าลองเจ้าไหนไปบ้าง และแต่ละเจ้าติดตรงไหน
+     ไม่งั้นผู้ใช้ได้แค่ "ดึงข่าวไม่ได้" ซึ่งแก้อะไรไม่ได้เลย */
   if (!res.ok) {
     $('newsMeta').textContent = '';
     clim.innerHTML = '';
-    feed.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ดึงข่าวไม่สำเร็จ</div>
-      <div class="tiny" style="margin:0">${res.reason}${res.cors
-        ? '<br>บริการข่าวที่ยอมให้เว็บเรียกตรง ๆ มีน้อยมาก ถ้าเครือข่ายคุณบล็อกอันนี้ ให้ใช้ปฏิทินข่าวด้านล่างแทนไปก่อน' : ''}</div></div>`;
+    const rows = (res.attempts || []).map((a) => `<tr>
+        <td>${a.label}</td>
+        <td style="color:${a.ok ? 'var(--up)' : 'var(--down)'}">${a.ok ? 'ใช้ได้' : 'ไม่ได้'}</td>
+        <td class="tiny">${a.reason || (a.ok ? `ได้ ${a.raw} ข่าว` : '')}</td>
+      </tr>`).join('');
+    feed.innerHTML = `<div class="wf-card weak">
+        <div class="wf-verdict">ดึงข่าวไม่สำเร็จทุกแหล่ง</div>
+        <div class="tiny" style="margin:0">ระบบลองเรียงตามลำดับแล้ว นี่คือผลของแต่ละเจ้า —
+        ถ้าทุกเจ้าขึ้น CORS แปลว่าเครือข่ายหรือเบราว์เซอร์ของคุณบล็อกคำขอข้ามโดเมนไว้</div>
+      </div>
+      <table class="learn-table"><thead><tr><th>แหล่งข่าว</th><th>ผล</th><th>รายละเอียด</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
     return;
   }
-  $('newsMeta').textContent = `${res.items.length} ข่าวที่เกี่ยวข้อง · อัปเดต ${new Date(res.at).toLocaleTimeString('th-TH')} · ใช้เวลา ${res.ms} มิลลิวินาที`;
+  const tried = (res.attempts || []).filter((a) => !a.ok).length;
+  $('newsMeta').textContent = `${res.items.length} ข่าวที่เกี่ยวข้อง · จาก ${res.label}`
+    + `${tried ? ` (ข้าม ${tried} แหล่งที่ใช้ไม่ได้)` : ''}`
+    + ` · อัปเดต ${new Date(res.at).toLocaleTimeString('th-TH')}`;
 
   const c = res.climate;
   const col = c.level === 'up' ? 'var(--up)' : c.level === 'down' ? 'var(--down)' : 'var(--text-2)';
@@ -7417,6 +8038,7 @@ function renderAlertUI() {
   $('togSound').checked = alerts.sound;
   $('togSpeak').checked = alerts.speak;
   $('webhookInput').value = alerts.webhookUrl;
+  renderWebhookStatus();
   $('cooldownInput').value = alerts.cooldownMs / 60000;
   renderRules();
   renderLog();

@@ -183,6 +183,23 @@
       <div><h3>เส้นทุน (หน่วย R)</h3><canvas id="equityCanvas" height="150"></canvas></div>
       <div><h3>ปัจจัยไหนทำนายได้จริง</h3><div id="btFactors"></div></div>
     </div>
+    <details class="learn-box">
+      <summary>ข่าว + กราฟ ช่วยให้แม่นขึ้นจริงไหม</summary>
+      <p class="tiny">
+        คำถาม: ถ้าเอา<b>ข่าว</b>มาผสมกับ<b>กราฟ</b> จะคาดการณ์ได้แน่นอนกว่าเดิมไหม
+        ปุ่มนี้ตอบด้วยการวัด ไม่ใช่ด้วยความรู้สึก —
+        ดึงข่าวย้อนหลังในช่วงเวลาเดียวกับแท่งเทียนที่โหลดมา จัดเรียงตามเวลาแบบ<b>หน่วง 15 นาที</b>
+        (กันการใช้ข่าวที่ตอนนั้นยังไม่มีใครรู้) แล้วแบ่งไม้เทรดเป็นสามกลุ่ม:
+        <b>ข่าวหนุน · ข่าวค้าน · ข่าวเงียบ</b> แล้วเทียบผลกันตรง ๆ<br><br>
+        ถ้าตัดไม้ที่ข่าวค้านออกแล้วผลดีขึ้นอย่างมีนัย ระบบจะบอกว่าใช้ได้ ถ้าไม่ ก็จะบอกตรง ๆ ว่าไม่ช่วย
+      </p>
+      <div class="bt-controls">
+        <button id="runNewsTest" class="btn primary">ทดสอบว่าข่าวช่วยได้จริงไหม</button>
+        <span id="newsTestStatus" class="tiny"></span>
+      </div>
+      <div id="newsTestBox"></div>
+    </details>
+
     <details class="learn-box" id="adaptBoxWrap" open>
       <summary><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.2v9.6M8 4.4a2.2 2.2 0 0 0-4 1.3c-1 .4-1.4 1.6-.8 2.5-.6 1 0 2.4 1.2 2.6.2 1.1 1.5 1.7 2.5 1.1M8 4.4a2.2 2.2 0 0 1 4 1.3c1 .4 1.4 1.6.8 2.5.6 1 0 2.4-1.2 2.6-.2 1.1-1.5 1.7-2.5 1.1"/></svg> ให้ระบบศึกษาตลาดนี้เอง แล้วปรับกลยุทธ์ตามที่เรียนรู้</summary>
       <p class="tiny">
@@ -236,6 +253,8 @@
       </label>
       <label>เว้นระยะเตือน (นาที) <input type="number" id="cooldownInput" value="5" min="0" max="120"></label>
       <label class="wide">Webhook (Discord) <input type="text" id="webhookInput" placeholder="https://discord.com/api/webhooks/..."></label>
+      <button id="testWebhook" class="btn">ส่งข้อความทดสอบ</button>
+      <span id="webhookStatus" class="tiny"></span>
     </div>
     <div class="rule-builder">
       <h3>กฎเตือนส่วนตัว</h3>

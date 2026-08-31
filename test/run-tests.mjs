@@ -13,6 +13,9 @@ import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js
 import { MarketFeed } from '../js/feed.js';
 import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
 import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
+import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict, fetchHistoricalNews, DEFAULT_NEWS_CFG } from '../js/newsfactor.js';
+import { isValidWebhook, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
+import { NEWS_FEEDS, FEED_ORDER } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -1305,12 +1308,18 @@ section('19) ข่าวโลก — ทิศทางที่บอกต�
     ok('ไม่มีข่าวเลย ต้องไม่พังและบอกว่าไม่มี', climateOf([], now).n === 0);
   }
 
-  // ดึงข่าวไม่สำเร็จ ต้องอธิบายเป็นภาษาคน ไม่ใช่โยน error ดิบ
+  /* ดึงข่าวไม่สำเร็จ ต้องอธิบายเป็นภาษาคน ไม่ใช่โยน error ดิบ
+     ตั้งแต่มีแหล่งสำรอง สาเหตุรายเจ้าย้ายไปอยู่ใน attempts แทนที่จะเป็นค่าบนสุด
+     เพราะแต่ละเจ้าอาจล้มคนละสาเหตุกัน */
   {
-    const blocked = await fetchNews({ fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
-    ok('โดนบล็อก → บอกสาเหตุเป็นภาษาคน', !blocked.ok && blocked.cors && /CORS|บล็อก/.test(blocked.reason));
-    const bad = await fetchNews({ fetchImpl: async () => ({ ok: false, status: 429 }) });
-    ok('เซิร์ฟเวอร์ปฏิเสธ → รายงานรหัสที่ได้', !bad.ok && /429/.test(bad.reason));
+    const blocked = await fetchNews({ feed: 'gdelt',
+      fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+    ok('โดนบล็อก → บอกสาเหตุเป็นภาษาคน',
+      !blocked.ok && blocked.attempts[0].cors && /CORS|บล็อก/.test(blocked.attempts[0].reason),
+      JSON.stringify(blocked.attempts[0] || {}).slice(0, 90));
+    const bad = await fetchNews({ feed: 'gdelt', fetchImpl: async () => ({ ok: false, status: 429 }) });
+    ok('เซิร์ฟเวอร์ปฏิเสธ → รายงานรหัสที่ได้',
+      !bad.ok && /429/.test(bad.attempts[0].reason), bad.attempts[0].reason);
   }
 
   /* ปฏิทินข่าว: ใส่เฉพาะที่คำนวณได้แน่นอน
@@ -1328,6 +1337,200 @@ section('19) ข่าวโลก — ทิศทางที่บอกต�
     const cpi = cal.find((e) => e.key === 'cpi');
     ok('CPI ทำเครื่องหมายว่าเป็นค่าประมาณ ไม่ใช่วันจริง',
       cpi && cpi.exact === false && /ไม่ตายตัว/.test(cpi.note));
+  }
+}
+
+// ── ข่าว + กราฟ ─────────────────────────────────────────────────────
+section('20) ผสมข่าวกับกราฟ — ข่าวอนาคตต้องไหลย้อนเข้าอดีตไม่ได้เลย');
+{
+  const H = 3600000, M = 60000;
+  const base = Date.UTC(2026, 0, 10, 12, 0, 0);
+  const mk = (offsetMs, score) => ({ at: base + offsetMs, title: 'x', analysis: { score, dir: Math.sign(score) } });
+
+  /* ด่านที่สำคัญที่สุดของทั้งไฟล์
+     ถ้าข่าวเวลา 14:00 ถูกใช้กับแท่ง 14:00 backtest จะสวยมากและพังทันทีที่ใช้จริง
+     เพราะตอนนั้นจริง ๆ เรายังไม่รู้ข่าวนั้น */
+  {
+    const idx = buildNewsIndex([mk(0, 10)]);
+    ok('ข่าวที่เกิดพร้อมแท่ง ยังใช้ไม่ได้ (ต้องรอเวลาหน่วง)', newsAt(idx, base).n === 0);
+    ok('ข่าวที่เกิดหลังแท่ง ใช้ไม่ได้แน่นอน', newsAt(idx, base - H).n === 0);
+    ok(`ผ่านเวลาหน่วง ${DEFAULT_NEWS_CFG.lagMin} นาทีแล้วถึงใช้ได้`,
+      newsAt(idx, base + (DEFAULT_NEWS_CFG.lagMin + 1) * M).n === 1);
+    ok('ก่อนครบเวลาหน่วง ยังใช้ไม่ได้',
+      newsAt(idx, base + (DEFAULT_NEWS_CFG.lagMin - 5) * M).n === 0);
+  }
+
+  /* พิสูจน์แบบเดียวกับที่ใช้กับตัวจูน: เติมข่าวอนาคตเข้าไป
+     ค่าที่อ่านได้ในอดีตต้องไม่ขยับแม้แต่นิดเดียว */
+  {
+    const past = [mk(-2 * H, 8), mk(-1 * H, -6)];
+    const future = [mk(2 * H, 20), mk(5 * H, -30)];
+    const readAt = base + 30 * M;
+    const a = newsAt(buildNewsIndex(past), readAt);
+    const b = newsAt(buildNewsIndex([...past, ...future]), readAt);
+    ok('เติมข่าวอนาคตเข้าไป ค่าที่อ่านในอดีตต้องเท่าเดิมเป๊ะ',
+      a.n === b.n && near(a.score, b.score, 1e-12), `${a.score} เทียบ ${b.score}`);
+  }
+
+  // ข่าวเก่าเกินหน้าต่างต้องหลุดออก — ตลาดรับรู้ไปแล้ว
+  {
+    const idx = buildNewsIndex([mk(-20 * H, 10)]);
+    ok('ข่าวเก่ากว่าหน้าต่างที่กำหนด ไม่ถูกนับ', newsAt(idx, base).n === 0);
+  }
+
+  // ข่าวใหม่ต้องมีน้ำหนักมากกว่าข่าวเก่าในหน้าต่างเดียวกัน
+  {
+    const idx = buildNewsIndex([mk(-5 * H, -10), mk(-1 * H, 10)]);
+    const r = newsAt(idx, base);
+    ok('ข่าวใหม่มีน้ำหนักมากกว่าข่าวเก่า', r.n === 2 && r.score > 0.2, `ได้ ${r.score.toFixed(2)}`);
+  }
+
+  /* "เงียบ" ต้องแยกจาก "ค้าน" ให้ออก
+     ไม่มีข่าว ไม่เท่ากับข่าวไม่เห็นด้วย — ถ้ารวมสองอย่างนี้ ตัวกรองจะตัดไม้ผิดกลุ่ม */
+  {
+    const quiet = buildNewsIndex([]);
+    ok('ไม่มีข่าวเลย = เงียบ ไม่ใช่ค้าน', newsAgreement(quiet, base, 1).state === 'quiet');
+    const weak = buildNewsIndex([mk(-1 * H, 1), mk(-1 * H, -1)]);
+    ok('ข่าวสองทางหักล้างกัน = เงียบ', newsAgreement(weak, base, 1).state === 'quiet');
+    const strong = buildNewsIndex([mk(-1 * H, 10), mk(-2 * H, 8)]);
+    ok('ข่าวหนุนชัด + เข้าฝั่งซื้อ = เห็นด้วย', newsAgreement(strong, base, 1).state === 'agree');
+    ok('ข่าวหนุนชัด + เข้าฝั่งขาย = ค้าน', newsAgreement(strong, base, -1).state === 'against');
+  }
+
+  // แบ่งกลุ่มไม้แล้วเทียบผล
+  {
+    const idx = buildNewsIndex([mk(-1 * H, 10)]);
+    const trades = [
+      { t: base, side: 1, rMultiple: 2 }, { t: base, side: 1, rMultiple: 2 },
+      { t: base, side: -1, rMultiple: -1 }, { t: base, side: -1, rMultiple: -1 },
+    ];
+    const r = evaluateNewsFilter(trades, idx);
+    ok('แบ่งไม้ตามท่าทีข่าวได้ถูกกลุ่ม', r.agree.n === 2 && r.against.n === 2);
+    ok('ตัดไม้ที่ข่าวค้านออกแล้วค่าคาดหวังดีขึ้น', r.delta > 0, `ได้ ${r.delta}`);
+    ok('รายงานสัดส่วนไม้ที่มีข่าวครอบคลุม', near(r.covered, 100, 1e-9));
+  }
+
+  /* คำตัดสินต้องเข้ม — ไม้น้อยหรือข่าวครอบคลุมน้อย ต้องไม่สรุปว่าช่วย */
+  {
+    const few = newsVerdict({ all: { n: 10 }, covered: 90, delta: 0.5, filtered: { n: 8 } });
+    ok('ไม้น้อยเกินไป → ไม่อนุมัติ ถึงตัวเลขจะสวย', !few.apply && few.level === 'unknown');
+    const thin = newsVerdict({ all: { n: 100 }, covered: 5, delta: 0.5, filtered: { n: 90 } });
+    ok('ข่าวครอบคลุมน้อยเกินไป → ไม่อนุมัติ', !thin.apply && /ครอบคลุม/.test(thin.text));
+    const flat = newsVerdict({ all: { n: 100 }, covered: 60, delta: 0.01, filtered: { n: 80 } });
+    ok('ต่างกันนิดเดียว → บอกว่าเป็นความบังเอิญ ไม่อนุมัติ', !flat.apply && flat.level === 'ok');
+    const good = newsVerdict({ all: { n: 100 }, covered: 60, delta: 0.2, filtered: { n: 80 } });
+    ok('ดีขึ้นชัดและตัวอย่างพอ → อนุมัติ', good.apply && good.level === 'good');
+    const bad = newsVerdict({ all: { n: 100 }, covered: 60, delta: -0.2, filtered: { n: 80 } });
+    ok('แย่ลง → บอกตรง ๆ ว่าอย่าใช้ข่าวกรอง', !bad.apply && bad.level === 'bad');
+  }
+
+  // ดึงข่าวย้อนหลังต้องแบ่งเป็นก้อนและไม่วนไม่จบ
+  {
+    let calls = 0;
+    const r = await fetchHistoricalNews(base - 3 * 24 * H, base, {
+      pauseMs: 0, chunkH: 24,
+      fetchImpl: async () => { calls++; return { ok: true, json: async () => ({ articles: [
+        { title: 'Bond yields fall sharply', url: 'u', domain: 'd', seendate: '20260109T120000Z' }] }) }; },
+    });
+    ok('แบ่งช่วงเวลาเป็นก้อนตามที่กำหนด', calls === 3, `ยิงไป ${calls} ครั้ง`);
+    ok('รวบรวมข่าวจากทุกก้อนได้', r.items.length === 3);
+    ok('มีเพดานจำนวนคำขอ กันวนไม่จบ',
+      (await fetchHistoricalNews(0, 1e12, { pauseMs: 0, maxCalls: 5,
+        fetchImpl: async () => ({ ok: true, json: async () => ({ articles: [] }) }) })).calls <= 6);
+  }
+}
+
+// ── แจ้งเตือนเข้า Discord ────────────────────────────────────────────
+section('21) Discord — ช่องแจ้งเตือนที่ล้มเงียบ ๆ แย่กว่าไม่มีเลย');
+{
+  /* URL webhook คือความลับ ใครได้ไปก็โพสต์เข้าห้องได้
+     และถ้าผู้ใช้วางผิดที่ ระบบจะยิงข้อมูลการเทรดไปเซิร์ฟเวอร์แปลกหน้า */
+  for (const u of ['https://discord.com/api/webhooks/123/abc',
+                   'https://discord.com/api/v10/webhooks/123/abc-_X',
+                   'https://canary.discord.com/api/webhooks/1/a',
+                   'https://discordapp.com/api/webhooks/1/a']) {
+    ok(`รับ URL ที่ถูกต้อง: ${u.slice(8, 46)}`, isValidWebhook(u));
+  }
+  for (const [u, why] of [
+    ['https://evil.com/api/webhooks/123/abc', 'โดเมนอื่นที่ปลอมเส้นทางมา'],
+    ['http://discord.com/api/webhooks/1/a', 'ไม่ใช่ https'],
+    ['https://discord.com/channels/1/2', 'ไม่ใช่เส้นทาง webhook'],
+    ['https://mydiscord.com/api/webhooks/1/a', 'โดเมนที่ลงท้ายคล้ายกัน'],
+    ['', 'ว่าง'], [null, 'ไม่มีค่า'], ['ไม่ใช่ url เลย', 'ข้อความมั่ว'],
+  ]) {
+    ok(`ปฏิเสธ URL ที่ไม่ปลอดภัย (${why})`, !isValidWebhook(u));
+  }
+
+  // Discord ตอบ 204 ตอนสำเร็จ ซึ่ง res.ok เป็น true อยู่แล้ว แต่ต้องรองรับกรณีที่ไม่ใช่ด้วย
+  {
+    const r = await sendDiscord('https://discord.com/api/webhooks/1/a', {},
+      { fetchImpl: async () => ({ status: 204, ok: false }) });
+    ok('รหัส 204 (สำเร็จแบบไม่มีเนื้อหาตอบ) ถือว่าสำเร็จ', r.ok);
+  }
+  for (const [code, kw] of [[429, 'ถี่เกินไป'], [404, 'ถูกลบ'], [403, 'ถูกลบ'], [500, '500']]) {
+    const r = await sendDiscord('https://discord.com/api/webhooks/1/a', {},
+      { fetchImpl: async () => ({ status: code, ok: false }) });
+    ok(`รหัส ${code} → อธิบายเป็นภาษาคน`, !r.ok && new RegExp(kw).test(r.reason), r.reason);
+  }
+  {
+    const r = await sendDiscord('https://discord.com/api/webhooks/1/a', {},
+      { fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+    ok('ยิงไม่ถึง → บอกว่าอาจโดนบล็อก ไม่ใช่เงียบหาย', !r.ok && r.cors && /บล็อก/.test(r.reason));
+    const bad = await sendDiscord('https://evil.com/x', {}, { fetchImpl: async () => ({ ok: true }) });
+    ok('URL ไม่ถูกต้อง → ไม่ยิงออกไปเลย', !bad.ok && /Discord webhook/.test(bad.reason));
+  }
+
+  /* ข้อความต้องอยู่ในขีดจำกัดของ Discord และมีข้อมูลครบพอตัดสินใจ */
+  {
+    const m = buildTestMessage();
+    ok('ข้อความทดสอบมีโครงสร้างที่ Discord รับได้',
+      m.embeds && m.embeds.length === 1 && m.embeds[0].fields.length <= 25);
+    ok('มีราคาเข้า จุดตัดขาดทุน และเป้าหมายครบ',
+      ['ราคาเข้า', 'ตัดขาดทุน', 'เป้าหมาย'].every((k) =>
+        m.embeds[0].fields.some((f) => f.name.includes(k))));
+    ok('มีคำเตือนว่าเพื่อการศึกษา', /ไม่ใช่คำแนะนำการลงทุน/.test(m.embeds[0].footer.text));
+
+    // ข้อความยาวเกินต้องถูกตัด ไม่ใช่ให้ Discord ปฏิเสธทั้งก้อน
+    const long = buildSignalMessage({ action: 'buy', score: 50, price: 3000,
+      reasons: Array.from({ length: 40 }, () => 'เหตุผลที่ยาวมาก '.repeat(30)) });
+    const f = long.embeds[0].fields.find((x) => x.name.includes('ปัจจัย'));
+    ok('เหตุผลที่ยาวเกินถูกตัดให้อยู่ในขีดจำกัด 1024 ตัวอักษร', f && f.value.length <= 1024, f ? f.value.length : 'ไม่มี');
+    ok('จำนวนช่องไม่เกิน 25 ตามที่ Discord กำหนด', long.embeds[0].fields.length <= 25);
+  }
+}
+
+// ── แหล่งข่าวสำรอง ───────────────────────────────────────────────────
+section('22) ข่าวดึงไม่ได้ — ต้องถอยไปใช้แหล่งอื่นเอง ไม่ใช่ยอมแพ้');
+{
+  const good = { ok: true, json: async () => ({ hits: [
+    { title: 'Bond yields fall sharply', url: 'u', created_at_i: Math.floor(Date.now() / 1000) - 3600, objectID: '1' },
+  ] }) };
+  ok('มีแหล่งข่าวมากกว่าหนึ่ง', FEED_ORDER.length >= 3);
+  ok('ทุกแหล่งในลำดับมีนิยามจริง', FEED_ORDER.every((k) => NEWS_FEEDS[k] && NEWS_FEEDS[k].url && NEWS_FEEDS[k].parse));
+
+  {
+    const r = await fetchNews({ fetchImpl: async (u) => {
+      if (/gdelt/.test(u)) throw new TypeError('Failed to fetch');
+      if (/algolia/.test(u)) return good;
+      return { ok: false, status: 404 };
+    } });
+    ok('เจ้าแรกโดนบล็อก → ถอยไปใช้เจ้าถัดไปเอง', r.ok && r.feed === 'hn', r.feed || r.reason);
+    ok('รายงานว่าลองเจ้าไหนไปบ้างและติดตรงไหน',
+      r.attempts.length === 2 && r.attempts[0].cors === true);
+  }
+  {
+    const r = await fetchNews({ fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+    ok('ทุกเจ้าล้ม → บอกว่าลองครบแล้ว พร้อมผลของแต่ละเจ้า',
+      !r.ok && r.attempts.length === FEED_ORDER.length && /ครบทุกแหล่ง/.test(r.reason));
+  }
+  {
+    // Reddit ห่อข้อมูลไว้คนละชั้นกับเจ้าอื่น อ่านผิดชั้นจะได้ศูนย์ข่าวโดยไม่มี error
+    const items = NEWS_FEEDS.reddit.parse({ data: { children: [
+      { data: { title: 'Gold rises as dollar weakens', url_overridden_by_dest: 'https://x',
+                subreddit: 'economics', created_utc: 1735689600 } }] } });
+    ok('อ่านโครงสร้างของ Reddit ได้ถูกชั้น',
+      items.length === 1 && items[0].title === 'Gold rises as dollar weakens'
+      && items[0].at === 1735689600000, JSON.stringify(items[0] || {}).slice(0, 90));
   }
 }
 
