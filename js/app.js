@@ -8,6 +8,7 @@ import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval
 import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
 import { SOURCES, testAllSources } from './sources.js';
+import { fetchNews, economicCalendar, GOLD_DRIVERS } from './news.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -115,6 +116,7 @@ async function init() {
   renderWeights();
   renderLearn();   // ถ้าเคยยืนยันน้ำหนักชุดใหม่ไว้ ต้องบอกให้เห็นตั้งแต่เปิดหน้า
   renderAdapt();
+  loadNews(); armNewsTimer();
   renderContextTab();
   setInterval(renderContextTab, 30000);
   setInterval(tickCountdown, 1000);
@@ -232,6 +234,8 @@ function bindEvents() {
     analyze(false, false); doBacktest();
   });
   $('runBt').addEventListener('click', () => doBacktest());
+  $('refreshNews').addEventListener('click', () => loadNews());
+  $('newsAuto').addEventListener('change', (e) => { settings.newsAuto = e.target.checked; saveSettings(); armNewsTimer(); });
   $('testSources').addEventListener('click', () => doTestSources());
   $('runAdapt').addEventListener('click', () => doAdapt());
   $('applyAdapt').addEventListener('click', () => applyAdapt(state.adapt && state.adapt.params));
@@ -1039,6 +1043,91 @@ function renderWalkForward() {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * ดึงข่าวโลกแล้ววิเคราะห์ผลต่อทอง
+ *
+ * ดึงทุก 10 นาทีก็พอ — ข่าวไม่ได้ออกถี่กว่านั้น และ GDELT เป็นบริการฟรี
+ * การถล่มคำขอใส่บริการฟรีคือวิธีที่เร็วที่สุดที่จะโดนบล็อก
+ */
+const NEWS_REFRESH_MS = 600000;
+
+async function loadNews() {
+  const btn = $('refreshNews');
+  btn.disabled = true;
+  $('newsMeta').textContent = 'กำลังดึงข่าว…';
+  const res = await fetchNews({ hours: 24 });
+  btn.disabled = false;
+  state.news = res;
+  renderNews();
+}
+
+function armNewsTimer() {
+  clearInterval(state.newsTimer);
+  if (settings.newsAuto === false) return;
+  state.newsTimer = setInterval(loadNews, NEWS_REFRESH_MS);
+}
+
+const AGO = (ms) => {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'เมื่อกี้';
+  if (m < 60) return `${m} นาทีที่แล้ว`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h} ชั่วโมงที่แล้ว` : `${Math.round(h / 24)} วันที่แล้ว`;
+};
+
+function renderNews() {
+  const res = state.news;
+  const feed = $('newsFeed'), clim = $('newsClimate');
+  if (!res) { $('newsMeta').textContent = ''; return; }
+  if (!res.ok) {
+    $('newsMeta').textContent = '';
+    clim.innerHTML = '';
+    feed.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ดึงข่าวไม่สำเร็จ</div>
+      <div class="tiny" style="margin:0">${res.reason}${res.cors
+        ? '<br>บริการข่าวที่ยอมให้เว็บเรียกตรง ๆ มีน้อยมาก ถ้าเครือข่ายคุณบล็อกอันนี้ ให้ใช้ปฏิทินข่าวด้านล่างแทนไปก่อน' : ''}</div></div>`;
+    return;
+  }
+  $('newsMeta').textContent = `${res.items.length} ข่าวที่เกี่ยวข้อง · อัปเดต ${new Date(res.at).toLocaleTimeString('th-TH')} · ใช้เวลา ${res.ms} มิลลิวินาที`;
+
+  const c = res.climate;
+  const col = c.level === 'up' ? 'var(--up)' : c.level === 'down' ? 'var(--down)' : 'var(--text-2)';
+  clim.innerHTML = `
+    <div class="wf-card ${c.level === 'flat' ? 'ok' : c.level === 'up' ? 'good' : 'bad'}">
+      <div class="wf-verdict" style="color:${col}">${c.label}</div>
+      <div class="tiny" style="margin:0">
+        คำนวณจาก ${c.n} ข่าวใน 24 ชั่วโมง ถ่วงน้ำหนักตามความใหม่ (ข่าวเก่ากว่า 8 ชั่วโมงมีน้ำหนักครึ่งเดียว
+        เพราะตลาดรับรู้ไปแล้ว) — คะแนนเอียง ${(c.score * 100).toFixed(0)} จาก -100 ถึง +100
+      </div>
+    </div>`;
+
+  if (!res.items.length) {
+    feed.innerHTML = '<p class="tiny">ยังไม่มีข่าวที่แตะตัวขับราคาทองใน 24 ชั่วโมงที่ผ่านมา</p>';
+    return;
+  }
+  feed.innerHTML = res.items.slice(0, 20).map((it) => {
+    const a = it.analysis;
+    const dirLabel = a.dir > 0 ? 'หนุนทอง' : a.dir < 0 ? 'กดทอง' : 'สองทาง';
+    const dirCol = a.dir > 0 ? 'var(--up)' : a.dir < 0 ? 'var(--down)' : 'var(--warn)';
+    return `<article class="wn-item">
+      <div class="wn-head">
+        <span class="wn-dir" style="color:${dirCol};border-color:${dirCol}">${dirLabel}</span>
+        <a href="${it.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(it.title)}</a>
+      </div>
+      <div class="wn-src">${escapeHtml(it.source || '')}${it.at ? ' · ' + AGO(Date.now() - it.at) : ''}${
+        a.conflicted ? ' · <b style="color:var(--warn)">ตัวขับขัดกันเอง ทิศไม่ชัด</b>' : ''}</div>
+      ${a.drivers.map((d) => `<div class="wn-why">
+        <b style="color:${d.dir > 0 ? 'var(--up)' : 'var(--down)'}">${d.label}${d.inverted ? ' (ทิศกลับ)' : ''}</b>
+        ${d.why}</div>`).join('')}
+    </article>`;
+  }).join('');
+}
+
+/** ข้อความจากภายนอกต้องหนีอักขระก่อนใส่ลงหน้าเว็บเสมอ */
+function escapeHtml(t) {
+  return String(t).replace(/[&<>"']/g, (ch) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
 /**

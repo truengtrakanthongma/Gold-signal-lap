@@ -12,6 +12,7 @@ import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, t
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
 import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
+import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -1241,6 +1242,92 @@ section('18) ชนะแล้วต้องคุ้มที่เสี่�
     const wins = bt.trades.filter((t) => t.rMultiple > 0);
     ok('กำไรเฉลี่ยตอนชนะคำนวณถูก',
       near(bt.stats.avgWin, wins.reduce((a, t) => a + t.rMultiple, 0) / wins.length, 1e-9));
+  }
+}
+
+// ── วิเคราะห์ข่าวโลก ─────────────────────────────────────────────────
+section('19) ข่าวโลก — ทิศทางที่บอกต้องถูก ไม่งั้นแย่กว่าไม่มี');
+{
+  /* ตัวขับที่ "ทิศขึ้นกับกริยา" ต้องกลับทิศได้ครบทุกรูปผัน
+     เวอร์ชันแรกมีแต่ 'falls' จึงอ่าน "yields fall" เป็นกดทอง ซึ่งกลับหัวกับความจริง
+     เจอตอนทดสอบบนเบราว์เซอร์ ไม่ใช่ตอนเขียน — เทสต์นี้กันไม่ให้หลุดอีก */
+  const dirOf = (t) => { const a = classifyHeadline(t); return a ? a.dir : 0; };
+  for (const t of ['Treasury yields fall to a low', 'Treasury yield falls to a low',
+                   'Treasury yields falling fast', 'Bond yields decline further',
+                   'Bond yields dropped overnight']) {
+    ok(`ยีลด์ลงต้องหนุนทอง: "${t}"`, dirOf(t) > 0, `ได้ ${dirOf(t)}`);
+  }
+  ok('ยีลด์ขึ้นต้องกดทอง', dirOf('Bond yields rise on hot data') < 0);
+  ok('ดอลลาร์อ่อนต้องหนุนทอง', dirOf('Dollar weakens against major currencies') > 0);
+  ok('ดอลลาร์แข็งต้องกดทอง', dirOf('Dollar strengthens sharply') < 0);
+  ok('เงินเฟ้อเร่งตัวต้องหนุนทอง', dirOf('Inflation accelerates to 4 percent') > 0);
+  ok('เงินเฟ้อชะลอต้องกดทอง', dirOf('Inflation cools to 2 percent') < 0);
+  ok('สงครามต้องหนุนทอง', dirOf('Missile strike escalates conflict') > 0);
+
+  /* คำที่มีทิศอยู่ในตัวเองห้ามถูกกลับ
+     "rate cut" คือลดดอกเบี้ย ถ้าโดนกลับจะกลายเป็นขึ้นดอกเบี้ย ซึ่งผิดคนละขั้ว */
+  {
+    const a = classifyHeadline('Fed signals rate cut as inflation cools further');
+    const fed = a.drivers.find((d) => d.key === 'fedDovish');
+    const inf = a.drivers.find((d) => d.key === 'inflation');
+    ok('"ลดดอกเบี้ย" ไม่ถูกกลับทิศ แม้ในประโยคมีคำว่า cools', fed && fed.dir > 0 && !fed.inverted);
+    ok('"เงินเฟ้อ" ในประโยคเดียวกันถูกกลับทิศถูกต้อง', inf && inf.inverted && inf.dir < 0);
+  }
+
+  // ข่าวคนละเรื่องที่บังเอิญมีคำว่า gold ต้องไม่ถูกนับ
+  for (const t of ['Gold medal ceremony at the Olympic games', 'Goldman Sachs hires new analyst',
+                   'Golden State wins the game']) {
+    ok(`กรองข่าวคนละเรื่องออก: "${t.slice(0, 34)}"`, classifyHeadline(t) === null);
+  }
+  ok('"central bank" ที่ไม่พูดถึงทอง ไม่ถูกนับเป็นแรงซื้อทอง',
+    classifyHeadline('Central bank holds rates steady') === null);
+  ok('"central banks buy gold" ถูกนับ', (classifyHeadline('Central banks buy gold at record pace') || {}).dir > 0);
+
+  // ทุกตัวขับต้องมีคำอธิบายกลไก ไม่ใช่แค่ลูกศร — ผู้ใช้ต้องเข้าใจว่าทำไม
+  ok('ตัวขับทุกตัวมีคำอธิบายกลไกเป็นภาษาไทย',
+    GOLD_DRIVERS.every((d) => d.why && d.why.length > 40 && /[ก-๙]/.test(d.why)));
+  ok('ตัวขับทุกตัวมีทิศทางและน้ำหนักที่ใช้ได้',
+    GOLD_DRIVERS.every((d) => Math.abs(d.dir) === 1 && d.w > 0));
+
+  // เวลาแบบ GDELT
+  ok('แปลงเวลารูปแบบ GDELT ได้ถูก',
+    parseGdeltDate('20260831T120000Z') === Date.UTC(2026, 7, 31, 12, 0, 0));
+  ok('รูปแบบเวลาที่อ่านไม่ออก ไม่ทำให้พัง', parseGdeltDate('ไม่ใช่เวลา') === null);
+
+  /* บรรยากาศรวมต้องถ่วงน้ำหนักตามความใหม่
+     ข่าวเมื่อวานตลาดรับรู้ไปแล้ว จะให้น้ำหนักเท่าข่าวเมื่อชั่วโมงที่แล้วไม่ได้ */
+  {
+    const now = Date.now();
+    const fresh = { at: now - 3600000, analysis: { score: 10 } };
+    const stale = { at: now - 86400000, analysis: { score: -10 } };
+    const c = climateOf([fresh, stale], now);
+    ok('ข่าวใหม่มีน้ำหนักมากกว่าข่าวเก่า', c.score > 0.3, `ได้ ${c.score.toFixed(2)}`);
+    ok('ไม่มีข่าวเลย ต้องไม่พังและบอกว่าไม่มี', climateOf([], now).n === 0);
+  }
+
+  // ดึงข่าวไม่สำเร็จ ต้องอธิบายเป็นภาษาคน ไม่ใช่โยน error ดิบ
+  {
+    const blocked = await fetchNews({ fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+    ok('โดนบล็อก → บอกสาเหตุเป็นภาษาคน', !blocked.ok && blocked.cors && /CORS|บล็อก/.test(blocked.reason));
+    const bad = await fetchNews({ fetchImpl: async () => ({ ok: false, status: 429 }) });
+    ok('เซิร์ฟเวอร์ปฏิเสธ → รายงานรหัสที่ได้', !bad.ok && /429/.test(bad.reason));
+  }
+
+  /* ปฏิทินข่าว: ใส่เฉพาะที่คำนวณได้แน่นอน
+     ถ้าเดาวัน FOMC เองแล้วผิด ผู้ใช้จะไม่มีทางรู้ว่าผิด — อันตรายกว่าไม่บอกเลย */
+  {
+    const cal = economicCalendar(new Date('2026-08-31T12:00:00Z'));
+    const nfp = cal.find((e) => e.key === 'nfp');
+    ok('NFP คำนวณได้และทำเครื่องหมายว่าแน่นอน', nfp && nfp.exact === true);
+    ok('NFP ตกวันศุกร์จริง', nfp && new Date(nfp.at).getUTCDay() === 5,
+      nfp ? new Date(nfp.at).toUTCString() : 'ไม่มี');
+    ok('NFP เป็นศุกร์แรกของเดือน', nfp && new Date(nfp.at).getUTCDate() <= 7);
+    const fomc = cal.find((e) => e.key === 'fomc');
+    ok('FOMC ไม่เดาวันเอง และบอกให้ผู้ใช้ใส่เอง',
+      fomc && fomc.at === null && fomc.exact === false && /ใส่วันเอง/.test(fomc.note));
+    const cpi = cal.find((e) => e.key === 'cpi');
+    ok('CPI ทำเครื่องหมายว่าเป็นค่าประมาณ ไม่ใช่วันจริง',
+      cpi && cpi.exact === false && /ไม่ตายตัว/.test(cpi.note));
   }
 }
 

@@ -760,3 +760,43 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
 
 /* ปุ่มบนแถบเครื่องมือให้เว้นระยะสม่ำเสมอ */
 .bt-controls { display: flex; gap: var(--s2); align-items: flex-end; flex-wrap: wrap; margin-bottom: var(--s3); }
+
+
+/* ── ข่าวโลกที่กระทบทอง ──────────────────────────────── */
+.news-panel { margin-bottom: var(--s4); }
+.news-top { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.news-top h2 { margin: 0; }
+.news-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.news-actions .tiny { margin: 0; }
+
+.wn-item {
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line);
+}
+.wn-item:last-of-type { border-bottom: none; }
+.wn-head { display: flex; align-items: flex-start; gap: var(--s2); }
+.wn-head a { color: var(--text); text-decoration: none; font-size: var(--fs-sm); font-weight: 500; line-height: 1.5; }
+.wn-head a:hover { color: var(--brand-hi); text-decoration: underline; }
+
+/* ป้ายทิศทางใช้ตัวอักษรเล็กมีกรอบ อ่านออกทันทีโดยไม่ต้องพึ่งสีอย่างเดียว
+   (คนตาบอดสีแดง-เขียวราว 8% ของผู้ชาย ถ้าสื่อด้วยสีอย่างเดียวคือใช้ไม่ได้) */
+.wn-dir {
+  flex: none; font-size: var(--fs-micro); font-weight: 600;
+  padding: 1px var(--s2); border: 1px solid; border-radius: var(--r-sm);
+  white-space: nowrap; margin-top: 1px;
+}
+.wn-src { font-size: var(--fs-micro); color: var(--text-3); margin: var(--s1) 0 var(--s2); }
+.wn-why {
+  font-size: var(--fs-xs); color: var(--text-2); line-height: 1.65;
+  padding-left: var(--s3); border-left: 2px solid var(--line-2); margin-top: var(--s1);
+}
+.wn-why b { margin-right: var(--s1); }
+
+.news-limits { margin-top: var(--s4); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.news-limits > summary {
+  cursor: pointer; font-size: var(--fs-xs); color: var(--text-3);
+  font-weight: 500; list-style: none;
+}
+.news-limits > summary::before { content: '› '; }
+.news-limits[open] > summary::before { content: '⌄ '; }
+.news-limits > summary:hover { color: var(--text-2); }
