@@ -13,26 +13,69 @@
 const COLOR = { buy: 0x26a96a, sell: 0xdc4c4c, wait: 0x667085, warn: 0xc99a2e };
 
 /**
+ * บอกว่า URL ของ webhook ผิดตรงไหน — คืน null ถ้าใช้ได้
+ *
+ * ทำไมต้องแยกเหตุผล: การตอบแค่ "รูปแบบไม่ถูกต้อง" ทำให้คนที่ติดอยู่
+ * ไม่มีทางรู้เลยว่าต้องแก้อะไร ระหว่าง "ยังไม่ได้ใส่", "คัดลอกลิงก์ห้องมาแทน"
+ * และ "คัดลอกมาไม่ครบ" ซึ่งวิธีแก้คนละเรื่องกันหมด
+ *
+ * *** ห้ามเอาโทเค็นมาแสดงในข้อความ *** ใครเห็นก็โพสต์เข้าห้องได้
+ * จึงบอกได้เฉพาะโครงสร้าง เช่น ชื่อโดเมนกับส่วนแรกของเส้นทางเท่านั้น
+ */
+export function webhookProblem(url) {
+  const raw = String(url == null ? '' : url).trim();
+  if (!raw) return 'ยังไม่ได้ใส่ค่า webhook';
+
+  let u;
+  try { u = new URL(raw); }
+  catch (e) { return 'ไม่ใช่ลิงก์ที่ถูกต้อง — ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/'; }
+
+  if (u.protocol !== 'https:') return `ต้องเป็น https เท่านั้น (ที่ใส่มาเป็น ${u.protocol.replace(':', '')})`;
+
+  if (!/^(canary\.|ptb\.)?discord(app)?\.com$/.test(u.hostname)) {
+    return `ไม่ใช่ลิงก์ของ Discord (โดเมนที่ใส่มาคือ ${u.hostname})`;
+  }
+
+  // ยอมให้มีทับปิดท้าย บางที่คัดลอกมาแล้วติดมาด้วย
+  const path = u.pathname.replace(/\/+$/, '');
+
+  /*
+   * ลิงก์ห้องคือของที่หยิบผิดบ่อยที่สุด เพราะปุ่มแชร์อยู่ใกล้กัน
+   * และหน้าตาก็เป็น discord.com เหมือนกัน จึงต้องเรียกชื่อมันออกมาตรง ๆ
+   */
+  if (/^\/channels\//.test(path)) {
+    return 'นี่คือลิงก์ห้องแชท ไม่ใช่ลิงก์ webhook — ต้องเข้า แก้ไขช่อง → การเชื่อมต่อ → เว็บฮุค แล้วกดคัดลอกลิงก์เว็บฮุค';
+  }
+  if (/^\/invite\//.test(path) || u.hostname === 'discord.gg') {
+    return 'นี่คือลิงก์เชิญเข้าเซิร์ฟเวอร์ ไม่ใช่ลิงก์ webhook';
+  }
+  if (!/^\/api\/(v\d+\/)?webhooks\//.test(path)) {
+    return `ไม่ใช่เส้นทางของ webhook (ต้องเป็น /api/webhooks/... แต่ที่ใส่มาคือ ${path.split('/').slice(0, 3).join('/') || '/'}...)`;
+  }
+
+  const rest = path.replace(/^\/api\/(v\d+\/)?webhooks\//, '').split('/');
+  if (rest.length < 2 || !rest[1]) return 'คัดลอกมาไม่ครบ — ขาดโทเค็นส่วนท้ายหลังเลขไอดี';
+  if (rest.length > 2) return 'มีส่วนเกินต่อท้าย — ให้คัดลอกถึงแค่โทเค็นแล้วหยุด';
+  if (!/^\d+$/.test(rest[0])) return 'ส่วนที่ควรเป็นเลขไอดีของ webhook ไม่ใช่ตัวเลข — คัดลอกมาไม่ครบหรือผิดที่';
+  if (!/^[\w.-]+$/.test(rest[1])) return 'โทเค็นส่วนท้ายมีอักขระที่ไม่น่าใช่ — อาจมีช่องว่างหรือตัวอักษรแปลกปนมาตอนคัดลอก';
+
+  return null;
+}
+
+/**
  * ตรวจว่าเป็น URL ของ Discord webhook จริง
  *
  * ไม่ใช่แค่ความสวยงาม: ถ้าผู้ใช้วาง URL ผิดที่ไป ระบบจะยิงข้อมูลการเทรด
  * ไปยังเซิร์ฟเวอร์ที่ไม่รู้จัก จึงต้องกันไว้ก่อนยิงครั้งแรก
  */
 export function isValidWebhook(url) {
-  if (!url) return false;
-  try {
-    const u = new URL(String(url).trim());
-    if (u.protocol !== 'https:') return false;
-    if (!/^(canary\.|ptb\.)?discord(app)?\.com$/.test(u.hostname)) return false;
-    return /^\/api\/(v\d+\/)?webhooks\/\d+\/[\w-]+$/.test(u.pathname);
-  } catch (e) { return false; }
+  return webhookProblem(url) === null;
 }
 
 /** ส่งข้อความเข้า Discord */
 export async function sendDiscord(url, payload, opts = {}) {
-  if (!isValidWebhook(url)) {
-    return { ok: false, reason: 'ไม่ใช่ URL ของ Discord webhook — ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/...' };
-  }
+  const problem = webhookProblem(url);
+  if (problem) return { ok: false, reason: problem };
   const doFetch = opts.fetchImpl || ((u, i) => fetch(u, i));
   const t0 = Date.now();
   try {

@@ -10,7 +10,7 @@ import { autoTune, explainAdaptation } from './adapt.js';
 import { SOURCES, testAllSources } from './sources.js';
 import { fetchNews, economicCalendar, GOLD_DRIVERS } from './news.js';
 import { buildNewsIndex, evaluateNewsFilter, newsVerdict, fetchHistoricalNews } from './newsfactor.js';
-import { buildTestMessage, isValidWebhook } from './discord.js';
+import { buildTestMessage, webhookProblem } from './discord.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
 import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
@@ -1154,7 +1154,7 @@ function renderWebhookStatus() {
   const r = alerts.lastWebhook;
   if (!r) {
     el.textContent = alerts.webhookUrl
-      ? (isValidWebhook(alerts.webhookUrl) ? 'ยังไม่เคยส่ง — กดทดสอบเพื่อยืนยันว่าใช้ได้' : 'URL ไม่ถูกรูปแบบ')
+      ? (webhookProblem(alerts.webhookUrl) || 'ยังไม่เคยส่ง — กดทดสอบเพื่อยืนยันว่าใช้ได้')
       : '';
     el.style.color = 'var(--text-3)';
     return;

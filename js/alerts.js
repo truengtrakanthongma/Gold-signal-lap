@@ -5,7 +5,7 @@
 
 const LS_KEY = 'goldtrader.alerts.v1';
 
-import { sendDiscord, isValidWebhook, buildSignalMessage } from './discord.js';
+import { sendDiscord, webhookProblem, buildSignalMessage } from './discord.js';
 
 export class AlertCenter {
   constructor() {
@@ -119,9 +119,9 @@ export class AlertCenter {
 
   /** ส่งข้อความทดสอบ เพื่อให้ผู้ใช้เห็นว่าเชื่อมต่อได้จริงก่อนพึ่งพามัน */
   async testWebhook(message) {
-    if (!isValidWebhook(this.webhookUrl)) {
-      const bad = { ok: false, at: Date.now(),
-        reason: 'ยังไม่ได้ใส่ URL หรือใส่ไม่ถูกรูปแบบ — ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/' };
+    const problem = webhookProblem(this.webhookUrl);
+    if (problem) {
+      const bad = { ok: false, at: Date.now(), reason: problem };
       this.lastWebhook = bad;
       if (this.onWebhookResult) this.onWebhookResult(bad);
       return bad;

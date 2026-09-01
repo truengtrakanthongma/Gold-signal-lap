@@ -19,7 +19,7 @@ import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } fro
 import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
-import { sendDiscord, buildSignalMessage, buildTestMessage, isValidWebhook } from '../js/discord.js';
+import { sendDiscord, buildSignalMessage, buildTestMessage, webhookProblem } from '../js/discord.js';
 import { instrumentOf } from '../js/instrument.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
@@ -72,8 +72,10 @@ async function loadCandles() {
 }
 
 async function main() {
-  if (!CFG.dryRun && !isValidWebhook(CFG.webhook)) {
-    log('ไม่มี DISCORD_WEBHOOK_URL หรือรูปแบบไม่ถูกต้อง — ตั้งค่าใน Settings → Secrets and variables → Actions');
+  const problem = CFG.dryRun ? null : webhookProblem(CFG.webhook);
+  if (problem) {
+    log(`ใช้ DISCORD_WEBHOOK_URL ไม่ได้: ${problem}`);
+    log('แก้ที่ Settings → Secrets and variables → Actions → DISCORD_WEBHOOK_URL');
     process.exit(1);
   }
 

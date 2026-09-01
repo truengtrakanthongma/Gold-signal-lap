@@ -14,7 +14,7 @@ import { MarketFeed } from '../js/feed.js';
 import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
 import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
 import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict, fetchHistoricalNews, DEFAULT_NEWS_CFG } from '../js/newsfactor.js';
-import { isValidWebhook, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
+import { isValidWebhook, webhookProblem, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
 import { NEWS_FEEDS, FEED_ORDER, surpriseOf, dedupe, similarity, sourceWeight, tokensOf } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
@@ -1461,6 +1461,60 @@ section('21) Discord — ช่องแจ้งเตือนที่ล้�
     ok(`ปฏิเสธ URL ที่ไม่ปลอดภัย (${why})`, !isValidWebhook(u));
   }
 
+  /*
+   * บอกให้ตรงจุดว่าผิดตรงไหน
+   *
+   * เจอมากับตัว: ผู้ใช้ตั้ง secret แล้วแต่บอทตอบแค่ "ไม่มีหรือรูปแบบไม่ถูกต้อง"
+   * ซึ่งอ่านแล้วแยกไม่ออกเลยว่าลืมใส่ ใส่ผิดอัน หรือคัดลอกมาไม่ครบ
+   * ทั้งสามอย่างแก้คนละวิธี การรวมเป็นข้อความเดียวจึงทำให้คนติดตายอยู่ตรงนั้น
+   */
+  {
+    ok('ค่าที่ถูกต้อง → ไม่มีปัญหา', webhookProblem('https://discord.com/api/webhooks/123/abc') === null);
+
+    const cases = [
+      ['', 'ยังไม่ได้ใส่'],
+      ['   ', 'ช่องว่างล้วน'],
+      [null, 'ไม่มีค่า'],
+      ['https://discord.com/channels/111/222', 'ลิงก์ห้องแชท'],
+      ['https://discord.gg/abcd', 'ลิงก์เชิญ'],
+      ['http://discord.com/api/webhooks/1/a', 'ไม่ใช่ https'],
+      ['https://evil.com/api/webhooks/1/a', 'โดเมนอื่น'],
+      ['https://discord.com/api/webhooks/123', 'ขาดโทเค็น'],
+      ['https://discord.com/api/webhooks/abc/xyz', 'ไอดีไม่ใช่ตัวเลข'],
+      ['https://discord.com/api/webhooks/123/abc/extra', 'มีส่วนเกินต่อท้าย'],
+    ];
+    const seen = new Map();
+    for (const [u, why] of cases) {
+      const r = webhookProblem(u);
+      ok(`${why} → มีเหตุผลบอก`, typeof r === 'string' && r.length > 0);
+      seen.set(why, r);
+    }
+    ok('ลิงก์ห้องแชทถูกเรียกชื่อออกมาตรง ๆ ไม่ใช่บอกแค่ว่ารูปแบบผิด',
+       /ห้องแชท/.test(seen.get('ลิงก์ห้องแชท')));
+    ok('ยังไม่ได้ใส่ ต่างจากใส่มาผิด',
+       seen.get('ยังไม่ได้ใส่') !== seen.get('ลิงก์ห้องแชท'));
+    ok('ขาดโทเค็น ต่างจากมีส่วนเกิน',
+       seen.get('ขาดโทเค็น') !== seen.get('มีส่วนเกินต่อท้าย'));
+
+    // เหตุผลต้องไม่พาโทเค็นออกมาโชว์ ใครเห็นก็โพสต์เข้าห้องได้
+    const secret = 'sUpErSeCrEtToKeN123';
+    for (const u of [`https://discord.com/api/webhooks/1/${secret}/extra`,
+                     `https://evil.com/api/webhooks/1/${secret}`,
+                     `https://discord.com/api/webhooks/abc/${secret}`]) {
+      ok('ข้อความบอกเหตุผลไม่มีโทเค็นหลุดออกมา', !String(webhookProblem(u)).includes(secret));
+    }
+
+    // รูปแบบที่เคยตกทั้งที่ใช้ได้จริง
+    ok('ทับปิดท้ายไม่ทำให้ใช้ไม่ได้', isValidWebhook('https://discord.com/api/webhooks/123/abc/'));
+    ok('มีจุดในโทเค็นก็ยังใช้ได้', isValidWebhook('https://discord.com/api/webhooks/123/a.b-c_d'));
+    ok('มีพารามิเตอร์ต่อท้ายก็ยังใช้ได้', isValidWebhook('https://discord.com/api/webhooks/123/abc?wait=true'));
+    ok('เว้นวรรคหัวท้ายจากการคัดลอกไม่ทำให้ใช้ไม่ได้',
+       isValidWebhook('  https://discord.com/api/webhooks/123/abc\n'));
+
+    // จุดจุดต้องไม่กลายเป็นทางลัดออกนอกเส้นทาง webhook
+    ok('เส้นทางย้อนขึ้นถูกปฏิเสธ', !isValidWebhook('https://discord.com/api/webhooks/123/..'));
+  }
+
   // Discord ตอบ 204 ตอนสำเร็จ ซึ่ง res.ok เป็น true อยู่แล้ว แต่ต้องรองรับกรณีที่ไม่ใช่ด้วย
   {
     const r = await sendDiscord('https://discord.com/api/webhooks/1/a', {},
@@ -1476,8 +1530,10 @@ section('21) Discord — ช่องแจ้งเตือนที่ล้�
     const r = await sendDiscord('https://discord.com/api/webhooks/1/a', {},
       { fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
     ok('ยิงไม่ถึง → บอกว่าอาจโดนบล็อก ไม่ใช่เงียบหาย', !r.ok && r.cors && /บล็อก/.test(r.reason));
-    const bad = await sendDiscord('https://evil.com/x', {}, { fetchImpl: async () => ({ ok: true }) });
-    ok('URL ไม่ถูกต้อง → ไม่ยิงออกไปเลย', !bad.ok && /Discord webhook/.test(bad.reason));
+    let fired = false;
+    const bad = await sendDiscord('https://evil.com/x', {},
+      { fetchImpl: async () => { fired = true; return { ok: true }; } });
+    ok('URL ไม่ถูกต้อง → ไม่ยิงออกไปเลย', !bad.ok && !fired && bad.reason.length > 0, bad.reason);
   }
 
   /* ข้อความต้องอยู่ในขีดจำกัดของ Discord และมีข้อมูลครบพอตัดสินใจ */
