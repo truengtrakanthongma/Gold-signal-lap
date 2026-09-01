@@ -203,7 +203,13 @@ NewsAPI.org แผนฟรี**บล็อกการเรียกจาก
 1. สร้าง webhook ในห้อง Discord (ตั้งค่าห้อง → Integrations → Webhooks)
 2. ที่รีโปนี้ → **Settings → Secrets and variables → Actions → New repository secret**
    ชื่อ `DISCORD_WEBHOOK_URL` วางค่าที่คัดลอกมา
-3. แท็บ **Actions** → เลือก *บอทเฝ้าสัญญาณ* → **Run workflow** (ติ๊ก dry run เพื่อทดสอบก่อนได้)
+3. แท็บ **Actions** → เลือก *บอทเฝ้าสัญญาณ* → **Run workflow** → ติ๊ก **test ping** → Run
+
+   ต้องมีข้อความทดสอบเด้งเข้าห้อง Discord ภายในไม่กี่วินาที ถ้าไม่มาแปลว่า webhook ยังไม่ถูก
+
+   *ทำไมต้องติ๊ก test ping:* บอทจะส่งข้อความก็ต่อเมื่อมีสัญญาณแรงพอ กดรันเฉย ๆ
+   ส่วนใหญ่จึงได้รันเขียวแต่ Discord เงียบ ซึ่งแยกไม่ออกว่าตั้งค่าถูกหรือผิด
+   (อีกตัวเลือกคือ **dry run** = คำนวณจริงแต่ไม่ส่งออก ใช้ดูว่าเอนจินคิดอะไรอยู่)
 
 ปรับพฤติกรรมได้ที่ **Variables** โดยไม่ต้องแก้โค้ด: `BOT_THRESHOLD` (ค่าตั้งต้น 45),
 `BOT_INTERVAL`, `BOT_ACCOUNT`, `BOT_RISK_PCT`, `BOT_SOURCES`

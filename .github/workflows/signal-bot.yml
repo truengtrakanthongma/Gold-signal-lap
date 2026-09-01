@@ -16,6 +16,10 @@ on:
         description: 'ทดสอบโดยไม่ส่งเข้า Discord จริง'
         type: boolean
         default: false
+      test_ping:
+        description: 'ส่งข้อความทดสอบเข้า Discord ทันที (ใช้เช็กว่าใส่ webhook ถูก)'
+        type: boolean
+        default: false
 
 # กันไม่ให้รันซ้อนกันเมื่อรอบก่อนยังไม่จบ
 concurrency:
@@ -71,6 +75,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           BOT_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          BOT_TEST_PING: ${{ inputs.test_ping && '1' || '0' }}
           # ปรับได้จาก Settings → Secrets and variables → Actions → Variables
           BOT_INTERVAL: ${{ vars.BOT_INTERVAL || '15m' }}
           BOT_THRESHOLD: ${{ vars.BOT_THRESHOLD || '45' }}

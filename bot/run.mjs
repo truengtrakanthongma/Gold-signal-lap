@@ -19,7 +19,7 @@ import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } fro
 import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
-import { sendDiscord, buildSignalMessage, isValidWebhook } from '../js/discord.js';
+import { sendDiscord, buildSignalMessage, buildTestMessage, isValidWebhook } from '../js/discord.js';
 import { instrumentOf } from '../js/instrument.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
@@ -34,6 +34,7 @@ const CFG = {
   statePath: process.env.BOT_STATE || 'bot/.state.json',
   webhook: process.env.DISCORD_WEBHOOK_URL || '',
   dryRun: process.env.BOT_DRY_RUN === '1',
+  testPing: process.env.BOT_TEST_PING === '1',
 };
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -74,6 +75,21 @@ async function main() {
   if (!CFG.dryRun && !isValidWebhook(CFG.webhook)) {
     log('ไม่มี DISCORD_WEBHOOK_URL หรือรูปแบบไม่ถูกต้อง — ตั้งค่าใน Settings → Secrets and variables → Actions');
     process.exit(1);
+  }
+
+  /*
+   * ปุ่มพิสูจน์ว่าท่อถึง Discord จริง
+   *
+   * ทำไมต้องมี: บอทจะส่งข้อความก็ต่อเมื่อมีสัญญาณแรงพอเท่านั้น
+   * คนที่เพิ่งใส่ webhook เสร็จแล้วกดรันเอง มักเจอผลลัพธ์ "คะแนนยังไม่ถึงเกณฑ์"
+   * คือรันเขียวแต่ Discord เงียบสนิท ซึ่งแยกไม่ออกเลยว่าตั้งค่าถูกหรือผิด
+   * โหมดนี้ยิงข้อความตัวอย่างออกไปตรง ๆ จะได้รู้ผลทันทีตั้งแต่ยังไม่มีสัญญาณจริง
+   */
+  if (CFG.testPing) {
+    const res = await sendDiscord(CFG.webhook, buildTestMessage());
+    if (!res.ok) { log('ส่งข้อความทดสอบไม่สำเร็จ:', res.reason); process.exit(1); }
+    log(`ส่งข้อความทดสอบเข้า Discord สำเร็จ (${res.ms} มิลลิวินาที) — ไปดูในห้องได้เลย`);
+    return;
   }
 
   const { bars, label, key, attempts } = await loadCandles();
