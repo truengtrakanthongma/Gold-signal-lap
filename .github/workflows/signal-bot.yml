@@ -97,7 +97,7 @@ jobs:
           BOT_TEST_PING: ${{ inputs.test_ping && '1' || '0' }}
           # ปรับได้จาก Settings → Secrets and variables → Actions → Variables
           BOT_INTERVAL: ${{ vars.BOT_INTERVAL || '15m' }}
-          BOT_THRESHOLD: ${{ vars.BOT_THRESHOLD || '45' }}
+          BOT_THRESHOLD: ${{ vars.BOT_THRESHOLD || '40' }}
           BOT_ACCOUNT: ${{ vars.BOT_ACCOUNT || '1000' }}
           BOT_RISK_PCT: ${{ vars.BOT_RISK_PCT || '1' }}
           BOT_SOURCES: ${{ vars.BOT_SOURCES || 'kraken_paxg,bitfinex_xaut,binance_paxg,okx_paxg' }}
