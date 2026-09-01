@@ -77,11 +77,14 @@ jobs:
 
       # จำว่าเตือนแท่งไหนไปแล้ว กันเตือนซ้ำเมื่อตัวตั้งเวลารันช้าจนคาบเกี่ยวกัน
       # คีย์ของแคชแก้ไม่ได้ จึงตั้งคีย์ใหม่ทุกรอบ แล้วกู้คืนด้วยคำนำหน้าแทน
+      #
+      # ต้องมีเลขครั้งที่รันด้วย ไม่ใช่แค่เลขรอบ: กดรันซ้ำรอบเดิมจะได้เลขรอบเดิม
+      # แล้วชนกับแคชที่ครั้งก่อนบันทึกไว้ กลายเป็นเตือนว่าบันทึกไม่สำเร็จทั้งที่ปกติ
       - name: กู้คืนสถานะรอบก่อน
         uses: actions/cache/restore@v4
         with:
           path: bot/.state.json
-          key: bot-state-${{ github.run_id }}
+          key: bot-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: bot-state-
 
       - name: ตรวจว่าเอนจินยังผ่านเทสต์ก่อนเชื่อสัญญาณ
@@ -108,4 +111,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: bot/.state.json
-          key: bot-state-${{ github.run_id }}
+          key: bot-state-${{ github.run_id }}-${{ github.run_attempt }}
