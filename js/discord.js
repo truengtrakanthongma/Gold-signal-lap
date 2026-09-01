@@ -122,8 +122,11 @@ function clip(text, max) {
 export function buildSignalMessage(o) {
   const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [] } = o;
   const isTrade = action === 'buy' || action === 'sell';
+  /* warn ต้องมีหัวเรื่องของตัวเอง ไม่งั้นข้อความ "ดึงราคาไม่ได้" จะพาดหัวว่า
+     "ยังไม่มีสัญญาณ" ซึ่งอ่านแล้วเข้าใจว่าตลาดเงียบ ทั้งที่จริงคือระบบมองไม่เห็นตลาด */
   const title = action === 'buy' ? 'สัญญาณซื้อ (BUY)'
     : action === 'sell' ? 'สัญญาณขาย (SELL)'
+    : action === 'warn' ? 'ระบบมีปัญหา — ยังทำงานไม่ได้'
     : 'ยังไม่มีสัญญาณ';
 
   const fields = [];

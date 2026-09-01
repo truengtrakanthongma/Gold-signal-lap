@@ -19,7 +19,7 @@ import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } fro
 import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
-import { sendDiscord, buildSignalMessage, buildTestMessage, webhookProblem } from '../js/discord.js';
+import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
 import { instrumentOf } from '../js/instrument.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
@@ -71,6 +71,70 @@ async function loadCandles() {
   return { bars: null, attempts };
 }
 
+/** ตัวกรองความผันผวน ชุดเดียวกับหน้าเว็บ */
+function blocked(ctx, scored) {
+  return scored.atrPct < ctx.cfg.minAtrPct || scored.atrPct > ctx.cfg.maxAtrPct;
+}
+
+/** ปัจจัยที่ดันไปทางเดียวกับคะแนน เรียงจากแรงสุด */
+function topFactors(scored, side, newsLine) {
+  return [
+    ...scored.factors.filter((f) => Math.sign(f.contribution) === side)
+      .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))
+      .slice(0, 4).map((f) => `${f.name}: ${f.reason}`),
+    ...(newsLine ? [`ข่าว: ${newsLine}`] : []),
+  ];
+}
+
+/** เหตุผลที่ยังไม่เตือน — ต้องบอกให้ครบว่าติดข้อไหนบ้าง ไม่ใช่ข้อแรกที่เจอ */
+function statusBlocks(ctx, scored, strong, noSetup) {
+  const out = [];
+  if (!strong) {
+    out.push(`คะแนน ${scored.score.toFixed(1)} ยังไม่ถึงเกณฑ์ ${CFG.threshold} จึงยังไม่เตือน`);
+  }
+  if (blocked(ctx, scored)) {
+    out.push(`ความผันผวนผิดปกติ — ATR ${scored.atrPct.toFixed(3)}% อยู่นอกช่วงที่รับได้ `
+      + `(${ctx.cfg.minAtrPct}–${ctx.cfg.maxAtrPct}%)`);
+  }
+  if (noSetup) out.push('คะแนนถึงเกณฑ์แล้ว แต่วางจุดตัดขาดทุนกับเป้าหมายให้คุ้มความเสี่ยงไม่ได้');
+  out.push('นี่คือรายงานตามที่กดสั่ง ไม่ใช่สัญญาณเข้าเทรด — ตัวเลขทุกตัวเป็นของจริงจากตลาดตอนนี้');
+  return out;
+}
+
+/** ข้อมูลประกอบที่ทั้งสัญญาณจริงและรายงานสถานะใช้ร่วมกัน */
+async function gatherContext(ctx, scored, key, label) {
+  // สถิติย้อนหลังของกรอบเวลานี้ ใช้บอกอัตราชนะที่เคยเกิดจริง
+  let prob = null;
+  try {
+    const bt = runBacktest(ctx, { threshold: CFG.threshold, exitStyle: 'full' });
+    prob = probabilityFor(scored.score, bt);
+  } catch (e) { log('คำนวณสถิติย้อนหลังไม่ได้:', e.message); }
+
+  // บรรยากาศข่าว (ถ้าดึงได้) — ไม่ใช่เงื่อนไขบังคับ แค่ใส่เป็นบริบท
+  let newsLine = null;
+  try {
+    const news = await fetchNews({ hours: 12 });
+    if (news.ok && news.climate.n) newsLine = `${news.climate.label} (${news.climate.n} ข่าว จาก ${news.label})`;
+  } catch (e) { /* ข่าวดึงไม่ได้ไม่ควรทำให้สัญญาณราคาหายไป */ }
+
+  return { prob, newsLine, inst: instrumentOf(key, ''), label };
+}
+
+/** ข้อความสัญญาณจริง — คืน null เมื่อวางแผนเทรดไม่ได้ */
+function signalMessage(ctx, i, scored, side, last, extra) {
+  const setup = buildSetup(ctx, i, { ...scored, side }, {
+    account: CFG.account, riskPct: CFG.riskPct, entryPrice: last.c, side,
+  });
+  if (!setup) return null;
+  return buildSignalMessage({
+    action: side > 0 ? 'buy' : 'sell',
+    score: scored.score, price: last.c, tf: CFG.interval,
+    instrument: `${extra.inst.name} · ${extra.label}`,
+    setup, prob: extra.prob,
+    reasons: topFactors(scored, side, extra.newsLine),
+  });
+}
+
 async function main() {
   const problem = CFG.dryRun ? null : webhookProblem(CFG.webhook);
   if (problem) {
@@ -80,34 +144,31 @@ async function main() {
   }
 
   /*
-   * ปุ่มพิสูจน์ว่าท่อถึง Discord จริง
-   *
-   * ทำไมต้องมี: บอทจะส่งข้อความก็ต่อเมื่อมีสัญญาณแรงพอเท่านั้น
-   * คนที่เพิ่งใส่ webhook เสร็จแล้วกดรันเอง มักเจอผลลัพธ์ "คะแนนยังไม่ถึงเกณฑ์"
-   * คือรันเขียวแต่ Discord เงียบสนิท ซึ่งแยกไม่ออกเลยว่าตั้งค่าถูกหรือผิด
-   * โหมดนี้ยิงข้อความตัวอย่างออกไปตรง ๆ จะได้รู้ผลทันทีตั้งแต่ยังไม่มีสัญญาณจริง
+   * ติ๊กมาทั้งสองช่อง = สั่งขัดกันเอง ช่องหนึ่งบอกว่าห้ามส่ง อีกช่องบอกว่าให้ส่ง
+   * ยึดช่องที่ห้ามไว้ก่อน เพราะข้อความที่ส่งไปแล้วเรียกกลับไม่ได้
+   * แต่ต้องบอกให้ชัดว่าทำไมไม่มีอะไรเด้งเข้า Discord ไม่งั้นดูเหมือนพัง
    */
-  if (CFG.testPing) {
-    /*
-     * ติ๊กมาทั้งสองช่อง = สั่งขัดกันเอง ช่องหนึ่งบอกว่าห้ามส่ง อีกช่องบอกว่าให้ส่ง
-     * ยึดช่องที่ห้ามไว้ก่อน เพราะข้อความที่ส่งไปแล้วเรียกกลับไม่ได้
-     * แต่ต้องบอกให้ชัดว่าทำไมไม่มีอะไรเด้งเข้า Discord ไม่งั้นดูเหมือนพัง
-     */
-    if (CFG.dryRun) {
-      log('ติ๊กมาทั้ง dry run และ test ping — dry run แปลว่าห้ามส่งออก จึงยังไม่ส่ง');
-      log('อยากให้ข้อความทดสอบเด้งเข้า Discord จริง ให้ติ๊กเฉพาะ test ping ช่องเดียว');
-      log('ข้อความที่จะถูกส่ง:\n' + JSON.stringify(buildTestMessage(), null, 2));
-      return;
-    }
-    const res = await sendDiscord(CFG.webhook, buildTestMessage());
-    if (!res.ok) { log('ส่งข้อความทดสอบไม่สำเร็จ:', res.reason); process.exit(1); }
-    log(`ส่งข้อความทดสอบเข้า Discord สำเร็จ (${res.ms} มิลลิวินาที) — ไปดูในห้องได้เลย`);
+  if (CFG.testPing && CFG.dryRun) {
+    log('ติ๊กมาทั้ง dry run และ test ping — dry run แปลว่าห้ามส่งออก จึงยังไม่ส่ง');
+    log('อยากให้รายงานสถานะเด้งเข้า Discord จริง ให้ติ๊กเฉพาะ test ping ช่องเดียว');
     return;
   }
 
   const { bars, label, key, attempts } = await loadCandles();
   if (!bars) {
     log('ดึงข้อมูลราคาไม่ได้จากทุกแหล่ง:', JSON.stringify(attempts));
+    /*
+     * ดึงราคาไม่ได้คือข่าวที่ต้องรู้ ไม่ใช่ความเงียบ
+     * คนกดตรวจสถานะแล้วไม่มีอะไรเด้ง จะแยกไม่ออกว่าระบบปกติหรือพัง
+     */
+    if (CFG.testPing) {
+      await sendDiscord(CFG.webhook, buildSignalMessage({
+        action: 'warn', score: null, price: null, tf: CFG.interval,
+        instrument: 'ตรวจสถานะระบบ',
+        blocks: ['ดึงราคาไม่ได้เลยสักแหล่ง จึงคำนวณอะไรไม่ได้',
+                 ...attempts.map((a) => `${a.key}: ${a.reason}`)],
+      }));
+    }
     process.exit(1);
   }
 
@@ -130,6 +191,32 @@ async function main() {
 
   log(`แท่งล่าสุด ${new Date(last.t).toISOString()} ราคา ${last.c.toFixed(2)} คะแนน ${scored.score.toFixed(1)} (เกณฑ์ ${CFG.threshold})`);
 
+  /*
+   * ตรวจสถานะตามสั่ง: รายงานภาพตลาด "จริง" ตอนนี้ ไม่ว่าจะมีสัญญาณหรือไม่
+   *
+   * เดิมโหมดนี้ยิงข้อความตัวอย่างที่มีตัวเลขตายตัวออกไป ซึ่งพิสูจน์ได้แค่ว่า
+   * ท่อถึง Discord เท่านั้น ไม่ได้บอกเลยว่าอ่านราคาจริงได้ไหม คิดคะแนนได้ไหม
+   * และคนอ่านก็แยกไม่ออกว่าเลขที่เห็นเป็นของจริงหรือของปลอม ซึ่งแย่กว่าไม่ส่ง
+   *
+   * ตอนนี้มันเดินทางเดียวกับสัญญาณจริงทุกขั้น ต่างแค่ส่งออกเสมอแม้คะแนนไม่ถึง
+   * เห็นราคาที่ตรงกับตลาด = พิสูจน์ทั้งสายว่าใช้ได้จริง ไม่ใช่แค่ท่อ Discord
+   */
+  if (CFG.testPing) {
+    const extra = await gatherContext(ctx, scored, key, label);
+    const live = strong && !blocked(ctx, scored)
+      ? signalMessage(ctx, i, scored, side, last, extra) : null;
+    const msg = live || buildSignalMessage({
+      action: 'wait', score: scored.score, price: last.c, tf: CFG.interval,
+      instrument: `${extra.inst.name} · ${label} (ตรวจสถานะ)`,
+      blocks: statusBlocks(ctx, scored, strong, strong && !blocked(ctx, scored)),
+      reasons: topFactors(scored, Math.sign(scored.score) || 1, extra.newsLine),
+    });
+    const res = await sendDiscord(CFG.webhook, msg);
+    if (!res.ok) { log('ส่งรายงานสถานะไม่สำเร็จ:', res.reason); process.exit(1); }
+    log(`ส่งรายงานสถานะเข้า Discord สำเร็จ (${res.ms} มิลลิวินาที) — ราคาในข้อความคือราคาจริงจาก ${label}`);
+    return;
+  }
+
   if (!strong) { log('คะแนนยังไม่ถึงเกณฑ์ — ไม่เตือน'); saveState({ ...state, lastSeen: last.t }); return; }
 
   // เตือนซ้ำแท่งเดิมและทิศเดิม = สแปม
@@ -137,43 +224,13 @@ async function main() {
     log('แท่งนี้เตือนไปแล้ว — ข้าม'); return;
   }
 
-  // ตัวกรองความผันผวน ชุดเดียวกับหน้าเว็บ
-  if (scored.atrPct < ctx.cfg.minAtrPct || scored.atrPct > ctx.cfg.maxAtrPct) {
+  if (blocked(ctx, scored)) {
     log(`ความผันผวนผิดปกติ (ATR ${scored.atrPct.toFixed(3)}%) — ไม่เตือน`); return;
   }
 
-  const setup = buildSetup(ctx, i, { ...scored, side }, {
-    account: CFG.account, riskPct: CFG.riskPct, entryPrice: last.c, side,
-  });
-  if (!setup) { log('สร้างแผนเทรดไม่ได้ — ไม่เตือน'); return; }
-
-  // สถิติย้อนหลังของกรอบเวลานี้ ใช้บอกอัตราชนะที่เคยเกิดจริง
-  let prob = null;
-  try {
-    const bt = runBacktest(ctx, { threshold: CFG.threshold, exitStyle: 'full' });
-    prob = probabilityFor(scored.score, bt);
-  } catch (e) { log('คำนวณสถิติย้อนหลังไม่ได้:', e.message); }
-
-  // บรรยากาศข่าว (ถ้าดึงได้) — ไม่ใช่เงื่อนไขบังคับ แค่ใส่เป็นบริบท
-  let newsLine = null;
-  try {
-    const news = await fetchNews({ hours: 12 });
-    if (news.ok && news.climate.n) newsLine = `${news.climate.label} (${news.climate.n} ข่าว จาก ${news.label})`;
-  } catch (e) { /* ข่าวดึงไม่ได้ไม่ควรทำให้สัญญาณราคาหายไป */ }
-
-  const inst = instrumentOf(key, '');
-  const msg = buildSignalMessage({
-    action: side > 0 ? 'buy' : 'sell',
-    score: scored.score, price: last.c, tf: CFG.interval,
-    instrument: `${inst.name} · ${label}`,
-    setup, prob,
-    reasons: [
-      ...scored.factors.filter((f) => Math.sign(f.contribution) === side)
-        .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))
-        .slice(0, 4).map((f) => `${f.name}: ${f.reason}`),
-      ...(newsLine ? [`ข่าว: ${newsLine}`] : []),
-    ],
-  });
+  const extra = await gatherContext(ctx, scored, key, label);
+  const msg = signalMessage(ctx, i, scored, side, last, extra);
+  if (!msg) { log('สร้างแผนเทรดไม่ได้ — ไม่เตือน'); return; }
 
   if (CFG.dryRun) { log('โหมดทดสอบ ไม่ส่งจริง:\n' + JSON.stringify(msg, null, 2)); return; }
 

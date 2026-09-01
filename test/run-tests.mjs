@@ -1515,6 +1515,17 @@ section('21) Discord — ช่องแจ้งเตือนที่ล้�
     ok('เส้นทางย้อนขึ้นถูกปฏิเสธ', !isValidWebhook('https://discord.com/api/webhooks/123/..'));
   }
 
+  /* ข้อความเตือนว่าระบบพัง ต้องไม่พาดหัวว่า "ยังไม่มีสัญญาณ"
+     เพราะสองอย่างนี้คนละเรื่อง: ตลาดเงียบ กับ ระบบมองไม่เห็นตลาด */
+  {
+    const warn = buildSignalMessage({ action: 'warn', score: null, price: null,
+      instrument: 'ตรวจสถานะระบบ', blocks: ['ดึงราคาไม่ได้เลยสักแหล่ง'] });
+    const wait = buildSignalMessage({ action: 'wait', score: 10, price: 3000, instrument: 'x' });
+    ok('ข้อความเตือนระบบพังมีหัวเรื่องของตัวเอง',
+      warn.embeds[0].title !== wait.embeds[0].title && /ปัญหา/.test(warn.embeds[0].title),
+      warn.embeds[0].title);
+  }
+
   // Discord ตอบ 204 ตอนสำเร็จ ซึ่ง res.ok เป็น true อยู่แล้ว แต่ต้องรองรับกรณีที่ไม่ใช่ด้วย
   {
     const r = await sendDiscord('https://discord.com/api/webhooks/1/a', {},
@@ -1681,7 +1692,7 @@ section('24) บอท: ติ๊กสองช่องที่ขัดก�
   ok('ติ๊กคู่ → ไม่ยิงออกไป จบแบบปกติ', both.code === 0, `exit ${both.code}`);
   ok('ติ๊กคู่ → บอกว่าทำไมถึงยังไม่ส่ง', /ยังไม่ส่ง/.test(both.out));
   ok('ติ๊กคู่ → บอกวิธีให้ส่งจริง', /ติ๊กเฉพาะ test ping/.test(both.out));
-  ok('ติ๊กคู่ → ยังให้เห็นหน้าตาข้อความที่จะส่ง', /"embeds"/.test(both.out));
+  ok('ติ๊กคู่ → ไม่ไปแตะเน็ตเลยด้วยซ้ำ', !/ใช้ข้อมูลจาก|ดึงข้อมูลราคาไม่ได้/.test(both.out));
 
   /*
    * ไม่มีเคส "ติ๊กช่องเดียวแล้วยิงจริง" ตรงนี้ เพราะพิสูจน์มันต้องยิงจริงไปที่ Discord
