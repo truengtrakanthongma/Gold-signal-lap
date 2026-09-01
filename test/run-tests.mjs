@@ -1657,6 +1657,39 @@ section('23) จุดอ่อนสามข้อที่เคยยอม�
   }
 }
 
+// ── ตัวเลือกของบอทที่สั่งขัดกันเอง ─────────────────────────────
+section('24) บอท: ติ๊กสองช่องที่ขัดกัน ต้องไม่ยิงข้อความออกไป');
+{
+  /*
+   * ช่อง dry run สัญญาว่า "ไม่ส่งเข้า Discord จริง" ส่วน test ping สั่งให้ส่ง
+   * ผู้ใช้ติ๊กมาทั้งคู่จริง ๆ แล้วข้อความก็ถูกส่งออกไปทั้งที่สั่งห้ามไว้
+   * ข้อความที่ส่งไปแล้วเรียกกลับไม่ได้ คำสั่งห้ามจึงต้องชนะเสมอ
+   *
+   * ใช้ URL ที่รูปแบบถูกแต่ Discord ไม่รับ ถ้าเผลอยิงจริงจะได้ exit 1 ทันที
+   */
+  const { execFileSync } = await import('node:child_process');
+  const fakeHook = 'https://discord.com/api/webhooks/123456789012345678/wouldBeRejectedIfSent';
+  const run = (env) => {
+    try {
+      return { out: execFileSync('node', ['bot/run.mjs'],
+        { env: { ...process.env, DISCORD_WEBHOOK_URL: fakeHook, ...env },
+          encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }), code: 0 };
+    } catch (e) { return { out: String(e.stdout || '') + String(e.stderr || ''), code: e.status }; }
+  };
+
+  const both = run({ BOT_TEST_PING: '1', BOT_DRY_RUN: '1' });
+  ok('ติ๊กคู่ → ไม่ยิงออกไป จบแบบปกติ', both.code === 0, `exit ${both.code}`);
+  ok('ติ๊กคู่ → บอกว่าทำไมถึงยังไม่ส่ง', /ยังไม่ส่ง/.test(both.out));
+  ok('ติ๊กคู่ → บอกวิธีให้ส่งจริง', /ติ๊กเฉพาะ test ping/.test(both.out));
+  ok('ติ๊กคู่ → ยังให้เห็นหน้าตาข้อความที่จะส่ง', /"embeds"/.test(both.out));
+
+  /*
+   * ไม่มีเคส "ติ๊กช่องเดียวแล้วยิงจริง" ตรงนี้ เพราะพิสูจน์มันต้องยิงจริงไปที่ Discord
+   * และชุดทดสอบนี้ถูกรันก่อนบอททุกรอบ = ยิงไปหาเขาวันละ 96 ครั้งตลอดไปโดยไม่จำเป็น
+   * ทางส่งจริงมีข้อ 21 คุมอยู่แล้วด้วยการสวมรอย fetch ซึ่งไม่ต้องออกเน็ต
+   */
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

@@ -18,11 +18,11 @@ on:
   workflow_dispatch:      # กดรันเองได้ตลอด ใช้ตอนทดสอบ
     inputs:
       dry_run:
-        description: 'ทดสอบโดยไม่ส่งเข้า Discord จริง'
+        description: 'ดูว่าเอนจินคิดอะไร โดยไม่ส่งอะไรเข้า Discord เลย (อย่าติ๊กคู่กับ test ping)'
         type: boolean
         default: false
       test_ping:
-        description: 'ส่งข้อความทดสอบเข้า Discord ทันที (ใช้เช็กว่าใส่ webhook ถูก)'
+        description: 'ส่งข้อความทดสอบเข้า Discord จริง เพื่อเช็กว่าใส่ webhook ถูก — ติ๊กช่องนี้ช่องเดียว'
         type: boolean
         default: false
 
