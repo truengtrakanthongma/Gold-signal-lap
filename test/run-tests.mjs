@@ -1738,6 +1738,57 @@ section('24) บอท: ติ๊กสองช่องที่ขัดก�
    */
 }
 
+// ── ตัวเลขไม้ต้องเป็นของโบรกเกอร์ผู้ใช้ ไม่ใช่ของที่ระบบเดาเอา ─────
+section('26) จุดตัดขาดทุนของผู้ใช้ และสเปกโบรกเกอร์ของผู้ใช้');
+{
+  const c2 = makeCandles(400, 21);
+  const ctx2 = buildContext(c2, DEFAULT_CFG);
+  const j = c2.length - 1;
+  const sc2 = scoreAt(ctx2, j);
+  const e = c2[j].c;
+  const base = { account: 5000, riskPct: 1, entryPrice: e, side: 1 };
+
+  /* คนเทรดมักมีจุดตัดขาดทุนในใจอยู่แล้ว หน้าที่ของระบบคือคิดขนาดไม้จากจุดนั้น
+     ให้ถูก ไม่ใช่ยืนยันจุดของตัวเอง */
+  const wide = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...base, slPrice: e - 20 });
+  const tight = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...base, slPrice: e - 5 });
+  ok('ตั้ง SL เอง: ระยะตรงกับที่ใส่มา', near(wide.slDist, 20, 1e-9), `ได้ ${wide.slDist}`);
+  ok('ตั้ง SL เอง: ระบบรู้ว่าเป็นจุดของผู้ใช้', wide.slManual === true);
+  ok('SL แคบกว่า → ไม้ใหญ่กว่า (เงินเสี่ยงเท่าเดิม)', tight.lots > wide.lots,
+    `แคบ ${tight.lots} vs กว้าง ${wide.lots}`);
+  ok('ทั้งสองแบบเสี่ยงใกล้เคียงเงินที่ตั้งไว้', wide.riskActual <= 50 * 1.5 && tight.riskActual <= 50 * 1.5,
+    `${wide.riskActual.toFixed(2)} / ${tight.riskActual.toFixed(2)}`);
+  ok('เป้าหมายขยับตาม SL ที่ตั้งเอง', Math.abs(wide.tpMain - e) > Math.abs(tight.tpMain - e));
+
+  /* ใส่ผิดฝั่งคือความผิดพลาดที่ทำให้ขาดทุนทันที ต้องไม่รับไปใช้เงียบ ๆ */
+  const wrong = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...base, slPrice: e + 20 });
+  ok('SL ผิดฝั่ง → ไม่รับ ใช้ค่าที่ระบบคำนวณแทน', wrong.slManual === false && wrong.sl < e);
+  ok('SL ผิดฝั่ง → บอกผู้ใช้ว่าทำไมไม่ใช้', wrong.notes.some((n) => /ผิดฝั่ง/.test(n)));
+
+  const auto = buildSetup(ctx2, j, { ...sc2, side: 1 }, base);
+  ok('ไม่ใส่อะไร → ระบบวางให้เหมือนเดิม', auto.slManual === false);
+
+  /*
+   * สเปกโบรกเกอร์: ค่าที่ระบบเดาแทนไม่ได้เลย
+   * ผู้ใช้บอกว่า "จำนวนไม้ไม่แม่นยำ" ซึ่งถูก เพราะ 1 ล็อต = 100 ออนซ์
+   * เป็นจริงเฉพาะบัญชีมาตรฐาน บัญชี cent/micro ต่างออกไปคนละโลก
+   */
+  const std = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...base, contractSize: 100 });
+  const micro = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...base, contractSize: 1 });
+  ok('ขนาดสัญญาเล็กลง → จำนวนไม้ต้องมากขึ้นให้เสี่ยงเท่าเดิม', micro.lotsRaw > std.lotsRaw);
+  ok('ออนซ์ที่รายงานคิดจากขนาดสัญญาของผู้ใช้', near(micro.oz, micro.lots * 1, 1e-9));
+
+  /* ทุนน้อยเทรดทองได้จริงเฉพาะเมื่อบัญชีรองรับไม้เล็กพอ — ต้องพิสูจน์ได้ */
+  const tinyStd = buildSetup(ctx2, j, { ...sc2, side: 1 },
+    { account: 50, riskPct: 1, entryPrice: e, side: 1, contractSize: 100 });
+  const tinyCent = buildSetup(ctx2, j, { ...sc2, side: 1 },
+    { account: 50, riskPct: 1, entryPrice: e, side: 1, contractSize: 1, minLot: 0.01, lotStep: 0.01 });
+  ok('ทุน 50 บัญชีมาตรฐาน → เสี่ยงเกินที่ตั้งไว้ และเตือน', tinyStd.sizeForced && tinyStd.riskActual > 0.5);
+  ok('ทุน 50 บัญชีสัญญาเล็ก → เสี่ยงได้ตามที่ตั้งไว้จริง', !tinyCent.sizeForced,
+    `เสี่ยง ${tinyCent.riskActual.toFixed(2)} จากที่ตั้งไว้ 0.50`);
+  ok('บัญชีสัญญาเล็กไม่ต้องขึ้นคำเตือนทุนไม่พอ', !tinyCent.notes.some((n) => /ทุนไม่พอ/.test(n)));
+}
+
 // ── สัญญาณกะพริบจนกดตามไม่ทัน ────────────────────────────────
 section('25) สัญญาณต้องอยู่นานพอให้คนกดทัน');
 {

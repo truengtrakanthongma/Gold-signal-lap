@@ -619,6 +619,17 @@ body.simple .narr p { font-size: var(--fs-sm); }
   background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
   color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: var(--fs-xs);
 }
+/* กล่องสเปกโบรกเกอร์ — ซ่อนไว้เพราะคนส่วนใหญ่ตั้งครั้งเดียวจบ
+   แต่ต้องหาเจอ เพราะถ้าค่าผิด จำนวนไม้ผิดทุกครั้งโดยไม่มีอาการอื่นให้สังเกต */
+.broker-box {
+  margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 11px; background: var(--panel-2);
+}
+.broker-box > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); }
+.broker-box > summary:hover { color: var(--text-1); }
+.broker-box .tiny { margin: 7px 0; color: var(--text-3); line-height: 1.5; }
+.broker-box .risk-inputs { margin-top: 6px; }
+
 /* อายุของสัญญาณ — ตอบคำถามแรกของคนที่เพิ่งเห็นแจ้งเตือน: ยังเข้าทันไหม */
 .sig-age {
   background: rgba(38,169,106,.09); border: 1px solid rgba(38,169,106,.3);

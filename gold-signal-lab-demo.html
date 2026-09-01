@@ -635,6 +635,17 @@ body.simple .narr p { font-size: var(--fs-sm); }
   background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
   color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: var(--fs-xs);
 }
+/* กล่องสเปกโบรกเกอร์ — ซ่อนไว้เพราะคนส่วนใหญ่ตั้งครั้งเดียวจบ
+   แต่ต้องหาเจอ เพราะถ้าค่าผิด จำนวนไม้ผิดทุกครั้งโดยไม่มีอาการอื่นให้สังเกต */
+.broker-box {
+  margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 11px; background: var(--panel-2);
+}
+.broker-box > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); }
+.broker-box > summary:hover { color: var(--text-1); }
+.broker-box .tiny { margin: 7px 0; color: var(--text-3); line-height: 1.5; }
+.broker-box .risk-inputs { margin-top: 6px; }
+
 /* อายุของสัญญาณ — ตอบคำถามแรกของคนที่เพิ่งเห็นแจ้งเตือน: ยังเข้าทันไหม */
 .sig-age {
   background: rgba(38,169,106,.09); border: 1px solid rgba(38,169,106,.3);
@@ -967,7 +978,25 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
       <div class="risk-inputs">
         <label>ทุน (USD)<input type="number" id="accountInput" value="1000" min="10" step="10"></label>
         <label>ความเสี่ยง/ไม้ (%)<input type="number" id="riskInput" value="1" min="0.1" max="10" step="0.1"></label>
+        <label class="wide">จุดตัดขาดทุนของฉัน (ว่างไว้ = ให้ระบบวางให้)
+          <input type="number" id="slManualInput" placeholder="เช่น 4362.50" step="0.01"></label>
       </div>
+      <details class="broker-box">
+        <summary>ตั้งค่าโบรกเกอร์ของคุณ — ถ้าไม่ตรง จำนวนไม้จะผิดทุกครั้ง</summary>
+        <p class="tiny">
+          ค่าพวกนี้ต่างกันไปตามโบรกเกอร์และชนิดบัญชี ระบบเดาแทนคุณไม่ได้
+          ดูได้จากรายละเอียดสัญลักษณ์ (Symbol Specification) ในโปรแกรมเทรดของคุณ
+        </p>
+        <div class="risk-inputs">
+          <label>1 ล็อต = กี่ออนซ์<input type="number" id="contractInput" value="100" min="0.01" step="1"></label>
+          <label>ไม้เล็กที่สุด<input type="number" id="minLotInput" value="0.01" min="0.0001" step="0.001"></label>
+          <label>ขั้นของขนาดไม้<input type="number" id="lotStepInput" value="0.01" min="0.0001" step="0.001"></label>
+        </div>
+        <p class="tiny">
+          บัญชีมาตรฐานมักเป็น 100 ออนซ์ / 0.01 / 0.01 — ส่วนบัญชี cent หรือ micro
+          มักเล็กกว่านั้นมาก ซึ่งเป็นเหตุผลเดียวที่ทำให้ทุนน้อย ๆ เทรดทองได้จริง
+        </p>
+      </details>
       <div id="sizeBox" class="size-box"></div>
     </div>
 
@@ -2325,6 +2354,7 @@ function buildSetup(ctx, i, scored, opts = {}) {
     account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
     lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
     minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
+    slPrice = null,        // ผู้ใช้กำหนดจุดตัดขาดทุนเอง (ชนะค่าที่ระบบคำนวณ)
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
     slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
@@ -2353,6 +2383,33 @@ function buildSetup(ctx, i, scored, opts = {}) {
     }
   }
   slDist = Math.min(slDist, atrVal * cfg.maxSlAtrMult);
+
+  /*
+   * จุดตัดขาดทุนที่ผู้ใช้กำหนดเองชนะเสมอ
+   *
+   * ระบบวางจากสูตร (ATR กับโครงสร้างราคา) ซึ่งไม่รู้เรื่องของผู้ใช้เลย
+   * เช่นแนวที่เขาเฝ้าอยู่ ข่าวที่กำลังรอ หรือขีดจำกัดของบัญชี
+   * คนเทรดมักมีจุดในใจอยู่แล้ว หน้าที่ของระบบคือคิดขนาดไม้จากจุดนั้นให้ถูก
+   * ไม่ใช่ยืนยันจุดของตัวเอง แต่ต้องเตือนถ้าจุดที่เลือกผิดปกติ
+   */
+  let slManual = false;
+  if (slPrice !== null && Number.isFinite(slPrice)) {
+    const ok = side > 0 ? slPrice < entryPrice : slPrice > entryPrice;
+    if (ok) {
+      slDist = Math.abs(entryPrice - slPrice);
+      slManual = true;
+      const mult = slDist / atrVal;
+      if (mult < 0.5) {
+        notes.push(`⚠ จุดตัดขาดทุนที่ตั้งเองห่างแค่ ${mult.toFixed(2)} เท่าของ ATR — แคบกว่าที่ราคาแกว่งปกติ `
+          + 'มีโอกาสสูงที่จะโดนเขี่ยออกก่อนราคาไปตามทาง');
+      } else if (mult > cfg.maxSlAtrMult) {
+        notes.push(`⚠ จุดตัดขาดทุนที่ตั้งเองห่าง ${mult.toFixed(2)} เท่าของ ATR — กว้างกว่าเพดานปกติ `
+          + `(${cfg.maxSlAtrMult} เท่า) ขนาดไม้จะเล็กลงมาก และเป้าหมายจะอยู่ไกลขึ้นตามไปด้วย`);
+      }
+    } else {
+      notes.push(`⚠ จุดตัดขาดทุนที่ใส่มา (${slPrice.toFixed(2)}) อยู่ผิดฝั่งของราคาเข้า — ใช้ค่าที่ระบบคำนวณแทน`);
+    }
+  }
 
   const sl = side > 0 ? entryPrice - slDist : entryPrice + slDist;
   const tp1 = side > 0 ? entryPrice + slDist : entryPrice - slDist;
@@ -2453,7 +2510,7 @@ function buildSetup(ctx, i, scored, opts = {}) {
     side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
     entryLimit, entryIdeal: ideal ? ideal.price : null, entryIdealWhy: ideal ? ideal.why : null,
     entryOk: stillOk, rrNow, minRR,
-    slDist, slAtr: slDist / atrVal, atr: atrVal,
+    slDist, slAtr: slDist / atrVal, atr: atrVal, slManual,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
     riskActual, riskActualPct, rewardActual, sizeForced,
@@ -6672,6 +6729,8 @@ const settings = {
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
+  // ค่าของโบรกเกอร์ — ระบบเดาแทนผู้ใช้ไม่ได้ ผิดเมื่อไหร่จำนวนไม้ผิดทั้งหมด
+  contractSize: 100, minLot: 0.01, lotStep: 0.01, slManual: null,
   smartSession: true, historyBars: 3000,
   learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
   adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
@@ -6774,6 +6833,10 @@ function buildStaticUI() {
   $('symbolSel').value = settings.symbol;
   $('accountInput').value = settings.account;
   $('riskInput').value = settings.riskPct;
+  $('contractInput').value = settings.contractSize;
+  $('minLotInput').value = settings.minLot;
+  $('lotStepInput').value = settings.lotStep;
+  $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
   $('thresholdInput').value = settings.threshold;
   $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
@@ -6842,12 +6905,19 @@ function bindEvents() {
     chart.render();
   });
 
-  ['accountInput', 'riskInput'].forEach((id) => $(id).addEventListener('input', () => {
-    settings.account = +$('accountInput').value || 1000;
-    settings.riskPct = +$('riskInput').value || 1;
-    saveSettings();
-    if (state.scored) { renderPlan(); }
-  }));
+  ['accountInput', 'riskInput', 'contractInput', 'minLotInput', 'lotStepInput', 'slManualInput']
+    .forEach((id) => $(id).addEventListener('input', () => {
+      settings.account = +$('accountInput').value || 1000;
+      settings.riskPct = +$('riskInput').value || 1;
+      settings.contractSize = +$('contractInput').value || 100;
+      settings.minLot = +$('minLotInput').value || 0.01;
+      settings.lotStep = +$('lotStepInput').value || 0.01;
+      /* ว่าง = ให้ระบบวางให้ ไม่ใช่ศูนย์ ซึ่งจะกลายเป็นจุดตัดขาดทุนที่ราคา 0 */
+      const raw = $('slManualInput').value.trim();
+      settings.slManual = raw === '' ? null : (Number.isFinite(+raw) ? +raw : null);
+      saveSettings();
+      if (state.scored) { rebuildSetup(); renderPlan(); }
+    }));
 
   $('exitStyleSel').value = settings.exitStyle || 'full';
   $('exitStyleSel').addEventListener('change', (e) => {
@@ -7094,15 +7164,8 @@ function analyze(candleClosed, allowAlert = true) {
   const passes = !!state.hold && blocks.length === 0;
   state.action = passes ? (state.hold.side > 0 ? 'buy' : 'sell') : 'wait';
 
-  const livePrice = state.candles[last].c;
-  state.setup = state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold)
-    ? buildSetup(state.ctx, last, { ...state.scored, side: state.hold ? state.hold.side : Math.sign(score) }, {
-        account: settings.account, riskPct: settings.riskPct, entryPrice: livePrice,
-        side: state.hold ? state.hold.side : Math.sign(score),
-        targetR: activeTargetR(),
-        slAtrMult: settings.slAtr,
-      })
-    : null;
+  state.setupAt = { index: last, price: state.candles[last].c };
+  rebuildSetup();
 
   renderAll();
   renderNarration();
@@ -7401,6 +7464,29 @@ function renderPlainAdvice() {
       ถ้ามีสัญญาณ ระบบจะส่งเสียงเตือนให้เอง ไม่ต้องนั่งเฝ้า</div>` : ''}`;
 }
 
+/*
+ * สร้างแผนเทรดใหม่จากค่าตั้งค่าปัจจุบัน
+ *
+ * ต้องแยกออกมา เพราะตัวเลขอย่างทุน ความเสี่ยง สเปกโบรกเกอร์ และจุดตัดขาดทุน
+ * ที่ผู้ใช้ตั้งเอง อยู่ในแผนที่ buildSetup คำนวณไว้แล้ว ไม่ได้คิดตอนวาดหน้าจอ
+ * ถ้าเปลี่ยนค่าแล้ววาดใหม่เฉย ๆ จะได้แผนเดิมที่คิดจากค่าเก่า — ผู้ใช้กรอกแล้วเหมือนไม่มีอะไรเกิดขึ้น
+ */
+function rebuildSetup() {
+  const at = state.setupAt;
+  if (!at || !state.ctx || !state.scored || !state.combined) { state.setup = null; return; }
+  const score = state.combined.score;
+  const side = state.hold ? state.hold.side : Math.sign(score);
+  state.setup = state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold) && side
+    ? buildSetup(state.ctx, at.index, { ...state.scored, side }, {
+        account: settings.account, riskPct: settings.riskPct, entryPrice: at.price, side,
+        targetR: activeTargetR(),
+        slAtrMult: settings.slAtr,
+        contractSize: settings.contractSize, minLot: settings.minLot, lotStep: settings.lotStep,
+        slPrice: settings.slManual,
+      })
+    : null;
+}
+
 function renderPlan() {
   const box = $('planBox');
   const sizeBox = $('sizeBox');
@@ -7486,9 +7572,9 @@ function renderPlan() {
       <div class="step"><span class="step-n">2</span><div>
         <b>ใส่ตัวเลขให้ครบก่อนกดยืนยัน</b>
         <table class="order-table"><tbody>
-          <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">ห้ามข้ามเด็ดขาด</td></tr>
+          <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">${s.slManual ? 'จุดที่คุณตั้งเอง' : `ระบบวางให้ (${s.slAtr.toFixed(1)}× ATR)`} · ห้ามข้ามเด็ดขาด</td></tr>
           <tr><td>Take Profit</td><td class="num">${s.tpMain.toFixed(2)}</td><td class="hint">${s.mainR} เท่าของความเสี่ยง</td></tr>
-          <tr><td>ขนาด (Lot)</td><td class="num">${lots}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์ · เสี่ยง $${s.riskActual.toFixed(2)}</td></tr>
+          <tr><td>ขนาด (Lot)</td><td class="num">${lots}</td><td class="hint">≈ ${s.oz.toFixed(2)} ออนซ์ · เสี่ยง $${s.riskActual.toFixed(2)}</td></tr>
         </tbody></table>
       </div></div>
 

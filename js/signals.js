@@ -384,6 +384,7 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
     lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
     minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
+    slPrice = null,        // ผู้ใช้กำหนดจุดตัดขาดทุนเอง (ชนะค่าที่ระบบคำนวณ)
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
     slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
@@ -412,6 +413,33 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     }
   }
   slDist = Math.min(slDist, atrVal * cfg.maxSlAtrMult);
+
+  /*
+   * จุดตัดขาดทุนที่ผู้ใช้กำหนดเองชนะเสมอ
+   *
+   * ระบบวางจากสูตร (ATR กับโครงสร้างราคา) ซึ่งไม่รู้เรื่องของผู้ใช้เลย
+   * เช่นแนวที่เขาเฝ้าอยู่ ข่าวที่กำลังรอ หรือขีดจำกัดของบัญชี
+   * คนเทรดมักมีจุดในใจอยู่แล้ว หน้าที่ของระบบคือคิดขนาดไม้จากจุดนั้นให้ถูก
+   * ไม่ใช่ยืนยันจุดของตัวเอง แต่ต้องเตือนถ้าจุดที่เลือกผิดปกติ
+   */
+  let slManual = false;
+  if (slPrice !== null && Number.isFinite(slPrice)) {
+    const ok = side > 0 ? slPrice < entryPrice : slPrice > entryPrice;
+    if (ok) {
+      slDist = Math.abs(entryPrice - slPrice);
+      slManual = true;
+      const mult = slDist / atrVal;
+      if (mult < 0.5) {
+        notes.push(`⚠ จุดตัดขาดทุนที่ตั้งเองห่างแค่ ${mult.toFixed(2)} เท่าของ ATR — แคบกว่าที่ราคาแกว่งปกติ `
+          + 'มีโอกาสสูงที่จะโดนเขี่ยออกก่อนราคาไปตามทาง');
+      } else if (mult > cfg.maxSlAtrMult) {
+        notes.push(`⚠ จุดตัดขาดทุนที่ตั้งเองห่าง ${mult.toFixed(2)} เท่าของ ATR — กว้างกว่าเพดานปกติ `
+          + `(${cfg.maxSlAtrMult} เท่า) ขนาดไม้จะเล็กลงมาก และเป้าหมายจะอยู่ไกลขึ้นตามไปด้วย`);
+      }
+    } else {
+      notes.push(`⚠ จุดตัดขาดทุนที่ใส่มา (${slPrice.toFixed(2)}) อยู่ผิดฝั่งของราคาเข้า — ใช้ค่าที่ระบบคำนวณแทน`);
+    }
+  }
 
   const sl = side > 0 ? entryPrice - slDist : entryPrice + slDist;
   const tp1 = side > 0 ? entryPrice + slDist : entryPrice - slDist;
@@ -512,7 +540,7 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
     entryLimit, entryIdeal: ideal ? ideal.price : null, entryIdealWhy: ideal ? ideal.why : null,
     entryOk: stillOk, rrNow, minRR,
-    slDist, slAtr: slDist / atrVal, atr: atrVal,
+    slDist, slAtr: slDist / atrVal, atr: atrVal, slManual,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
     riskActual, riskActualPct, rewardActual, sizeForced,
