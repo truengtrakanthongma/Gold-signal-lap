@@ -345,6 +345,39 @@ export function combineTimeframes(entry, htf1, htf2) {
  * สร้างแผนเทรด: จุดเข้า / จุดตัดขาดทุน / เป้าทำกำไร / ขนาดไม้
  * ใช้ ATR เป็นตัวกำหนดระยะ เพราะ SL ต้องกว้างพอที่ "noise ปกติ" จะไม่เขี่ยออก
  */
+/**
+ * ตัดสินว่าสัญญาณ "ยังอยู่" หรือ "จบแล้ว" โดยมีช่วงหน่วง (hysteresis)
+ *
+ * ปัญหาที่แก้: ถ้าใช้เส้นเดียวตัดสินทั้งเข้าและออก คะแนนที่แกว่งอยู่รอบ ๆ เกณฑ์
+ * จะทำให้แผนเทรดกะพริบเข้าออกทุกไม่กี่วินาที คนใช้เห็นแล้วกดตามไม่ทัน
+ * พอจะกดจริงแผนก็หายไปแล้ว ทั้งที่สภาพตลาดแทบไม่ได้เปลี่ยนเลย
+ *
+ * ทางแก้มาตรฐานคือใช้สองเส้น: เข้ายาก ออกง่ายกว่าเล็กน้อย
+ * ต้องถึงเกณฑ์เต็มถึงจะเริ่มสัญญาณ แต่จะยกเลิกก็ต่อเมื่อตกลงไปต่ำกว่า
+ * เกณฑ์คูณ releaseFrac ซึ่งทำให้สัญญาณอยู่นานพอให้มนุษย์ตัดสินใจได้
+ *
+ * ทิศกลับด้านคือเรื่องคนละเรื่อง — ของเดิมจบทันที ไม่มีการหน่วง
+ *
+ * @param {object|null} prev สถานะรอบก่อน (null = ยังไม่มีสัญญาณค้างอยู่)
+ * @param {number} score คะแนนตอนนี้ (บวก = ซื้อ, ลบ = ขาย)
+ * @param {number} threshold เกณฑ์เริ่มสัญญาณ
+ */
+export function holdSignal(prev, score, threshold, opts = {}) {
+  const releaseFrac = opts.releaseFrac === undefined ? 0.75 : opts.releaseFrac;
+  const now = opts.now === undefined ? Date.now() : opts.now;
+  const side = Math.sign(score);
+  const abs = Math.abs(score);
+  const start = () => (abs >= threshold ? { side, startedAt: now, peak: abs, held: false } : null);
+
+  if (!prev || !prev.side) return start();
+  if (side !== 0 && side !== prev.side) return start();   // กลับทิศ = สัญญาณใหม่
+  if (abs >= threshold * releaseFrac) {
+    return { side: prev.side, startedAt: prev.startedAt, peak: Math.max(prev.peak, abs),
+      held: abs < threshold };   // held = อยู่ได้เพราะช่วงหน่วง ไม่ใช่เพราะแรงพอ
+  }
+  return null;
+}
+
 export function buildSetup(ctx, i, scored, opts = {}) {
   const cfg = ctx.cfg;
   const {

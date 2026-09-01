@@ -619,6 +619,14 @@ body.simple .narr p { font-size: var(--fs-sm); }
   background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
   color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: var(--fs-xs);
 }
+/* อายุของสัญญาณ — ตอบคำถามแรกของคนที่เพิ่งเห็นแจ้งเตือน: ยังเข้าทันไหม */
+.sig-age {
+  background: rgba(38,169,106,.09); border: 1px solid rgba(38,169,106,.3);
+  border-radius: 8px; padding: 8px 11px; margin-bottom: 8px; font-size: var(--fs-sm);
+}
+.sig-age.fading { background: rgba(240,180,41,.1); border-color: rgba(240,180,41,.35); }
+.sig-age .opt-why { display: block; margin-top: 4px; color: var(--text-2); font-size: var(--fs-xs); }
+
 /* คำเตือนเรื่องทุนไม่พอ — ต้องเด่นกว่าคำเตือนทั่วไป เพราะเป็นเรื่องล้างพอร์ต */
 .size-alarm {
   margin-top: 8px; background: rgba(220,76,76,.1); border: 1px solid rgba(220,76,76,.4);

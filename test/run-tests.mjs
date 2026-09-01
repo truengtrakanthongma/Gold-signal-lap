@@ -6,7 +6,7 @@
  *  3. การจำลองเทรดใน backtest สมเหตุสมผล (ลำดับเวลา ราคาเข้า ทิศทาง SL/TP ขนาดไม้)
  */
 import * as ta from '../js/indicators.js';
-import { buildContext, scoreAt, buildSetup, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
+import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest, optimizeExits } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
@@ -1736,6 +1736,50 @@ section('24) บอท: ติ๊กสองช่องที่ขัดก�
    * และชุดทดสอบนี้ถูกรันก่อนบอททุกรอบ = ยิงไปหาเขาวันละ 96 ครั้งตลอดไปโดยไม่จำเป็น
    * ทางส่งจริงมีข้อ 21 คุมอยู่แล้วด้วยการสวมรอย fetch ซึ่งไม่ต้องออกเน็ต
    */
+}
+
+// ── สัญญาณกะพริบจนกดตามไม่ทัน ────────────────────────────────
+section('25) สัญญาณต้องอยู่นานพอให้คนกดทัน');
+{
+  /*
+   * ผู้ใช้รายงานว่า "มาแป๊บเดียวแล้วหาย" ซึ่งไม่ใช่ความรู้สึก แต่เป็นผลของการ
+   * ใช้เส้นเดียวตัดสินทั้งเข้าและออก คะแนนแกว่งรอบเกณฑ์ = แผนกะพริบ
+   */
+  const TH = 40;
+  let st = null;
+
+  st = holdSignal(st, 20, TH, { now: 0 });
+  ok('ยังไม่ถึงเกณฑ์ → ไม่เริ่มสัญญาณ', st === null);
+
+  st = holdSignal(st, 42, TH, { now: 1000 });
+  ok('ถึงเกณฑ์ → เริ่มสัญญาณฝั่งซื้อ', st !== null && st.side === 1);
+  const startedAt = st.startedAt;
+
+  st = holdSignal(st, 38, TH, { now: 2000 });
+  ok('ตกต่ำกว่าเกณฑ์นิดเดียว → ยังอยู่ ไม่หายไปต่อหน้า', st !== null && st.side === 1);
+  ok('รู้ตัวว่ากำลังอยู่ได้เพราะช่วงหน่วง', st.held === true);
+  ok('จำเวลาที่เริ่มไว้ ไม่ใช่รีเซ็ตใหม่ทุกครั้ง', st.startedAt === startedAt);
+
+  st = holdSignal(st, 44, TH, { now: 3000 });
+  ok('กลับมาแรงเกินเกณฑ์ → ไม่นับว่าอยู่ด้วยช่วงหน่วงแล้ว', st.held === false);
+  ok('จำคะแนนสูงสุดที่เคยไปถึง', st.peak >= 44);
+
+  st = holdSignal(st, 29, TH, { now: 4000 });
+  ok('ตกต่ำกว่าเส้นปล่อย (75% ของเกณฑ์) → จบสัญญาณ', st === null);
+
+  // กลับทิศคือเรื่องคนละเรื่อง ต้องจบทันทีไม่ต้องหน่วง
+  let f = holdSignal(null, 45, TH, { now: 0 });
+  f = holdSignal(f, -44, TH, { now: 100 });
+  ok('คะแนนกลับทิศและแรงพอ → เริ่มสัญญาณใหม่ฝั่งตรงข้ามทันที', f !== null && f.side === -1 && f.startedAt === 100);
+  let g = holdSignal(null, 45, TH, { now: 0 });
+  g = holdSignal(g, -35, TH, { now: 100 });
+  ok('กลับทิศแต่ยังไม่ถึงเกณฑ์ → ไม่ถือสัญญาณเดิมต่อ และไม่เริ่มอันใหม่', g === null);
+
+  /* ช่วงหน่วงต้องไม่กลายเป็นการลดเกณฑ์ทางอ้อม:
+     สัญญาณที่ไม่เคยถึงเกณฑ์เต็มเลย ต้องไม่ถูกปลุกขึ้นมาด้วยเส้นปล่อย */
+  let weak = null;
+  for (const sc of [30, 33, 31, 34]) weak = holdSignal(weak, sc, TH, { now: 0 });
+  ok('คะแนนวนอยู่แถวเส้นปล่อยแต่ไม่เคยถึงเกณฑ์ → ไม่มีสัญญาณ', weak === null);
 }
 
 console.log(`\n${'─'.repeat(52)}`);

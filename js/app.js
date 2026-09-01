@@ -3,7 +3,7 @@
  */
 
 import { MarketFeed, TF, mergeCandle } from './feed.js';
-import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS } from './signals.js';
+import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal } from './signals.js';
 import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
 import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
@@ -29,6 +29,7 @@ const state = {
   ctx: null,
   scored: null,
   combined: null,
+  hold: null,        // สัญญาณที่กำลังถืออยู่ (ดู holdSignal) — กันแผนกะพริบหายต่อหน้า
   setup: null,
   action: 'wait',
   htf: {},          // { '1h': {candles, ctx, scored} }
@@ -463,13 +464,23 @@ function analyze(candleClosed, allowAlert = true) {
   state.blocks = blocks;
 
   const score = state.combined.score;
-  const passes = Math.abs(score) >= settings.threshold && blocks.length === 0 && state.scored.ready;
-  state.action = passes ? (score > 0 ? 'buy' : 'sell') : 'wait';
+
+  /*
+   * ให้สัญญาณอยู่นานพอที่คนจะกดตามทัน
+   *
+   * เดิมใช้เส้นเดียวตัดสินทั้งเข้าและออก คะแนนที่แกว่งรอบเกณฑ์จึงทำให้แผน
+   * กะพริบเข้าออกทุกไม่กี่วินาที ผู้ใช้รายงานตรง ๆ ว่า "มาแป๊บเดียวแล้วหาย"
+   * ตอนนี้เริ่มสัญญาณต้องถึงเกณฑ์เต็ม แต่จะยกเลิกต่อเมื่อตกลงไปต่ำกว่า 75% ของเกณฑ์
+   */
+  state.hold = state.scored.ready ? holdSignal(state.hold, score, settings.threshold) : null;
+  const passes = !!state.hold && blocks.length === 0;
+  state.action = passes ? (state.hold.side > 0 ? 'buy' : 'sell') : 'wait';
 
   const livePrice = state.candles[last].c;
-  state.setup = state.scored.ready && Math.abs(score) >= settings.threshold
-    ? buildSetup(state.ctx, last, { ...state.scored, side: Math.sign(score) }, {
-        account: settings.account, riskPct: settings.riskPct, entryPrice: livePrice, side: Math.sign(score),
+  state.setup = state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold)
+    ? buildSetup(state.ctx, last, { ...state.scored, side: state.hold ? state.hold.side : Math.sign(score) }, {
+        account: settings.account, riskPct: settings.riskPct, entryPrice: livePrice,
+        side: state.hold ? state.hold.side : Math.sign(score),
         targetR: activeTargetR(),
         slAtrMult: settings.slAtr,
       })
@@ -804,8 +815,16 @@ function renderPlan() {
   const gapToIdeal = hasPullback ? Math.abs(s.entry - s.entryIdeal) : 0;
   const idealIsClose = hasPullback && gapToIdeal < s.slDist * 0.25;
 
+  const held = state.hold;
+  const ageMin = held ? Math.max(0, Math.round((Date.now() - held.startedAt) / 60000)) : null;
   box.innerHTML = `
     ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
+    ${held ? `<div class="sig-age${held.held ? ' fading' : ''}">
+      สัญญาณนี้เกิดมา <b>${ageMin === 0 ? 'ไม่ถึง 1' : ageMin}</b> นาที · คะแนนแรงสุดที่เคยไปถึง <b>${held.peak.toFixed(1)}</b>
+      ${held.held
+        ? '<span class="opt-why">ตอนนี้คะแนนอ่อนลงต่ำกว่าเกณฑ์แล้ว แต่ยังไม่ถึงขั้นยกเลิก — ถ้าจะเข้าให้รีบ หรือปล่อยผ่านก็ได้</span>'
+        : '<span class="opt-why">คะแนนยังยืนเหนือเกณฑ์ ไม่ต้องรีบกดแข่งกับเวลา</span>'}
+    </div>` : ''}
     <div class="plan-main">
       <div class="pm-row entry"><span class="pm-label">เข้า${dir}ที่</span>
         <span class="pm-val">${s.entry.toFixed(2)}</span><span class="pm-note">ราคาตลาดตอนนี้</span></div>
