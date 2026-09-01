@@ -27,6 +27,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # ด่านกันเสียเงิน: นาทีรันฟรีไม่จำกัดเฉพาะรีโปสาธารณะ
+      # ถ้าวันไหนรีโปถูกเปลี่ยนเป็นส่วนตัว ให้หยุดตั้งแต่ยังไม่ทำงาน
+      # ถามสถานะจริงจาก API ทุกครั้ง ไม่เดาจากข้อมูลในเหตุการณ์ที่อาจไม่มีมาให้
+      # ถามไม่ได้ก็ถือว่าไม่ปลอดภัยแล้วหยุด ดีกว่าปล่อยรันแล้วมารู้ทีหลัง
+      - name: กันเสียเงิน — รันต่อเฉพาะเมื่อรีโปเป็นสาธารณะ
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vis=$(curl -sS --fail --max-time 20 \
+                  -H "Authorization: Bearer $GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY" \
+                | jq -r '.visibility // empty')
+          if [ "$vis" = "public" ]; then
+            echo "รีโปเป็นสาธารณะ — นาทีรันฟรี ทำงานต่อได้"
+          else
+            echo "::error::รีโปไม่ได้เป็นสาธารณะ (อ่านค่าได้ '${vis:-อ่านไม่ได้}') จึงหยุดบอทไว้ก่อน"
+            echo "รีโปส่วนตัวมีนาทีฟรีจำกัด บอทนี้รัน 96 รอบ/วันจะใช้หมดเร็ว"
+            echo "ถ้าอยากรันต่อ ให้เปลี่ยนรีโปกลับเป็นสาธารณะ หรือปิดตารางเวลาในไฟล์นี้"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
