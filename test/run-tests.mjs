@@ -15,7 +15,7 @@ import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources
 import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
 import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict, fetchHistoricalNews, DEFAULT_NEWS_CFG } from '../js/newsfactor.js';
 import { isValidWebhook, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
-import { NEWS_FEEDS, FEED_ORDER } from '../js/news.js';
+import { NEWS_FEEDS, FEED_ORDER, surpriseOf, dedupe, similarity, sourceWeight, tokensOf } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
@@ -1531,6 +1531,73 @@ section('22) ข่าวดึงไม่ได้ — ต้องถอย�
     ok('อ่านโครงสร้างของ Reddit ได้ถูกชั้น',
       items.length === 1 && items[0].title === 'Gold rises as dollar weakens'
       && items[0].at === 1735689600000, JSON.stringify(items[0] || {}).slice(0, 90));
+  }
+}
+
+// ── อ่านข่าวให้ลึกขึ้นโดยไม่ต้องใช้ AI ────────────────────────────────
+section('23) จุดอ่อนสามข้อที่เคยยอมรับไว้ — แก้ได้ด้วยกฎ ไม่ต้องใช้ AI');
+{
+  const dirOf = (t) => { const a = classifyHeadline(t); return a ? a.dir : 0; };
+
+  /* 1. ตัวเลขเทียบกับที่ตลาดคาด
+     "เงินเฟ้อ 3%" ไม่ได้บอกอะไร — ที่ตลาดตอบสนองคือส่วนต่างจากที่คาดไว้ */
+  ok('จับคำว่าเกินคาดได้', surpriseOf('inflation comes in hotter than expected') === 1);
+  ok('จับคำว่าต่ำกว่าคาดได้', surpriseOf('jobs report misses forecasts') === -1);
+  ok('ไม่มีคำบอกส่วนต่าง → ไม่เดา', surpriseOf('inflation at 3 percent') === 0);
+  ok('เงินเฟ้อเกินคาด → หนุนทอง', dirOf('US inflation comes in hotter than expected') > 0);
+  ok('จ้างงานเกินคาด → กดทอง', dirOf('Jobs report beats expectations') < 0);
+  ok('จ้างงานต่ำกว่าคาด → หนุนทอง', dirOf('Jobs report misses expectations badly') > 0);
+
+  /* ห้ามพลิกทิศสองรอบ — นี่คือบั๊กที่เจอตอนทดสอบ
+     "inflation misses forecasts, cooling" มีทั้งกริยาบอกทิศและคำบอกส่วนต่าง
+     ซึ่งบอกเรื่องเดียวกัน ถ้าพลิกทั้งสองรอบจะได้ทิศกลับหัว */
+  ok('กริยาบอกทิศ + คำบอกส่วนต่าง พูดเรื่องเดียวกัน → พลิกครั้งเดียว',
+    dirOf('US inflation misses forecasts, cooling to 2.1%') < 0);
+  ok('กริยาบอกทิศอย่างเดียว ยังทำงานเหมือนเดิม', dirOf('Inflation cools to 2.1%') < 0);
+  {
+    const a = classifyHeadline('US inflation misses forecasts, cooling to 2.1%');
+    const inf = a.drivers.find((d) => d.key === 'inflation');
+    ok('ข่าวที่บอกส่วนต่างได้น้ำหนักมากกว่าตัวเลขเปล่า ๆ', inf && inf.w > 7, inf ? inf.w : 'ไม่มี');
+  }
+
+  /* 2. ข่าวเก่าที่ถูกเล่าซ้ำ
+     เรื่องเดียวถูกเล่าแปดรอบจะกลบเรื่องอื่นหมด ทั้งที่ตลาดรับรู้ตั้งแต่ชิ้นแรก */
+  {
+    const items = [
+      { title: 'Fed signals rate cut as inflation cools', source: 'reuters.com', at: 1000 },
+      { title: 'Federal Reserve signals rate cut amid cooling inflation', source: 'cnbc.com', at: 2000 },
+      { title: 'Fed signals a rate cut, inflation cooling', source: 'blog.x', at: 3000 },
+      { title: 'Missile strike escalates Middle East conflict', source: 'apnews.com', at: 1500 },
+    ];
+    const g = dedupe(items);
+    ok('ข่าวเรื่องเดียวกันถูกยุบเป็นเรื่องเดียว', g.length === 2, `เหลือ ${g.length} เรื่อง`);
+    const fed = g.find((x) => /rate cut/i.test(x.title));
+    ok('นับจำนวนชิ้นที่ซ้ำไว้', fed && fed.repeats === 3, fed ? fed.repeats : 'ไม่เจอ');
+    ok('นับจำนวนสำนักที่รายงานเรื่องเดียวกัน', fed && fed.sourceCount === 3);
+    /* เก็บชิ้นที่ *เก่าที่สุด* เพราะเวลาที่มีความหมายกับตลาดคือตอนข่าวออกครั้งแรก
+       ไม่ใช่ตอนสำนักข่าวรายที่สามเขียนตาม */
+    ok('เก็บเวลาของชิ้นแรก ไม่ใช่ชิ้นล่าสุด', fed && fed.at === 1000, fed ? fed.at : '');
+    ok('ข่าวคนละเรื่องไม่ถูกยุบรวมกัน',
+      similarity('Missile strike escalates conflict', 'Central banks buy gold') < 0.2);
+  }
+  ok('คำที่เขียนต่างแต่หมายถึงสิ่งเดียวกัน ถูกนับเป็นคำเดียว',
+    tokensOf('Federal Reserve').has('fed') && tokensOf('Fed').has('fed'));
+  ok('รูปผันของกริยาถูกนับเป็นคำเดียว',
+    [...tokensOf('cooling')][0] === [...tokensOf('cools')][0]);
+
+  /* 3. แหล่งข่าวไม่ได้น่าเชื่อเท่ากัน */
+  ok('สำนักข่าวการเงินหลักได้น้ำหนักเต็ม', sourceWeight('reuters.com') === 1);
+  ok('ฟอรัมได้น้ำหนักน้อยกว่าสำนักข่าว', sourceWeight('reddit.com') < sourceWeight('bbc.com'));
+  ok('แหล่งที่ไม่รู้จักไม่ถูกตัดทิ้ง แค่ลดน้ำหนัก',
+    sourceWeight('unknown-blog.xyz') > 0 && sourceWeight('unknown-blog.xyz') < 1);
+
+  /* บรรยากาศรวมต้องเอาความน่าเชื่อและจำนวนสำนักมาคิดด้วย */
+  {
+    const now = Date.now();
+    const big = climateOf([{ at: now, analysis: { score: 10 }, weight: 1, sourceCount: 8 },
+                           { at: now, analysis: { score: -10 }, weight: 0.5, sourceCount: 1 }], now);
+    ok('เรื่องที่หลายสำนักรายงานตรงกัน มีน้ำหนักกว่าเสียงเดียวจากแหล่งอ่อน',
+      big.score > 0.4, `ได้ ${big.score.toFixed(2)}`);
   }
 }
 

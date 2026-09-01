@@ -129,6 +129,128 @@ const INVERTERS = [
 /** คำสำคัญบางคำเป็นวลี ต้องเทียบแบบยืดหยุ่นช่องว่างและรูปพหูพจน์ */
 const hasKeyword = (text, kw) => text.includes(kw.toLowerCase());
 
+/*
+ * ─────────────────────────────────────────────────────────────
+ * สามอย่างที่ทำให้อ่านข่าวได้ลึกขึ้น โดยไม่ต้องใช้ปัญญาประดิษฐ์
+ *
+ * เคยเขียนไว้เองว่าระบบจับคำสำคัญ "พลาดแน่ ๆ" สามเรื่อง
+ * สามเรื่องนั้นแก้ได้ด้วยกฎที่ตรวจสอบได้ ไม่ต้องเดา ไม่มีค่าใช้จ่าย
+ * ─────────────────────────────────────────────────────────────
+ */
+
+/**
+ * 1. ตัวเลขออกมาเกินคาดหรือต่ำกว่าคาด
+ *
+ * นี่คือจุดที่คำสำคัญล้วน ๆ พลาดหนักที่สุด
+ * "เงินเฟ้อ 3%" ไม่ได้บอกอะไรเลย — ที่ตลาดตอบสนองคือ *ส่วนต่างจากที่คาดไว้*
+ * เงินเฟ้อ 3% ที่ตลาดคาด 3.5% คือข่าวเงินเฟ้อชะลอ (กดทอง ผ่านทางเฟดผ่อนคลายช้าลง... จริง ๆ คือหนุน)
+ * ส่วนเงินเฟ้อ 3% ที่ตลาดคาด 2.5% คือข่าวเงินเฟ้อร้อน (หนุนทอง)
+ *
+ * หัวข้อข่าวการเงินมักบอกส่วนต่างนี้ตรง ๆ ด้วยคำไม่กี่คำ ซึ่งจับได้
+ */
+const BEAT = [/\bbeats?\b/, /\btops?\b/, /\bexceed(s|ed)?\b/, /\bhigher than (expected|forecast)/,
+              /\babove (expectations?|forecasts?|estimates?)/, /\bhotter than expected/,
+              /\bstronger than expected/, /\bสูงกว่าคาด/, /\bเกินคาด/];
+const MISS = [/\bmiss(es|ed)?\b/, /\bfalls? short/, /\blower than (expected|forecast)/,
+              /\bbelow (expectations?|forecasts?|estimates?)/, /\bcooler than expected/,
+              /\bweaker than expected/, /\bต่ำกว่าคาด/, /\bแย่กว่าคาด/];
+
+/**
+ * ตัวเลขเทียบกับที่ตลาดคาด — คืน +1 (เกินคาด), -1 (ต่ำกว่าคาด), 0 (ไม่ได้บอก)
+ *
+ * ใช้ปรับความแรง ไม่ใช่ปรับทิศ เพราะทิศขึ้นกับว่าเป็นตัวเลขอะไร
+ * (จ้างงานเกินคาด = กดทอง แต่เงินเฟ้อเกินคาด = หนุนทอง — ตัวขับแต่ละตัวรู้ทิศของตัวเองอยู่แล้ว)
+ */
+export function surpriseOf(text) {
+  const t = String(text || '').toLowerCase();
+  if (BEAT.some((re) => re.test(t))) return 1;
+  if (MISS.some((re) => re.test(t))) return -1;
+  return 0;
+}
+
+/**
+ * 2. ข่าวเก่าที่ถูกเล่าซ้ำ
+ *
+ * สำนักข่าวหลายเจ้ารายงานเรื่องเดียวกัน และเรื่องเดิมถูกเขียนใหม่ทั้งวัน
+ * ถ้านับทุกชิ้นเท่ากัน เรื่องเดียวที่ถูกเล่า 8 รอบจะกลบเรื่องอื่นหมด
+ * ทั้งที่ตลาดรับรู้ไปตั้งแต่ชิ้นแรกแล้ว
+ *
+ * วัดความซ้ำด้วยสัดส่วนคำที่ใช้ร่วมกัน (Jaccard) ซึ่งง่ายและไม่พลาดแบบน่าเกลียด
+ */
+const STOP = new Set(['the','a','an','of','to','in','on','for','and','or','as','at','by','with',
+                      'is','are','was','were','be','after','from','over','amid','say','says','said']);
+/* คำที่เขียนได้หลายแบบแต่หมายถึงสิ่งเดียวกัน — ถ้าไม่รวมให้ ข่าวเรื่องเดียวกันจะถูกนับซ้ำ */
+const SYNONYM = {
+  federal: 'fed', reserve: 'fed', fomc: 'fed', powell: 'fed',
+  treasury: 'yield', treasuries: 'yield', bond: 'yield', bonds: 'yield',
+  greenback: 'dollar', dxy: 'dollar', usd: 'dollar',
+  bullion: 'gold', xau: 'gold',
+  cpi: 'inflation', pce: 'inflation', prices: 'inflation',
+  payrolls: 'jobs', nonfarm: 'jobs', employment: 'jobs', unemployment: 'jobs',
+};
+
+/** ตัดหางคำแบบหยาบ ๆ ให้ cools / cooling / cooled นับเป็นคำเดียวกัน */
+function stem(w) {
+  return w.replace(/(ing|ed|es|s)$/, '').replace(/(.)\1$/, '$1');
+}
+
+export function tokensOf(text) {
+  const out = new Set();
+  for (const raw of String(text || '').toLowerCase().replace(/[^a-z0-9ก-๙\s]/g, ' ').split(/\s+/)) {
+    if (raw.length <= 2 || STOP.has(raw)) continue;
+    const st = stem(raw);
+    out.add(SYNONYM[raw] || SYNONYM[st] || (st.length > 2 ? st : raw));
+  }
+  return out;
+}
+export function similarity(a, b) {
+  const A = a instanceof Set ? a : tokensOf(a);
+  const B = b instanceof Set ? b : tokensOf(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+/**
+ * จัดกลุ่มข่าวที่เป็นเรื่องเดียวกัน เก็บชิ้นที่เก่าที่สุดเป็นตัวแทน
+ *
+ * *** เก็บชิ้นที่เก่าที่สุด ไม่ใช่ใหม่ที่สุด ***
+ * เพราะเวลาที่มีความหมายกับตลาดคือเวลาที่ข่าว "ออกครั้งแรก"
+ * ไม่ใช่เวลาที่สำนักข่าวรายที่แปดเขียนตาม
+ */
+export function dedupe(items, threshold = 0.45) {
+  const groups = [];
+  for (const it of [...items].sort((a, b) => (a.at || 0) - (b.at || 0))) {
+    const tok = tokensOf(it.title);
+    const hit = groups.find((g) => similarity(g.tok, tok) >= threshold);
+    if (hit) { hit.repeats++; hit.sources.add(it.source || ''); continue; }
+    groups.push({ ...it, tok, repeats: 1, sources: new Set([it.source || '']) });
+  }
+  return groups.map((g) => {
+    const { tok, sources, ...rest } = g;
+    return { ...rest, sourceCount: sources.size };
+  });
+}
+
+/**
+ * 3. แหล่งข่าวไม่ได้น่าเชื่อเท่ากัน
+ *
+ * รอยเตอร์รายงานว่าเฟดจะลดดอกเบี้ย กับบล็อกไม่มีชื่อรายงานเรื่องเดียวกัน
+ * ไม่ควรมีน้ำหนักเท่ากัน — สำนักข่าวการเงินหลักมีบรรณาธิการและต้องรับผิดชอบ
+ */
+const TIER1 = ['reuters.com', 'bloomberg.com', 'ft.com', 'wsj.com', 'apnews.com',
+               'cnbc.com', 'economist.com', 'marketwatch.com', 'barrons.com'];
+const TIER2 = ['bbc.com', 'bbc.co.uk', 'theguardian.com', 'nytimes.com', 'forbes.com',
+               'businessinsider.com', 'investing.com', 'kitco.com', 'yahoo.com'];
+export function sourceWeight(domain) {
+  const d = String(domain || '').toLowerCase();
+  if (TIER1.some((x) => d.includes(x))) return 1.0;
+  if (TIER2.some((x) => d.includes(x))) return 0.8;
+  if (d.includes('reddit.com') || d.includes('ycombinator')) return 0.5;
+  return 0.65;
+}
+
 /**
  * วิเคราะห์หัวข้อข่าวหนึ่งชิ้น
  *
@@ -169,10 +291,36 @@ export function classifyHeadline(text) {
   }
   if (!hits.length) return null;
 
+  /*
+   * ตัวเลขเกินคาด/ต่ำกว่าคาด ขยายหรือลดความแรง แต่ไม่เปลี่ยนทิศ
+   * ข่าวที่บอกส่วนต่างจากที่ตลาดคาด มีผลกับราคามากกว่าข่าวที่บอกแค่ตัวเลขเปล่า ๆ
+   * ส่วนข่าวที่ออกมา "ต่ำกว่าคาด" ก็คือแรงในทางตรงข้ามของตัวขับนั้น
+   */
+  const surprise = surpriseOf(text);
+  if (surprise !== 0) {
+    for (const h of hits) {
+      if (!h.invertible) continue;      // ตัวที่มีทิศในตัวเองแล้ว ไม่เกี่ยวกับส่วนต่างจากที่คาด
+      /*
+       * ห้ามพลิกทิศสองรอบ
+       *
+       * "inflation misses forecasts, cooling to 2.1%" มีทั้งกริยาบอกทิศ (cooling)
+       * และคำบอกส่วนต่าง (misses) ซึ่ง *บอกเรื่องเดียวกัน* คือเงินเฟ้อต่ำลง
+       * ถ้าพลิกทั้งสองรอบจะได้ทิศกลับไปเป็นบวก ซึ่งกลับหัวกับความจริง
+       *
+       * กติกา: กริยาพลิกทิศแล้ว ส่วนต่างมีหน้าที่แค่เพิ่มน้ำหนัก
+       *        ยังไม่มีกริยาบอกทิศ ส่วนต่างถึงจะเป็นตัวกำหนดทิศ
+       */
+      if (!h.inverted && surprise < 0) { h.dir = -h.dir; h.inverted = true; }
+      h.surprise = surprise;
+      h.w = h.w * 1.3;                  // ข่าวที่บอกส่วนต่างจากที่คาด มีผลกับราคามากกว่าตัวเลขเปล่า ๆ
+    }
+  }
+
   const score = hits.reduce((a, h) => a + h.dir * h.w, 0);
   const strength = hits.reduce((a, h) => a + h.w, 0);
   return {
     drivers: hits,
+    surprise,
     score,
     dir: Math.sign(score),
     // ความมั่นใจต่ำเมื่อตัวขับหลายตัวขัดกันเอง — สะท้อนความจริงว่าข่าวนั้นตีสองหน้า
@@ -274,10 +422,15 @@ export async function fetchNews(opts = {}) {
       }
       const raw = await res.json();
       const parsed = feed.parse(raw).filter((a) => a.title);
-      const items = parsed
-        .map((a) => ({ ...a, analysis: classifyHeadline(a.title) }))
+      /*
+       * รวมข่าวเรื่องเดียวกันก่อนนับ
+       * เรื่องเดียวที่ถูกเล่าซ้ำแปดรอบจะกลบเรื่องอื่นหมด ทั้งที่ตลาดรับรู้ตั้งแต่ชิ้นแรก
+       * แต่จำนวนสำนักที่รายงานก็มีความหมาย — ยิ่งหลายสำนัก ยิ่งเป็นเรื่องใหญ่จริง
+       */
+      const items = dedupe(parsed)
+        .map((a) => ({ ...a, analysis: classifyHeadline(a.title), weight: sourceWeight(a.source) }))
         .filter((a) => a.analysis)
-        .sort((a, b) => Math.abs(b.analysis.score) - Math.abs(a.analysis.score));
+        .sort((a, b) => Math.abs(b.analysis.score) * b.weight - Math.abs(a.analysis.score) * a.weight);
       attempts.push({ feed: key, label: feed.label, ok: true, ms: Date.now() - s0,
         raw: parsed.length, relevant: items.length });
       // ได้ข้อมูลแล้วแต่ไม่มีข่าวเกี่ยวกับทองเลย ก็ยังนับว่าเจ้านี้ใช้ได้
@@ -309,8 +462,13 @@ export function climateOf(items, now = Date.now()) {
     if (!it.analysis) continue;
     const ageH = it.at ? Math.max(0, (now - it.at) / 3600000) : 12;
     const recency = Math.exp(-ageH / 12);   // ครึ่งชีวิตราว 8 ชั่วโมง
-    num += it.analysis.score * recency;
-    den += Math.abs(it.analysis.score) * recency;
+    // ความน่าเชื่อของแหล่ง และจำนวนสำนักที่รายงานเรื่องเดียวกัน
+    // (หลายสำนักรายงานตรงกัน = เรื่องใหญ่จริง ไม่ใช่เสียงเดียว)
+    const cred = it.weight === undefined ? 1 : it.weight;
+    const spread = Math.min(2, 1 + Math.log2(Math.max(1, it.sourceCount || 1)) * 0.5);
+    const w = recency * cred * spread;
+    num += it.analysis.score * w;
+    den += Math.abs(it.analysis.score) * w;
   }
   const score = den ? num / den : 0;
   const level = score > 0.35 ? 'up' : score < -0.35 ? 'down' : 'flat';

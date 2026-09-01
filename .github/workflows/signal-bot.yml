@@ -1,0 +1,65 @@
+name: บอทเฝ้าสัญญาณ (แจ้งเตือนเข้า Discord)
+
+# ทำไมต้องมี: หน้าเว็บต้องเปิดค้างไว้ถึงจะเตือนได้ ปิดจอก็จบ
+# ตัวนี้รันบนเครื่องของ GitHub จึงเตือนได้แม้ปิดเครื่องคุณสนิท
+#
+# ค่าใช้จ่าย: รีโปสาธารณะได้นาทีรันไม่จำกัด — ฟรีทั้งหมด
+on:
+  schedule:
+    # ทุก 15 นาที ให้ตรงกับกรอบเวลาแท่งเทียนที่ใช้
+    # หมายเหตุ: ตัวตั้งเวลาของ GitHub ไม่ตรงเป๊ะ ช่วงคนใช้เยอะอาจช้าไป 5-20 นาที
+    # จึงเหมาะกับกรอบ 15 นาทีขึ้นไป ไม่เหมาะกับการเก็งกำไรรายนาที
+    - cron: '*/15 * * * *'
+  workflow_dispatch:      # กดรันเองได้ตลอด ใช้ตอนทดสอบ
+    inputs:
+      dry_run:
+        description: 'ทดสอบโดยไม่ส่งเข้า Discord จริง'
+        type: boolean
+        default: false
+
+# กันไม่ให้รันซ้อนกันเมื่อรอบก่อนยังไม่จบ
+concurrency:
+  group: signal-bot
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # จำว่าเตือนแท่งไหนไปแล้ว กันเตือนซ้ำเมื่อตัวตั้งเวลารันช้าจนคาบเกี่ยวกัน
+      # คีย์ของแคชแก้ไม่ได้ จึงตั้งคีย์ใหม่ทุกรอบ แล้วกู้คืนด้วยคำนำหน้าแทน
+      - name: กู้คืนสถานะรอบก่อน
+        uses: actions/cache/restore@v4
+        with:
+          path: bot/.state.json
+          key: bot-state-${{ github.run_id }}
+          restore-keys: bot-state-
+
+      - name: ตรวจว่าเอนจินยังผ่านเทสต์ก่อนเชื่อสัญญาณ
+        run: node test/run-tests.mjs
+
+      - name: เฝ้าสัญญาณ
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BOT_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          # ปรับได้จาก Settings → Secrets and variables → Actions → Variables
+          BOT_INTERVAL: ${{ vars.BOT_INTERVAL || '15m' }}
+          BOT_THRESHOLD: ${{ vars.BOT_THRESHOLD || '45' }}
+          BOT_ACCOUNT: ${{ vars.BOT_ACCOUNT || '1000' }}
+          BOT_RISK_PCT: ${{ vars.BOT_RISK_PCT || '1' }}
+          BOT_SOURCES: ${{ vars.BOT_SOURCES || 'kraken_paxg,bitfinex_xaut,binance_paxg,okx_paxg' }}
+        run: node bot/run.mjs
+
+      - name: บันทึกสถานะไว้ใช้รอบถัดไป
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: bot/.state.json
+          key: bot-state-${{ github.run_id }}
