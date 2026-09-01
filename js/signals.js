@@ -38,6 +38,16 @@ export const DEFAULT_CFG = {
   minTargetR: 1.0,
   threshold: 35,       // คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ
   adxTrendMin: 22,     // ADX เกินนี้ = โหมดเทรนด์, ต่ำกว่า = โหมดกรอบ
+  /*
+   * ขนาดไม้ที่โบรกเกอร์ยอมให้ส่งจริง
+   *
+   * ทำไมต้องมี: สูตรคำนวณขนาดไม้ให้ทศนิยมละเอียดเท่าไรก็ได้ แต่โบรกเกอร์รับเป็นขั้น
+   * ขั้นต่ำสุดที่พบทั่วไปคือ 0.01 ล็อต (= ทอง 1 ออนซ์) การบอกให้เทรด 0.0078 ล็อต
+   * จึงเป็นตัวเลขที่ส่งคำสั่งไม่ได้ และถ้าผู้ใช้ปัดขึ้นเป็น 0.01 เอง
+   * ความเสี่ยงจริงจะโตกว่าที่ตั้งใจไว้โดยไม่มีใครบอก
+   */
+  lotStep: 0.01,       // ขั้นของขนาดไม้ที่โบรกเกอร์รับ
+  minLot: 0.01,        // ไม้เล็กที่สุดที่ส่งคำสั่งได้
   minAtrPct: 0.02,     // ผันผวนต่ำกว่านี้ = ตลาดตาย ไม่คุ้มค่าสเปรด (%)
   maxAtrPct: 1.5,      // ผันผวนสูงกว่านี้ = ข่าวแรง/เสี่ยงเกิน (%)
 };
@@ -339,6 +349,8 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   const cfg = ctx.cfg;
   const {
     account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
+    lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
+    minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
     slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
@@ -389,13 +401,50 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   if (side < 0 && round.distBelow < slDist) notes.push(`เลขกลม ${round.below} อยู่ใกล้ (ห่าง ${round.distBelow.toFixed(2)}) — มักมีแรงซื้อรับที่เลขกลม เผื่อทยอยปิดบางส่วนก่อน`);
 
   const riskMoney = account * (riskPct / 100);
-  const lots = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
+  const lotsRaw = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
+
+  /*
+   * ปัดขนาดไม้ลงให้ตรงขั้นของโบรกเกอร์ แล้วคิดความเสี่ยง "ย้อนกลับ" จากขนาดที่ส่งได้จริง
+   *
+   * เดิมรายงานขนาดไม้ดิบอย่าง 0.0078 ล็อต ซึ่งส่งคำสั่งไม่ได้เลย
+   * ผู้ใช้ต้องปัดเป็น 0.01 เอง แล้วความเสี่ยงจริงก็โตกว่าที่ตั้งไว้โดยไม่รู้ตัว
+   * ตัวเลขที่แสดงจึงต้องเป็นตัวเลขที่กดส่งได้ และความเสี่ยงต้องเป็นของขนาดนั้น
+   */
+  const step = lotStep > 0 ? lotStep : 0.01;
+  let lots = Math.floor(lotsRaw / step + 1e-9) * step;
+  if (lots < minLot) lots = minLot;
+  lots = +(Math.round(lots / step) * step).toFixed(6);
+
+  const riskActual = lots * slDist * contractSize;
+  const riskActualPct = account > 0 ? (riskActual / account) * 100 : null;
+  const sizeForced = lotsRaw < minLot;   // ทุนน้อยเกินกว่าจะเสี่ยงตามที่ตั้งไว้
 
   // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี แต่ห้ามต่ำกว่าพื้นที่ตั้งไว้
   // ถึงสถิติจะบอกว่าเป้าเตี้ยให้ค่าคาดหวังดีกว่า ก็ไม่รับ เพราะไม่ทนต่อการพลาด
   const minTR = cfg.minTargetR === undefined ? 1.0 : cfg.minTargetR;
   const mainR = Math.max(minTR, targetR || 2);
   const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
+  const rewardActual = riskActual * mainR;
+
+  /*
+   * เตือนเมื่อทุนไม่พอจะเสี่ยงตามที่ตั้งไว้
+   *
+   * นี่คือกรณีที่เงียบแล้วอันตรายที่สุด: ระบบบอกให้เสี่ยง 1% แต่ไม้เล็กที่สุด
+   * ที่โบรกเกอร์รับ อาจกินทุนไปหลายสิบเปอร์เซ็นต์หรือเกินทุนทั้งก้อน
+   * ยิ่งทุนน้อยยิ่งแรง เพราะระยะตัดขาดทุนของทองไม่ได้เล็กลงตามทุน
+   */
+  if (sizeForced) {
+    const pct = riskActualPct === null ? null : riskActualPct.toFixed(0);
+    notes.push(`⚠ ทุนไม่พอสำหรับความเสี่ยงที่ตั้งไว้ — ไม้เล็กที่สุดที่ส่งคำสั่งได้คือ ${minLot} ล็อต `
+      + `ซึ่งเสี่ยง ${riskActual.toFixed(2)} USD${pct === null ? '' : ` (${pct}% ของทุน ${account.toFixed(2)} USD)`} `
+      + `แทนที่จะเป็น ${riskMoney.toFixed(2)} USD ตามที่ตั้งไว้`);
+    if (riskActualPct !== null && riskActualPct >= 100) {
+      notes.push('⛔ ไม้เดียวนี้เสี่ยงเกินทุนทั้งก้อน ถ้าชน SL คือล้างพอร์ต — ไม้นี้ไม่ควรเข้าด้วยทุนเท่านี้');
+    } else if (riskActualPct !== null && riskActualPct >= 10) {
+      notes.push(`⛔ เสี่ยง ${riskActualPct.toFixed(0)}% ของทุนในไม้เดียว แพ้ติดกันไม่กี่ไม้ก็หมดพอร์ต `
+        + 'ทางแก้คือเพิ่มทุน ใช้บัญชีที่เทรดขนาดเล็กกว่านี้ได้ หรือข้ามไม้นี้ไป');
+    }
+  }
 
   /*
    * โซนราคาที่ "เข้าได้" ไม่ใช่ราคาเดียว
@@ -432,10 +481,12 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     entryOk: stillOk, rrNow, minRR,
     slDist, slAtr: slDist / atrVal, atr: atrVal,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
-    riskMoney, lots, oz: lots * contractSize,
+    riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
+    riskActual, riskActualPct, rewardActual, sizeForced,
     notes,
     plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `
-      + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`,
+      + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`
+      + ` · ${lots} ล็อต = เสี่ยง ${riskActual.toFixed(2)} USD เพื่อลุ้น ${rewardActual.toFixed(2)} USD`,
   };
 }
 

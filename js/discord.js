@@ -137,15 +137,44 @@ export function buildSignalMessage(o) {
       { name: `เป้าหมาย (${setup.mainR}R)`, value: '`' + setup.tpMain.toFixed(2) + '`', inline: true },
     );
     if (setup.lots) {
-      fields.push({ name: 'ขนาดไม้', value: '`' + setup.lots.toFixed(2) + '` ล็อต', inline: true });
+      fields.push({ name: 'ขนาดไม้', value: '`' + setup.lots + '` ล็อต', inline: true });
     }
     fields.push({ name: 'ได้:เสีย', value: '`' + setup.rrNow.toFixed(2) + ':1`', inline: true });
+
+    /*
+     * เงินจริง ไม่ใช่แค่ R
+     *
+     * คนตัดสินใจด้วยจำนวนเงินที่ยอมเสีย ไม่ใช่ด้วยตัวคูณความเสี่ยง
+     * และเป็นตัวเลขเดียวที่บอกได้ว่าไม้นี้ใหญ่เกินทุนหรือเปล่า
+     */
+    if (setup.riskActual !== undefined && setup.rewardActual !== undefined) {
+      const pct = setup.riskActualPct === null || setup.riskActualPct === undefined
+        ? '' : ` (${setup.riskActualPct.toFixed(1)}% ของทุน)`;
+      fields.push({ name: 'เสี่ยงจริง', value: '`' + setup.riskActual.toFixed(2) + '` USD' + pct, inline: true });
+      fields.push({ name: 'ลุ้นได้', value: '`' + setup.rewardActual.toFixed(2) + '` USD', inline: true });
+    }
+
+    /*
+     * เข้าได้ถึงราคาไหน
+     *
+     * สัญญาณมาถึงมือช้ากว่าที่ราคาวิ่งเสมอ คำถามแรกของคนอ่านคือ
+     * "ตอนนี้ยังเข้าทันไหม" ซึ่งตอบไม่ได้ถ้าบอกมาแค่ราคาเข้าจุดเดียว
+     * ตัวเลขนี้คือราคาที่แย่ที่สุดที่อัตราส่วนได้:เสีย ยังคุ้มอยู่ เลยไปแล้วให้ปล่อยผ่าน
+     */
+    if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
+      fields.push({ name: `ยังเข้าได้ถึง (ได้:เสีย ≥ ${setup.minRR})`,
+        value: '`' + setup.entryLimit.toFixed(2) + '` — เลยราคานี้ไปแล้วอย่าไล่ราคา', inline: false });
+    }
   }
   if (prob && prob.p !== null && prob.p !== undefined) {
     fields.push({ name: 'อัตราชนะในอดีต', value: `\`${prob.p.toFixed(0)}%\` (${prob.n} ไม้)`, inline: true });
   }
   if (blocks.length) {
     fields.push({ name: 'เหตุผลที่ยังไม่ควรเข้า', value: clip(blocks.join('\n'), 1000) });
+  }
+  const warnings = (setup && setup.notes ? setup.notes : []).filter((n) => /⚠|⛔/.test(n));
+  if (warnings.length) {
+    fields.push({ name: 'ต้องอ่านก่อนเข้า', value: clip(warnings.join('\n\n'), 1000) });
   }
   if (reasons.length) {
     fields.push({ name: 'ปัจจัยสนับสนุน', value: clip(reasons.slice(0, 5).map((r) => '• ' + r).join('\n'), 1000) });

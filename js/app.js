@@ -787,8 +787,11 @@ function renderPlan() {
     return;
   }
   const s = state.setup;
-  const riskMoney = settings.account * (settings.riskPct / 100);
-  const lots = s.slDist > 0 ? riskMoney / (s.slDist * 100) : 0;
+  /* ขนาดไม้และเงินเสี่ยงมาจาก buildSetup ที่เดียว — เดิมหน้านี้คำนวณเองอีกชุด
+     ซึ่งได้เลขที่ส่งคำสั่งไม่ได้ (เช่น 0.008 ล็อต) และบอกเงินเสี่ยงตามที่ "ตั้งใจ"
+     ไม่ใช่ตามขนาดไม้ที่เทรดได้จริง ตัวเลขบนหน้าจอกับที่เด้งเข้า Discord จึงไม่ตรงกัน */
+  const riskMoney = s.riskActual;
+  const lots = s.lots;
   const opt = state.opt && state.opt.ok ? state.opt : null;
   const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
   const sign = s.side > 0 ? '+' : '-';
@@ -808,11 +811,20 @@ function renderPlan() {
         <span class="pm-val">${s.entry.toFixed(2)}</span><span class="pm-note">ราคาตลาดตอนนี้</span></div>
       <div class="pm-row sl"><span class="pm-label">ตัดขาดทุน</span>
         <span class="pm-val">${s.sl.toFixed(2)}</span>
-        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(0)}</span></div>
+        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(2)}${s.riskActualPct === null ? '' : ` (${s.riskActualPct.toFixed(1)}% ของทุน)`}</span></div>
       <div class="pm-row tp"><span class="pm-label">เป้าทำกำไร</span>
         <span class="pm-val">${s.tpMain.toFixed(2)}</span>
-        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${(riskMoney * rr).toFixed(0)}</span></div>
+        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${s.rewardActual.toFixed(2)}</span></div>
     </div>
+    ${s.sizeForced ? `<div class="size-alarm">
+      <b>⚠ ทุนไม่พอสำหรับไม้นี้</b>
+      ไม้เล็กที่สุดที่โบรกเกอร์รับคือ <b>${s.minLot}</b> ล็อต ซึ่งเสี่ยง <b>$${s.riskActual.toFixed(2)}</b>
+      ${s.riskActualPct === null ? '' : `= <b>${s.riskActualPct.toFixed(0)}%</b> ของทุน`}
+      แทนที่จะเป็น $${s.riskMoney.toFixed(2)} ตามที่ตั้งไว้
+      <span class="opt-why">${s.riskActualPct !== null && s.riskActualPct >= 100
+        ? 'ไม้เดียวนี้เสี่ยงเกินทุนทั้งก้อน ชน SL คือล้างพอร์ต — ไม้นี้ไม่ควรเข้าด้วยทุนเท่านี้'
+        : 'ทางแก้: เพิ่มทุน ใช้บัญชีที่เทรดขนาดเล็กกว่านี้ได้ หรือข้ามไม้นี้ไป'}</span>
+    </div>` : ''}
 
     <div class="entry-guide">
       <h3>วิธีเข้าไม้ — ทำตามทีละขั้น</h3>
@@ -839,7 +851,7 @@ function renderPlan() {
         <table class="order-table"><tbody>
           <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">ห้ามข้ามเด็ดขาด</td></tr>
           <tr><td>Take Profit</td><td class="num">${s.tpMain.toFixed(2)}</td><td class="hint">${s.mainR} เท่าของความเสี่ยง</td></tr>
-          <tr><td>ขนาด (Lot)</td><td class="num">${lots.toFixed(3)}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์</td></tr>
+          <tr><td>ขนาด (Lot)</td><td class="num">${lots}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์ · เสี่ยง $${s.riskActual.toFixed(2)}</td></tr>
         </tbody></table>
       </div></div>
 

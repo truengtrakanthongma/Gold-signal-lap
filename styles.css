@@ -619,6 +619,15 @@ body.simple .narr p { font-size: var(--fs-sm); }
   background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
   color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: var(--fs-xs);
 }
+/* คำเตือนเรื่องทุนไม่พอ — ต้องเด่นกว่าคำเตือนทั่วไป เพราะเป็นเรื่องล้างพอร์ต */
+.size-alarm {
+  margin-top: 8px; background: rgba(220,76,76,.1); border: 1px solid rgba(220,76,76,.4);
+  border-left: 3px solid var(--down); border-radius: 8px; padding: 10px 12px;
+  font-size: var(--fs-sm); line-height: 1.55;
+}
+.size-alarm b { color: var(--down); }
+.size-alarm .opt-why { display: block; margin-top: 5px; color: var(--text-2); font-size: var(--fs-xs); }
+
 .plan-main { display: flex; flex-direction: column; gap: 1px; border-radius: 9px; overflow: hidden; }
 .pm-row {
   display: grid; grid-template-columns: 92px 1fr auto; align-items: baseline; gap: 10px;

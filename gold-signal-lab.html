@@ -635,6 +635,15 @@ body.simple .narr p { font-size: var(--fs-sm); }
   background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.35);
   color: var(--gold); border-radius: 7px; padding: 7px 10px; font-size: var(--fs-xs);
 }
+/* คำเตือนเรื่องทุนไม่พอ — ต้องเด่นกว่าคำเตือนทั่วไป เพราะเป็นเรื่องล้างพอร์ต */
+.size-alarm {
+  margin-top: 8px; background: rgba(220,76,76,.1); border: 1px solid rgba(220,76,76,.4);
+  border-left: 3px solid var(--down); border-radius: 8px; padding: 10px 12px;
+  font-size: var(--fs-sm); line-height: 1.55;
+}
+.size-alarm b { color: var(--down); }
+.size-alarm .opt-why { display: block; margin-top: 5px; color: var(--text-2); font-size: var(--fs-xs); }
+
 .plan-main { display: flex; flex-direction: column; gap: 1px; border-radius: 9px; overflow: hidden; }
 .pm-row {
   display: grid; grid-template-columns: 92px 1fr auto; align-items: baseline; gap: 10px;
@@ -1917,6 +1926,16 @@ const DEFAULT_CFG = {
   minTargetR: 1.0,
   threshold: 35,       // คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ
   adxTrendMin: 22,     // ADX เกินนี้ = โหมดเทรนด์, ต่ำกว่า = โหมดกรอบ
+  /*
+   * ขนาดไม้ที่โบรกเกอร์ยอมให้ส่งจริง
+   *
+   * ทำไมต้องมี: สูตรคำนวณขนาดไม้ให้ทศนิยมละเอียดเท่าไรก็ได้ แต่โบรกเกอร์รับเป็นขั้น
+   * ขั้นต่ำสุดที่พบทั่วไปคือ 0.01 ล็อต (= ทอง 1 ออนซ์) การบอกให้เทรด 0.0078 ล็อต
+   * จึงเป็นตัวเลขที่ส่งคำสั่งไม่ได้ และถ้าผู้ใช้ปัดขึ้นเป็น 0.01 เอง
+   * ความเสี่ยงจริงจะโตกว่าที่ตั้งใจไว้โดยไม่มีใครบอก
+   */
+  lotStep: 0.01,       // ขั้นของขนาดไม้ที่โบรกเกอร์รับ
+  minLot: 0.01,        // ไม้เล็กที่สุดที่ส่งคำสั่งได้
   minAtrPct: 0.02,     // ผันผวนต่ำกว่านี้ = ตลาดตาย ไม่คุ้มค่าสเปรด (%)
   maxAtrPct: 1.5,      // ผันผวนสูงกว่านี้ = ข่าวแรง/เสี่ยงเกิน (%)
 };
@@ -2218,6 +2237,8 @@ function buildSetup(ctx, i, scored, opts = {}) {
   const cfg = ctx.cfg;
   const {
     account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
+    lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
+    minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
     slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
@@ -2268,13 +2289,50 @@ function buildSetup(ctx, i, scored, opts = {}) {
   if (side < 0 && round.distBelow < slDist) notes.push(`เลขกลม ${round.below} อยู่ใกล้ (ห่าง ${round.distBelow.toFixed(2)}) — มักมีแรงซื้อรับที่เลขกลม เผื่อทยอยปิดบางส่วนก่อน`);
 
   const riskMoney = account * (riskPct / 100);
-  const lots = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
+  const lotsRaw = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
+
+  /*
+   * ปัดขนาดไม้ลงให้ตรงขั้นของโบรกเกอร์ แล้วคิดความเสี่ยง "ย้อนกลับ" จากขนาดที่ส่งได้จริง
+   *
+   * เดิมรายงานขนาดไม้ดิบอย่าง 0.0078 ล็อต ซึ่งส่งคำสั่งไม่ได้เลย
+   * ผู้ใช้ต้องปัดเป็น 0.01 เอง แล้วความเสี่ยงจริงก็โตกว่าที่ตั้งไว้โดยไม่รู้ตัว
+   * ตัวเลขที่แสดงจึงต้องเป็นตัวเลขที่กดส่งได้ และความเสี่ยงต้องเป็นของขนาดนั้น
+   */
+  const step = lotStep > 0 ? lotStep : 0.01;
+  let lots = Math.floor(lotsRaw / step + 1e-9) * step;
+  if (lots < minLot) lots = minLot;
+  lots = +(Math.round(lots / step) * step).toFixed(6);
+
+  const riskActual = lots * slDist * contractSize;
+  const riskActualPct = account > 0 ? (riskActual / account) * 100 : null;
+  const sizeForced = lotsRaw < minLot;   // ทุนน้อยเกินกว่าจะเสี่ยงตามที่ตั้งไว้
 
   // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี แต่ห้ามต่ำกว่าพื้นที่ตั้งไว้
   // ถึงสถิติจะบอกว่าเป้าเตี้ยให้ค่าคาดหวังดีกว่า ก็ไม่รับ เพราะไม่ทนต่อการพลาด
   const minTR = cfg.minTargetR === undefined ? 1.0 : cfg.minTargetR;
   const mainR = Math.max(minTR, targetR || 2);
   const tpMain = side > 0 ? entryPrice + slDist * mainR : entryPrice - slDist * mainR;
+  const rewardActual = riskActual * mainR;
+
+  /*
+   * เตือนเมื่อทุนไม่พอจะเสี่ยงตามที่ตั้งไว้
+   *
+   * นี่คือกรณีที่เงียบแล้วอันตรายที่สุด: ระบบบอกให้เสี่ยง 1% แต่ไม้เล็กที่สุด
+   * ที่โบรกเกอร์รับ อาจกินทุนไปหลายสิบเปอร์เซ็นต์หรือเกินทุนทั้งก้อน
+   * ยิ่งทุนน้อยยิ่งแรง เพราะระยะตัดขาดทุนของทองไม่ได้เล็กลงตามทุน
+   */
+  if (sizeForced) {
+    const pct = riskActualPct === null ? null : riskActualPct.toFixed(0);
+    notes.push(`⚠ ทุนไม่พอสำหรับความเสี่ยงที่ตั้งไว้ — ไม้เล็กที่สุดที่ส่งคำสั่งได้คือ ${minLot} ล็อต `
+      + `ซึ่งเสี่ยง ${riskActual.toFixed(2)} USD${pct === null ? '' : ` (${pct}% ของทุน ${account.toFixed(2)} USD)`} `
+      + `แทนที่จะเป็น ${riskMoney.toFixed(2)} USD ตามที่ตั้งไว้`);
+    if (riskActualPct !== null && riskActualPct >= 100) {
+      notes.push('⛔ ไม้เดียวนี้เสี่ยงเกินทุนทั้งก้อน ถ้าชน SL คือล้างพอร์ต — ไม้นี้ไม่ควรเข้าด้วยทุนเท่านี้');
+    } else if (riskActualPct !== null && riskActualPct >= 10) {
+      notes.push(`⛔ เสี่ยง ${riskActualPct.toFixed(0)}% ของทุนในไม้เดียว แพ้ติดกันไม่กี่ไม้ก็หมดพอร์ต `
+        + 'ทางแก้คือเพิ่มทุน ใช้บัญชีที่เทรดขนาดเล็กกว่านี้ได้ หรือข้ามไม้นี้ไป');
+    }
+  }
 
   /*
    * โซนราคาที่ "เข้าได้" ไม่ใช่ราคาเดียว
@@ -2311,10 +2369,12 @@ function buildSetup(ctx, i, scored, opts = {}) {
     entryOk: stillOk, rrNow, minRR,
     slDist, slAtr: slDist / atrVal, atr: atrVal,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
-    riskMoney, lots, oz: lots * contractSize,
+    riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
+    riskActual, riskActualPct, rewardActual, sizeForced,
     notes,
     plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `
-      + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`,
+      + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`
+      + ` · ${lots} ล็อต = เสี่ยง ${riskActual.toFixed(2)} USD เพื่อลุ้น ${rewardActual.toFixed(2)} USD`,
   };
 }
 
@@ -3961,15 +4021,44 @@ function buildSignalMessage(o) {
       { name: `เป้าหมาย (${setup.mainR}R)`, value: '`' + setup.tpMain.toFixed(2) + '`', inline: true },
     );
     if (setup.lots) {
-      fields.push({ name: 'ขนาดไม้', value: '`' + setup.lots.toFixed(2) + '` ล็อต', inline: true });
+      fields.push({ name: 'ขนาดไม้', value: '`' + setup.lots + '` ล็อต', inline: true });
     }
     fields.push({ name: 'ได้:เสีย', value: '`' + setup.rrNow.toFixed(2) + ':1`', inline: true });
+
+    /*
+     * เงินจริง ไม่ใช่แค่ R
+     *
+     * คนตัดสินใจด้วยจำนวนเงินที่ยอมเสีย ไม่ใช่ด้วยตัวคูณความเสี่ยง
+     * และเป็นตัวเลขเดียวที่บอกได้ว่าไม้นี้ใหญ่เกินทุนหรือเปล่า
+     */
+    if (setup.riskActual !== undefined && setup.rewardActual !== undefined) {
+      const pct = setup.riskActualPct === null || setup.riskActualPct === undefined
+        ? '' : ` (${setup.riskActualPct.toFixed(1)}% ของทุน)`;
+      fields.push({ name: 'เสี่ยงจริง', value: '`' + setup.riskActual.toFixed(2) + '` USD' + pct, inline: true });
+      fields.push({ name: 'ลุ้นได้', value: '`' + setup.rewardActual.toFixed(2) + '` USD', inline: true });
+    }
+
+    /*
+     * เข้าได้ถึงราคาไหน
+     *
+     * สัญญาณมาถึงมือช้ากว่าที่ราคาวิ่งเสมอ คำถามแรกของคนอ่านคือ
+     * "ตอนนี้ยังเข้าทันไหม" ซึ่งตอบไม่ได้ถ้าบอกมาแค่ราคาเข้าจุดเดียว
+     * ตัวเลขนี้คือราคาที่แย่ที่สุดที่อัตราส่วนได้:เสีย ยังคุ้มอยู่ เลยไปแล้วให้ปล่อยผ่าน
+     */
+    if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
+      fields.push({ name: `ยังเข้าได้ถึง (ได้:เสีย ≥ ${setup.minRR})`,
+        value: '`' + setup.entryLimit.toFixed(2) + '` — เลยราคานี้ไปแล้วอย่าไล่ราคา', inline: false });
+    }
   }
   if (prob && prob.p !== null && prob.p !== undefined) {
     fields.push({ name: 'อัตราชนะในอดีต', value: `\`${prob.p.toFixed(0)}%\` (${prob.n} ไม้)`, inline: true });
   }
   if (blocks.length) {
     fields.push({ name: 'เหตุผลที่ยังไม่ควรเข้า', value: clip(blocks.join('\n'), 1000) });
+  }
+  const warnings = (setup && setup.notes ? setup.notes : []).filter((n) => /⚠|⛔/.test(n));
+  if (warnings.length) {
+    fields.push({ name: 'ต้องอ่านก่อนเข้า', value: clip(warnings.join('\n\n'), 1000) });
   }
   if (reasons.length) {
     fields.push({ name: 'ปัจจัยสนับสนุน', value: clip(reasons.slice(0, 5).map((r) => '• ' + r).join('\n'), 1000) });
@@ -7230,8 +7319,11 @@ function renderPlan() {
     return;
   }
   const s = state.setup;
-  const riskMoney = settings.account * (settings.riskPct / 100);
-  const lots = s.slDist > 0 ? riskMoney / (s.slDist * 100) : 0;
+  /* ขนาดไม้และเงินเสี่ยงมาจาก buildSetup ที่เดียว — เดิมหน้านี้คำนวณเองอีกชุด
+     ซึ่งได้เลขที่ส่งคำสั่งไม่ได้ (เช่น 0.008 ล็อต) และบอกเงินเสี่ยงตามที่ "ตั้งใจ"
+     ไม่ใช่ตามขนาดไม้ที่เทรดได้จริง ตัวเลขบนหน้าจอกับที่เด้งเข้า Discord จึงไม่ตรงกัน */
+  const riskMoney = s.riskActual;
+  const lots = s.lots;
   const opt = state.opt && state.opt.ok ? state.opt : null;
   const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
   const sign = s.side > 0 ? '+' : '-';
@@ -7251,11 +7343,20 @@ function renderPlan() {
         <span class="pm-val">${s.entry.toFixed(2)}</span><span class="pm-note">ราคาตลาดตอนนี้</span></div>
       <div class="pm-row sl"><span class="pm-label">ตัดขาดทุน</span>
         <span class="pm-val">${s.sl.toFixed(2)}</span>
-        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย ${riskMoney.toFixed(0)}</span></div>
+        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(2)}${s.riskActualPct === null ? '' : ` (${s.riskActualPct.toFixed(1)}% ของทุน)`}</span></div>
       <div class="pm-row tp"><span class="pm-label">เป้าทำกำไร</span>
         <span class="pm-val">${s.tpMain.toFixed(2)}</span>
-        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ ${(riskMoney * rr).toFixed(0)}</span></div>
+        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${s.rewardActual.toFixed(2)}</span></div>
     </div>
+    ${s.sizeForced ? `<div class="size-alarm">
+      <b>⚠ ทุนไม่พอสำหรับไม้นี้</b>
+      ไม้เล็กที่สุดที่โบรกเกอร์รับคือ <b>${s.minLot}</b> ล็อต ซึ่งเสี่ยง <b>$${s.riskActual.toFixed(2)}</b>
+      ${s.riskActualPct === null ? '' : `= <b>${s.riskActualPct.toFixed(0)}%</b> ของทุน`}
+      แทนที่จะเป็น $${s.riskMoney.toFixed(2)} ตามที่ตั้งไว้
+      <span class="opt-why">${s.riskActualPct !== null && s.riskActualPct >= 100
+        ? 'ไม้เดียวนี้เสี่ยงเกินทุนทั้งก้อน ชน SL คือล้างพอร์ต — ไม้นี้ไม่ควรเข้าด้วยทุนเท่านี้'
+        : 'ทางแก้: เพิ่มทุน ใช้บัญชีที่เทรดขนาดเล็กกว่านี้ได้ หรือข้ามไม้นี้ไป'}</span>
+    </div>` : ''}
 
     <div class="entry-guide">
       <h3>วิธีเข้าไม้ — ทำตามทีละขั้น</h3>
@@ -7282,7 +7383,7 @@ function renderPlan() {
         <table class="order-table"><tbody>
           <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">ห้ามข้ามเด็ดขาด</td></tr>
           <tr><td>Take Profit</td><td class="num">${s.tpMain.toFixed(2)}</td><td class="hint">${s.mainR} เท่าของความเสี่ยง</td></tr>
-          <tr><td>ขนาด (Lot)</td><td class="num">${lots.toFixed(3)}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์</td></tr>
+          <tr><td>ขนาด (Lot)</td><td class="num">${lots}</td><td class="hint">≈ ${(lots * 100).toFixed(1)} ออนซ์ · เสี่ยง $${s.riskActual.toFixed(2)}</td></tr>
         </tbody></table>
       </div></div>
 
@@ -8074,7 +8175,7 @@ function renderBacktest() {
     <b style="color:${s.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${s.expectancy > 0 ? 'เป็นบวก คือใช้ได้' : 'ติดลบ คือยังไม่ได้'}</b></p>`;
 
   const expl = s.expectancy > 0.05
-    ? `<p class="tiny" style="color:var(--up)">ค่าคาดหวัง +${s.expectancy.toFixed(3)}R ต่อไม้ หมายความว่าถ้าเสี่ยง ${(settings.account * settings.riskPct / 100).toFixed(0)} ต่อไม้ ระบบนี้ให้ผลเฉลี่ย ~${(settings.account * settings.riskPct / 100 * s.expectancy).toFixed(2)} ต่อไม้ในข้อมูลชุดนี้ — และเคยขาดทุนติดกันสูงสุด ${s.maxLossStreak} ไม้ ต้องมีทุนและใจพอทนช่วงนั้น</p>`
+    ? `<p class="tiny" style="color:var(--up)">ค่าคาดหวัง +${s.expectancy.toFixed(3)}R ต่อไม้ หมายความว่าถ้าเสี่ยง $${(settings.account * settings.riskPct / 100).toFixed(0)} ต่อไม้ ระบบนี้ให้ผลเฉลี่ย ~$${(settings.account * settings.riskPct / 100 * s.expectancy).toFixed(2)} ต่อไม้ในข้อมูลชุดนี้ — และเคยขาดทุนติดกันสูงสุด ${s.maxLossStreak} ไม้ ต้องมีทุนและใจพอทนช่วงนั้น</p>`
     : `<p class="tiny" style="color:var(--down)">ค่าคาดหวังติดลบในข้อมูลชุดนี้ — ยังไม่ควรเทรดตามเกณฑ์ปัจจุบัน ลองเพิ่มคะแนนขั้นต่ำ เปลี่ยนกรอบเวลา หรือดูตารางช่วงเวลาว่าควรเลี่ยงชั่วโมงไหน</p>`;
   $('btSummary').innerHTML += beNote + `<div style="grid-column:1/-1">${expl}</div>`;
 

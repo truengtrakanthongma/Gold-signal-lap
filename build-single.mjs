@@ -62,12 +62,24 @@ checkOrder();
 
 const bundle = `const __m = {};\n\n` + ORDER.map(build).join('\n\n');
 
+/*
+ * แทรกด้วยฟังก์ชัน ไม่ใช่สตริง
+ *
+ * String.replace มองสตริงแทนที่เป็นเทมเพลตพิเศษ: $$ กลายเป็น $ ตัวเดียว
+ * ส่วน $& $` $' ถูกแทนด้วยชิ้นส่วนของข้อความที่แมตช์
+ * โค้ดที่เขียนว่า `เสีย $${เงิน}` จึงถูกกลืน $ หายไปเงียบ ๆ เฉพาะในไฟล์ที่ build
+ * (หน้าเว็บแบบแยกไฟล์ไม่เป็น เพราะไม่ได้ผ่าน replace) หาเจอยากมาก
+ *
+ * ส่งเป็นฟังก์ชันแล้ว JavaScript จะไม่ตีความ $ ใด ๆ เลย ใส่ตรง ๆ ตามที่เขียน
+ */
+const put = (v) => () => v;
+
 let html = readFileSync('index.html', 'utf8');
 const css = readFileSync('styles.css', 'utf8');
 
 html = html
-  .replace('<link rel="stylesheet" href="styles.css">', `<style>\n${css}\n</style>`)
-  .replace('<script type="module" src="js/app.js"></script>', `<script>\n${bundle}\n</script>`)
+  .replace('<link rel="stylesheet" href="styles.css">', put(`<style>\n${css}\n</style>`))
+  .replace('<script type="module" src="js/app.js"></script>', put(`<script>\n${bundle}\n</script>`))
   // ฟอนต์จาก Google อาจโหลดไม่ได้ถ้าไม่มีเน็ต — ให้ fallback เป็นฟอนต์ในเครื่องแทน
   .replace('<title>', '<!-- ไฟล์รวมไฟล์เดียว สร้างด้วย build-single.mjs — แก้โค้ดที่ js/ แล้วสั่ง node build-single.mjs ใหม่ -->\n<title>');
 
@@ -113,9 +125,9 @@ const banner = `
 </div>`;
 
 const demoOnly = html
-  .replace('<body>', '<body>' + banner)
+  .replace('<body>', put('<body>' + banner))
   // บังคับโหมดจำลองก่อนแอปเริ่มทำงาน และปิดตัวเลือกที่ใช้ไม่ได้ในหน้านี้
-  .replace('<script>\nconst __m = {};', `<script>
+  .replace('<script>\nconst __m = {};', put(`<script>
 try {
   const k = 'goldtrader.settings.v1';
   const cur = JSON.parse(localStorage.getItem(k) || '{}');
@@ -131,10 +143,27 @@ addEventListener('DOMContentLoaded', () => {
 });
 </script>
 <script>
-const __m = {};`);
+const __m = {};`));
 
 writeFileSync('gold-signal-lab-demo.html', demoOnly);
 console.log(`สร้าง gold-signal-lab-demo.html สำเร็จ (เวอร์ชันสำหรับโฮสต์ บังคับโหมดจำลอง + ติดป้ายเตือน)`);
+
+/*
+ * ตรวจว่าโค้ดที่แทรกเข้าไปเหมือนต้นฉบับจริง ๆ
+ *
+ * เคยพลาดมาแล้ว: String.replace กลืน $$ ให้เหลือ $ ตัวเดียว ทำให้ป้ายราคาอย่าง
+ * "เสีย $40" กลายเป็น "เสีย 40" เฉพาะในไฟล์ที่ build ส่วนเวอร์ชันแยกไฟล์ปกติดี
+ * เทียบจำนวน $$ ตรง ๆ จะจับได้ทันทีถ้าใครเผลอเปลี่ยนกลับไปใช้สตริง
+ */
+{
+  const want = (bundle.match(/\$\$/g) || []).length;
+  const got = (html.match(/\$\$/g) || []).length;
+  if (got < want) {
+    console.error(`โค้ดถูกกลืนตอนแทรก: ต้นฉบับมี $$ อยู่ ${want} จุด แต่ในไฟล์ที่ build เหลือ ${got}`);
+    console.error('สาเหตุที่เจอมาก่อน: ส่งสตริงให้ String.replace แทนที่จะส่งฟังก์ชัน (ดู put())');
+    process.exit(1);
+  }
+}
 
 // ตรวจว่าไม่มีร่องรอย import/export หลงเหลือ ซึ่งจะทำให้ไฟล์พังเงียบ ๆ
 const inner = html.slice(html.indexOf('const __m = {};'));
