@@ -630,6 +630,10 @@ body.simple .narr p { font-size: var(--fs-sm); }
 .broker-box .tiny { margin: 7px 0; color: var(--text-3); line-height: 1.5; }
 .broker-box .risk-inputs { margin-top: 6px; }
 
+/* กฎหลังเข้าไม้ — สั้นและอ่านง่าย เพราะต้องอ่านตอนไม้กำลังวิ่งและใจกำลังเต้น */
+.manage-list { margin: 6px 0 0; padding-left: 18px; }
+.manage-list li { margin-bottom: 5px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.55; }
+
 /* การตัดสินใจเรื่องขนาดไม้ — ต้องเห็นทั้งตอนเพิ่มและตอนไม่เพิ่ม
    เพราะ "ทำไมไม่เพิ่ม" สำคัญพอ ๆ กับ "เพิ่มเท่าไร" */
 .boost-box {

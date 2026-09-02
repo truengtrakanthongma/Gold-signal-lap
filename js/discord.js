@@ -172,6 +172,12 @@ export function buildSignalMessage(o) {
         value: clip(sizing.why, 1000), inline: false });
     }
 
+    /* กฎหลังเข้าไม้ — ที่ที่คนเสียไม้จริง ไม่ใช่ตอนเลือกจังหวะเข้า */
+    if (setup.manage && setup.manage.length) {
+      fields.push({ name: 'หลังเข้าไม้แล้ว',
+        value: clip(setup.manage.map((m) => '• ' + m).join('\n'), 1000), inline: false });
+    }
+
     if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
       fields.push({ name: `ยังเข้าได้ถึง (ได้:เสีย ≥ ${setup.minRR})`,
         value: '`' + setup.entryLimit.toFixed(2) + '` — เลยราคานี้ไปแล้วอย่าไล่ราคา', inline: false });

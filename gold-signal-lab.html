@@ -646,6 +646,10 @@ body.simple .narr p { font-size: var(--fs-sm); }
 .broker-box .tiny { margin: 7px 0; color: var(--text-3); line-height: 1.5; }
 .broker-box .risk-inputs { margin-top: 6px; }
 
+/* กฎหลังเข้าไม้ — สั้นและอ่านง่าย เพราะต้องอ่านตอนไม้กำลังวิ่งและใจกำลังเต้น */
+.manage-list { margin: 6px 0 0; padding-left: 18px; }
+.manage-list li { margin-bottom: 5px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.55; }
+
 /* การตัดสินใจเรื่องขนาดไม้ — ต้องเห็นทั้งตอนเพิ่มและตอนไม่เพิ่ม
    เพราะ "ทำไมไม่เพิ่ม" สำคัญพอ ๆ กับ "เพิ่มเท่าไร" */
 .boost-box {
@@ -2518,8 +2522,31 @@ function buildSetup(ctx, i, scored, opts = {}) {
   const stillOk = side > 0 ? entryPrice <= entryLimit : entryPrice >= entryLimit;
   const rrNow = Math.abs(tpMain - entryPrice) / slDist;
 
+  /*
+   * สิ่งที่ต้องทำ "หลังเข้าไม้แล้ว" — เดิมแผนเงียบเรื่องนี้ทั้งหมด
+   *
+   * ผู้ใช้จริงเสียไม้ไปเพราะตรงนี้: เข้าขายถูกทาง SL เดิมไม่เคยถูกแตะเลย
+   * แต่ขยับ SL มาไว้ห่างจากราคาเข้าแค่ 0.50 (0.04 เท่าของระยะเสี่ยง)
+   * ราคาย่อกลับตามปกติก็ปิดไม้ทิ้งทันที ทั้งที่แผนเดิมยังไม่ผิดสักนิด
+   *
+   * วัดจากไม้ย้อนหลัง 2,772 ไม้: การขยับ SL มาที่ทุนหลังผ่าน 1R (ซึ่งมีวินัย
+   * กว่าที่เขาทำมาก) ยังทำให้กำไรเฉลี่ยลดจาก +0.033R เหลือ -0.003R ต่อไม้
+   * และเปลี่ยนไม้ที่กำลังไปได้ดี 901 ไม้ ให้กลายเป็นเสมอทุน
+   *
+   * แผนจึงต้องพูดเรื่องนี้ออกมาตรง ๆ ไม่ใช่ปล่อยให้เดาเอง
+   */
+  const manage = [
+    'ตั้ง SL กับ TP ให้ครบตั้งแต่ตอนส่งคำสั่ง แล้วปล่อยให้โบรกเกอร์ปิดให้เอง',
+    'อย่าขยับ SL เข้าใกล้ราคาเข้าระหว่างที่ไม้ยังวิ่ง — วัดจากไม้ย้อนหลังแล้ว '
+      + 'การย้ายมาที่ทุนทำให้กำไรเฉลี่ยต่อไม้ลดลง เพราะราคาย่อปกติก็เตะออกก่อนถึงเป้า',
+    `ถ้าจะขยับจริง ๆ ให้รอจนราคาไปถึง ${tp1.toFixed(2)} ก่อน (กำไรเท่ากับระยะที่เสี่ยงพอดี) `
+      + 'ไม่ใช่ขยับตั้งแต่ราคาเพิ่งขยับไปเล็กน้อย',
+    `ไม้นี้ผิดทางจริงเมื่อราคา${side > 0 ? 'หลุดลงต่ำกว่า' : 'ทะลุขึ้นเหนือ'} ${sl.toFixed(2)} เท่านั้น `
+      + 'ก่อนถึงจุดนั้นคือความแกว่งปกติ ไม่ใช่สัญญาณให้รีบหนี',
+  ];
+
   return {
-    side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR,
+    side, entry: entryPrice, sl, tp1, tp2, tp3, tpMain, mainR, manage,
     entryLimit, entryIdeal: ideal ? ideal.price : null, entryIdealWhy: ideal ? ideal.why : null,
     entryOk: stillOk, rrNow, minRR,
     slDist, slAtr: slDist / atrVal, atr: atrVal, slManual,
@@ -4221,6 +4248,12 @@ function buildSignalMessage(o) {
     if (sizing && sizing.boosted) {
       fields.push({ name: `เพิ่มขนาดไม้ ${sizing.mult.toFixed(2)}× (สัญญาณชัด)`,
         value: clip(sizing.why, 1000), inline: false });
+    }
+
+    /* กฎหลังเข้าไม้ — ที่ที่คนเสียไม้จริง ไม่ใช่ตอนเลือกจังหวะเข้า */
+    if (setup.manage && setup.manage.length) {
+      fields.push({ name: 'หลังเข้าไม้แล้ว',
+        value: clip(setup.manage.map((m) => '• ' + m).join('\n'), 1000), inline: false });
     }
 
     if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
@@ -7698,6 +7731,11 @@ function renderPlan() {
       </div></div>
 
       <div class="step"><span class="step-n">3</span><div>
+        <b>หลังเข้าไม้แล้ว — ห้ามทำอะไรอีก</b>
+        <ul class="manage-list">${s.manage.map((m) => `<li>${m}</li>`).join('')}</ul>
+      </div></div>
+
+      <div class="step"><span class="step-n">4</span><div>
         <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
         <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
         ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>

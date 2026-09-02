@@ -927,6 +927,11 @@ function renderPlan() {
       </div></div>
 
       <div class="step"><span class="step-n">3</span><div>
+        <b>หลังเข้าไม้แล้ว — ห้ามทำอะไรอีก</b>
+        <ul class="manage-list">${s.manage.map((m) => `<li>${m}</li>`).join('')}</ul>
+      </div></div>
+
+      <div class="step"><span class="step-n">4</span><div>
         <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
         <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
         ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>
