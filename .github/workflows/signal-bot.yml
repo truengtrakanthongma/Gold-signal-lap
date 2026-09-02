@@ -93,10 +93,6 @@ jobs:
       - name: เฝ้าสัญญาณ
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # LINE — ใส่หรือไม่ใส่ก็ได้ ถ้าใส่จะส่งทั้งสองช่อง
-          # ตั้งช่องใดช่องหนึ่งก็พอ แต่ถ้าตั้งมาแล้วผิด บอทจะหยุดและบอก
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_TO: ${{ secrets.LINE_TO }}
           BOT_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           BOT_TEST_PING: ${{ inputs.test_ping && '1' || '0' }}
           # ปรับได้จาก Settings → Secrets and variables → Actions → Variables

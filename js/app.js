@@ -5,7 +5,7 @@
 import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal } from './signals.js';
 import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
-import { learnAndValidate, confidenceScale } from './learn.js';
+import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
 import { SOURCES, testAllSources } from './sources.js';
 import { fetchNews, economicCalendar, GOLD_DRIVERS } from './news.js';
@@ -29,7 +29,6 @@ const state = {
   ctx: null,
   scored: null,
   combined: null,
-  boost: null,       // ผลการตัดสินว่าควรเพิ่มขนาดไม้ไหม (ดู confidenceScale)
   hold: null,        // สัญญาณที่กำลังถืออยู่ (ดู holdSignal) — กันแผนกะพริบหายต่อหน้า
   setup: null,
   action: 'wait',
@@ -57,7 +56,6 @@ const settings = {
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
   // ค่าของโบรกเกอร์ — ระบบเดาแทนผู้ใช้ไม่ได้ ผิดเมื่อไหร่จำนวนไม้ผิดทั้งหมด
   contractSize: 100, minLot: 0.01, lotStep: 0.01, slManual: null,
-  boostOnStrong: true, boostMax: 2,   // เพิ่มไม้เมื่อสัญญาณชัด — เฉพาะเมื่อข้อมูลรองรับ
   smartSession: true, historyBars: 3000,
   learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
   adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
@@ -164,8 +162,6 @@ function buildStaticUI() {
   $('minLotInput').value = settings.minLot;
   $('lotStepInput').value = settings.lotStep;
   $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
-  $('boostToggle').checked = settings.boostOnStrong !== false;
-  $('boostMaxInput').value = settings.boostMax || 2;
   $('thresholdInput').value = settings.threshold;
   $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
@@ -234,8 +230,7 @@ function bindEvents() {
     chart.render();
   });
 
-  ['accountInput', 'riskInput', 'contractInput', 'minLotInput', 'lotStepInput', 'slManualInput',
-   'boostToggle', 'boostMaxInput']
+  ['accountInput', 'riskInput', 'contractInput', 'minLotInput', 'lotStepInput', 'slManualInput']
     .forEach((id) => $(id).addEventListener('input', () => {
       settings.account = +$('accountInput').value || 1000;
       settings.riskPct = +$('riskInput').value || 1;
@@ -245,8 +240,6 @@ function bindEvents() {
       /* ว่าง = ให้ระบบวางให้ ไม่ใช่ศูนย์ ซึ่งจะกลายเป็นจุดตัดขาดทุนที่ราคา 0 */
       const raw = $('slManualInput').value.trim();
       settings.slManual = raw === '' ? null : (Number.isFinite(+raw) ? +raw : null);
-      settings.boostOnStrong = $('boostToggle').checked;
-      settings.boostMax = +$('boostMaxInput').value || 2;
       saveSettings();
       if (state.scored) { rebuildSetup(); renderPlan(); }
     }));
@@ -809,17 +802,8 @@ function rebuildSetup() {
   const score = state.combined.score;
   const side = state.hold ? state.hold.side : Math.sign(score);
 
-  /*
-   * เพิ่มขนาดไม้เมื่อสัญญาณชัด — แต่ต้องมีหลักฐานจากผลเทรดจริงในอดีตเท่านั้น
-   * ถ้ายังไม่เคยกดทดสอบย้อนหลัง หรือข้อมูลไม่รองรับ ตัวคูณจะเป็น 1 พร้อมเหตุผล
-   */
-  state.boost = settings.boostOnStrong === false
-    ? { mult: 1, boosted: false, why: 'ปิดการเพิ่มไม้อัตโนมัติไว้ในการตั้งค่า' }
-    : confidenceScale(state.bt, score, { threshold: settings.threshold, maxMult: settings.boostMax || 2 });
-
   state.setup = state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold) && side
     ? buildSetup(state.ctx, at.index, { ...state.scored, side }, {
-        riskMult: state.boost.mult,
         account: settings.account, riskPct: settings.riskPct, entryPrice: at.price, side,
         targetR: activeTargetR(),
         slAtrMult: settings.slAtr,
@@ -865,12 +849,6 @@ function renderPlan() {
   const ageMin = held ? Math.max(0, Math.round((Date.now() - held.startedAt) / 60000)) : null;
   box.innerHTML = `
     ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
-    ${state.boost ? `<div class="boost-box${state.boost.boosted ? ' on' : ''}">
-      ${state.boost.boosted
-        ? `<b>เพิ่มขนาดไม้ให้ ${state.boost.mult.toFixed(2)} เท่า</b> — สัญญาณนี้เข้าเกณฑ์ "ชัด" และมีหลักฐานรองรับ`
-        : '<b>ยังไม่เพิ่มขนาดไม้</b>'}
-      <span class="opt-why">${state.boost.why}</span>
-    </div>` : ''}
     ${held ? `<div class="sig-age${held.held ? ' fading' : ''}">
       สัญญาณนี้เกิดมา <b>${ageMin === 0 ? 'ไม่ถึง 1' : ageMin}</b> นาที · คะแนนแรงสุดที่เคยไปถึง <b>${held.peak.toFixed(1)}</b>
       ${held.held

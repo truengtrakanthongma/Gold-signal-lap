@@ -8,14 +8,13 @@
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest, optimizeExits } from '../js/backtest.js';
-import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset, confidenceScale } from '../js/learn.js';
+import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
 import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
 import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
 import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict, fetchHistoricalNews, DEFAULT_NEWS_CFG } from '../js/newsfactor.js';
 import { isValidWebhook, webhookProblem, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
-import { lineProblem, toPlainText, sendLine, clipText } from '../js/line.js';
 import { NEWS_FEEDS, FEED_ORDER, surpriseOf, dedupe, similarity, sourceWeight, tokensOf } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
@@ -1790,74 +1789,6 @@ section('26) จุดตัดขาดทุนของผู้ใช้ แ
   ok('บัญชีสัญญาเล็กไม่ต้องขึ้นคำเตือนทุนไม่พอ', !tinyCent.notes.some((n) => /ทุนไม่พอ/.test(n)));
 }
 
-// ── ส่งเข้า LINE ────────────────────────────────────────────────
-section('30) LINE — ช่องทางที่คนไทยเปิดแจ้งเตือนไว้จริง');
-{
-  const TOKEN = 'x'.repeat(80);
-  const UID = 'U' + '0123456789abcdef'.repeat(2);   // U + เลขฐานสิบหก 32 ตัว
-
-  ok('ตั้งค่าครบและถูกรูปแบบ → ไม่มีปัญหา', lineProblem(TOKEN, UID) === null);
-  for (const [t, u, why, kw] of [
-    ['', UID, 'ไม่ใส่โทเค็น', /LINE_TOKEN/],
-    [TOKEN, '', 'ไม่ใส่ผู้รับ', /LINE_TO/],
-    ['สั้นไป', UID, 'โทเค็นสั้นผิดปกติ', /สั้นผิดปกติ/],
-    [TOKEN, '@myshop', 'เอาไอดีค้นหาเพื่อนมาใส่', /ค้นหาเพื่อน/],
-    [TOKEN, 'U123', 'ไอดีสั้นเกิน', /รูปแบบ/],
-    [TOKEN, 'X' + '0'.repeat(32), 'ขึ้นต้นผิดตัว', /รูปแบบ/],
-  ]) {
-    const r = lineProblem(t, u);
-    ok(`${why} → บอกเหตุผลตรงจุด`, typeof r === 'string' && kw.test(r), r || 'ไม่บอกอะไรเลย');
-  }
-
-  /* LINE ไม่มี embed แบบ Discord ต้องแปลงเป็นข้อความล้วนที่อ่านออกบนมือถือ */
-  {
-    const msg = buildSignalMessage({
-      action: 'sell', score: -57.6, price: 4318.01, tf: '15m', instrument: 'PAXG/USD',
-      setup: { entry: 4318.01, sl: 4332, tpMain: 4290, mainR: 2, lots: 0.01, rrNow: 2,
-        riskActual: 14, rewardActual: 28, riskActualPct: 1.4, entryLimit: 4310, minRR: 1.2,
-        manage: ['อย่าขยับ SL', 'รอถึง 4304 ก่อน'] },
-      prob: { p: 41, n: 86 }, reasons: ['เส้นค่าเฉลี่ยชี้ลง'],
-    });
-    const t = toPlainText(msg);
-    ok('แปลงเป็นข้อความล้วนได้', typeof t === 'string' && t.length > 0);
-    ok('ไม่มีสัญลักษณ์จัดรูปแบบของ Discord หลงเหลือ', !t.includes('**') && !t.includes('`'), t.slice(0, 60));
-    for (const must of ['4318.01', '4332', '4290', 'อย่าขยับ SL']) {
-      ok(`ข้อความมีข้อมูลสำคัญครบ: ${must}`, t.includes(must));
-    }
-    ok('มีคำเตือนเพื่อการศึกษาติดไปด้วย', /เพื่อการศึกษา/.test(t));
-    ok('ไม่ยาวเกินขีดจำกัดของ LINE', t.length <= 5000, `ยาว ${t.length}`);
-  }
-
-  ok('ข้อความยาวเกินถูกตัดพร้อมบอกว่าถูกตัด',
-    clipText('ก'.repeat(6000)).length === 5000 && clipText('ก'.repeat(6000)).endsWith('...'));
-
-  /* ต้องไม่ยิงออกไปถ้าตั้งค่าไม่ถูก และต้องอ่านรหัสตอบกลับของ LINE เป็น */
-  {
-    let fired = false;
-    const r = await sendLine('', UID, 'x', { fetchImpl: async () => { fired = true; return { ok: true }; } });
-    ok('ตั้งค่าไม่ครบ → ไม่ยิงออกไปเลย', !r.ok && !fired);
-  }
-  for (const [code, kw] of [[401, /โทเค็น/], [403, /โทเค็น/], [429, /โควตา|ถี่/], [400, /ไอดีผู้รับ|เพื่อน/]]) {
-    const r = await sendLine(TOKEN, UID, 'x', { fetchImpl: async () => ({ ok: false, status: code }) });
-    ok(`LINE ตอบ ${code} → อธิบายเป็นภาษาคน`, !r.ok && kw.test(r.reason), r.reason);
-  }
-  {
-    const r = await sendLine(TOKEN, UID, 'x', { fetchImpl: async () => ({ ok: true, status: 200 }) });
-    ok('ส่งสำเร็จ → รายงานว่าสำเร็จ', r.ok === true);
-  }
-  {
-    /* ต้องส่งด้วย Bearer token และตัว body ต้องเป็นรูปแบบที่ LINE รับ */
-    let seen = null;
-    await sendLine(TOKEN, UID, 'ทดสอบ', { fetchImpl: async (u, init) => { seen = { u, init }; return { ok: true, status: 200 }; } });
-    ok('ยิงไปที่ปลายทาง push ของ LINE', /api\.line\.me\/v2\/bot\/message\/push/.test(seen.u));
-    ok('แนบโทเค็นแบบ Bearer', seen.init.headers.Authorization === `Bearer ${TOKEN}`);
-    const body = JSON.parse(seen.init.body);
-    ok('body มีผู้รับและข้อความตามรูปแบบของ LINE',
-      body.to === UID && Array.isArray(body.messages) && body.messages[0].type === 'text'
-      && body.messages[0].text === 'ทดสอบ');
-  }
-}
-
 // ── กฎหลังเข้าไม้ — ที่ที่ผู้ใช้เสียไม้จริง ────────────────────────
 section('29) แผนต้องบอกด้วยว่าหลังเข้าไม้แล้วห้ามทำอะไร');
 {
@@ -1924,7 +1855,6 @@ section('28) ค่าที่ใส่ผิดต้องไม่ทำใ�
   sane('ขนาดสัญญาติดลบ', { contractSize: -100 });
   sane('ขั้นล็อตเป็น 0', { lotStep: 0 });
   sane('ไม้เล็กสุดติดลบ', { minLot: -1 });
-  sane('ตัวคูณเป็น NaN', { riskMult: NaN });
   sane('SL ที่ใส่เองเป็น NaN', { slPrice: NaN });
   sane('SL เท่ากับราคาเข้าพอดี', { slPrice: price });
 
@@ -1947,77 +1877,6 @@ section('28) ค่าที่ใส่ผิดต้องไม่ทำใ�
   ok('holdSignal: เกณฑ์ติดลบ → ไม่มีสัญญาณ', holdSignal(null, 5, -40) === null);
   ok('holdSignal: คะแนน Infinity → ไม่มีสัญญาณ', holdSignal(null, Infinity, 40) === null);
   ok('holdSignal: ค่าปกติยังทำงานเหมือนเดิม', holdSignal(null, 45, 40) !== null);
-}
-
-// ── เพิ่มไม้ตอนสัญญาณชัด ต้องมีหลักฐาน ไม่ใช่ความรู้สึก ────────────
-section('27) เพิ่มขนาดไม้เมื่อสัญญาณชัด — ต้องพิสูจน์ได้ก่อน');
-{
-  const TH = 40;
-  const LINE = TH * 1.5;   // 60
-  /* สร้างชุดไม้ปลอมขึ้นมาคุมตัวแปรได้ทั้งหมด จะได้รู้ว่าด่านทำงานตามที่ตั้งใจจริง */
-  const mk = (n, absScore, rs) => Array.from({ length: n }, (_, i) => ({ absScore, rMultiple: rs[i % rs.length] }));
-
-  /* 1. ไม่มีหลักฐาน = ไม่เพิ่ม */
-  ok('ไม่มีผลทดสอบย้อนหลัง → ไม่เพิ่มไม้',
-    confidenceScale(null, 90, { threshold: TH }).mult === 1);
-  ok('ไม่รู้เกณฑ์ → ไม่เพิ่มไม้',
-    confidenceScale({ trades: [] }, 90, {}).mult === 1);
-
-  /* 2. คะแนนยังไม่ถึงระดับที่นับว่าชัด = ไม่เพิ่ม แม้ข้อมูลจะสวย */
-  {
-    const bt = { trades: [...mk(60, 70, [2, 2, 2, -1]), ...mk(60, 45, [-1, -1, 1, -1])] };
-    const r = confidenceScale(bt, 50, { threshold: TH });
-    ok('คะแนนต่ำกว่าเส้น → ไม่เพิ่ม', r.mult === 1 && /ยังไม่ถึงระดับ/.test(r.why), r.why);
-  }
-
-  /* 3. ตัวอย่างน้อยเกินไป = ไม่เพิ่ม แม้ผลจะดูดีมาก */
-  {
-    const bt = { trades: [...mk(5, 70, [5, 5, 5]), ...mk(60, 45, [-1, -1, 1, -1])] };
-    const r = confidenceScale(bt, 70, { threshold: TH });
-    ok('ไม้คะแนนสูงมีน้อยเกินไป → ไม่เพิ่ม แม้ตัวเลขจะสวย', r.mult === 1 && /ยังสรุปไม่ได้/.test(r.why), r.why);
-  }
-
-  /* 4. คะแนนสูงไม่ได้ดีกว่าจริง = ไม่เพิ่ม — นี่คือด่านที่สำคัญที่สุด */
-  {
-    const same = [1.5, -1, -1, 0.8, -1, 2, -1, -1];
-    const bt = { trades: [...mk(80, 70, same), ...mk(80, 45, same)] };
-    const r = confidenceScale(bt, 70, { threshold: TH });
-    ok('คะแนนสูงให้ผลพอ ๆ กัน → ไม่เพิ่ม', r.mult === 1 && /ยังไม่พิสูจน์/.test(r.why), r.why);
-  }
-  {
-    // แย่กว่าด้วยซ้ำ ยิ่งต้องไม่เพิ่ม
-    const bt = { trades: [...mk(80, 70, [-1, -1, -1, 1]), ...mk(80, 45, [2, 2, -1, 1])] };
-    const r = confidenceScale(bt, 70, { threshold: TH });
-    ok('คะแนนสูงให้ผลแย่กว่า → ไม่เพิ่มเด็ดขาด', r.mult === 1, r.why);
-  }
-
-  /* 5. ดีกว่าจริงและชัดเจน = เพิ่มได้ */
-  {
-    const bt = { trades: [...mk(120, 70, [3, 3, 2.5, -1, 3, 2]), ...mk(120, 45, [-1, -1, -1, 1, -1, -1])] };
-    const r = confidenceScale(bt, 70, { threshold: TH });
-    ok('คะแนนสูงดีกว่าชัดเจน → เพิ่มไม้', r.boosted === true && r.mult > 1, r.why);
-    ok('เหตุผลมีตัวเลขจริงให้ตรวจสอบ', /R ต่อไม้/.test(r.why) && /มั่นใจ/.test(r.why), r.why);
-
-    const stronger = confidenceScale(bt, 200, { threshold: TH });
-    ok('คะแนนยิ่งสูง ยิ่งเพิ่มมาก', stronger.mult > r.mult);
-    ok('แต่ไม่เกินเพดานที่ตั้งไว้', stronger.mult <= 2 + 1e-9, `ได้ ${stronger.mult}`);
-  }
-
-  /* 6. เพดานความเสี่ยงต่อไม้ต้องชนะตัวคูณเสมอ */
-  {
-    const c2 = makeCandles(400, 33);
-    const ctx2 = buildContext(c2, DEFAULT_CFG);
-    const j = c2.length - 1;
-    const sc2 = scoreAt(ctx2, j);
-    const opts = { account: 10000, riskPct: 2, entryPrice: c2[j].c, side: 1, contractSize: 100 };
-    const plain = buildSetup(ctx2, j, { ...sc2, side: 1 }, opts);
-    const boost = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...opts, riskMult: 5 });
-    ok('ตัวคูณ 5 เท่าไม่ทำให้ทะลุเพดาน 3% ต่อไม้', boost.riskPctUsed <= 3 + 1e-9, `ได้ ${boost.riskPctUsed}%`);
-    ok('ระบบรู้ตัวว่าชนเพดาน', boost.riskCapped === true);
-    ok('ยังเพิ่มขึ้นจริงเมื่อเทียบกับปกติ', boost.riskActual > plain.riskActual);
-    ok('บอกผู้ใช้ว่าเพิ่มไม้ให้แล้วเท่าไร', boost.notes.some((n) => /เพิ่มขนาดไม้/.test(n)));
-    ok('ไม่ใส่ตัวคูณ → ไม่มีข้อความเรื่องเพิ่มไม้', !plain.notes.some((n) => /เพิ่มขนาดไม้/.test(n)));
-  }
 }
 
 // ── สัญญาณกะพริบจนกดตามไม่ทัน ────────────────────────────────

@@ -17,11 +17,9 @@
 
 import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } from '../js/signals.js';
 import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
-import { confidenceScale } from '../js/learn.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
 import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
-import { sendLine, lineProblem } from '../js/line.js';
 import { instrumentOf } from '../js/instrument.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
@@ -35,12 +33,8 @@ const CFG = {
   bars: +(process.env.BOT_BARS || 720),
   statePath: process.env.BOT_STATE || 'bot/.state.json',
   webhook: process.env.DISCORD_WEBHOOK_URL || '',
-  lineToken: process.env.LINE_TOKEN || '',
-  lineTo: process.env.LINE_TO || '',
   dryRun: process.env.BOT_DRY_RUN === '1',
   testPing: process.env.BOT_TEST_PING === '1',
-  /* เพิ่มขนาดไม้เมื่อสัญญาณชัด — ตั้งเป็น 1 เพื่อปิด */
-  boostMax: +(process.env.BOT_BOOST_MAX || 2),
 };
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -110,15 +104,10 @@ function statusBlocks(ctx, scored, strong, noSetup) {
 /** ข้อมูลประกอบที่ทั้งสัญญาณจริงและรายงานสถานะใช้ร่วมกัน */
 async function gatherContext(ctx, scored, key, label) {
   // สถิติย้อนหลังของกรอบเวลานี้ ใช้บอกอัตราชนะที่เคยเกิดจริง
-  // และใช้ตัดสินด้วยว่าไม้คะแนนสูงเคยทำเงินได้ดีกว่าจริงหรือเปล่า
   let prob = null;
-  let boost = { mult: 1, boosted: false, why: 'คำนวณสถิติย้อนหลังไม่ได้ จึงไม่เพิ่มขนาดไม้' };
   try {
     const bt = runBacktest(ctx, { threshold: CFG.threshold, exitStyle: 'full' });
     prob = probabilityFor(scored.score, bt);
-    boost = CFG.boostMax > 1
-      ? confidenceScale(bt, scored.score, { threshold: CFG.threshold, maxMult: CFG.boostMax })
-      : { mult: 1, boosted: false, why: 'ปิดการเพิ่มขนาดไม้ไว้ (BOT_BOOST_MAX = 1)' };
   } catch (e) { log('คำนวณสถิติย้อนหลังไม่ได้:', e.message); }
 
   // บรรยากาศข่าว (ถ้าดึงได้) — ไม่ใช่เงื่อนไขบังคับ แค่ใส่เป็นบริบท
@@ -128,21 +117,20 @@ async function gatherContext(ctx, scored, key, label) {
     if (news.ok && news.climate.n) newsLine = `${news.climate.label} (${news.climate.n} ข่าว จาก ${news.label})`;
   } catch (e) { /* ข่าวดึงไม่ได้ไม่ควรทำให้สัญญาณราคาหายไป */ }
 
-  return { prob, boost, newsLine, inst: instrumentOf(key, ''), label };
+  return { prob, newsLine, inst: instrumentOf(key, ''), label };
 }
 
 /** ข้อความสัญญาณจริง — คืน null เมื่อวางแผนเทรดไม่ได้ */
 function signalMessage(ctx, i, scored, side, last, extra) {
   const setup = buildSetup(ctx, i, { ...scored, side }, {
     account: CFG.account, riskPct: CFG.riskPct, entryPrice: last.c, side,
-    riskMult: extra.boost ? extra.boost.mult : 1,
   });
   if (!setup) return null;
   return buildSignalMessage({
     action: side > 0 ? 'buy' : 'sell',
     score: scored.score, price: last.c, tf: CFG.interval,
     instrument: `${extra.inst.name} · ${extra.label}`,
-    setup, prob: extra.prob, sizing: extra.boost,
+    setup, prob: extra.prob,
     reasons: topFactors(scored, side, extra.newsLine),
   });
 }
@@ -162,32 +150,22 @@ function checkConfig() {
   pos('ทุน', CFG.account, 'BOT_ACCOUNT');
   pos('ความเสี่ยงต่อไม้', CFG.riskPct, 'BOT_RISK_PCT');
   pos('จำนวนแท่งที่ดึง', CFG.bars, 'BOT_BARS');
-  if (!Number.isFinite(CFG.boostMax) || CFG.boostMax < 1) {
-    bad.push(`BOT_BOOST_MAX = ${JSON.stringify(process.env.BOT_BOOST_MAX)} → ต้องเป็นตัวเลขตั้งแต่ 1 ขึ้นไป (1 = ปิดการเพิ่มไม้)`);
-  }
   const unknown = CFG.sources.filter((k) => !SOURCES[k]);
   if (unknown.length === CFG.sources.length) bad.push(`BOT_SOURCES = ไม่รู้จักสักแหล่ง (${CFG.sources.join(', ')})`);
   return bad;
 }
 
 /*
- * ส่งเข้าทุกช่องทางที่ตั้งค่าไว้
+ * ส่งข้อความออก แล้วรายงานผลตามจริง
  *
- * ทำไมต้องมีหลายช่อง: ผู้ใช้รายงานว่า Discord ตอบรับแล้วแต่เขาไม่เห็นข้อความ
- * ช่องทางที่ส่งถึงแต่คนไม่เห็น มีค่าเท่ากับไม่มี การมีสองช่องจึงไม่ใช่ของฟุ่มเฟือย
- *
- * ล้มช่องหนึ่งไม่ทำให้อีกช่องไม่ได้ส่ง แต่ต้องรายงานทุกช่องตามจริง
- * และถือว่าสำเร็จเมื่อ "ถึงอย่างน้อยหนึ่งช่อง" ไม่ใช่ต้องครบทุกช่อง
+ * แยกเป็นฟังก์ชันเดียวเพราะมีที่เรียกหลายแห่ง (สัญญาณ รายงานสถานะ แจ้งว่าดึงราคาไม่ได้)
+ * และทุกแห่งต้องบันทึกสถานะก็ต่อเมื่อส่งถึงจริงเท่านั้น
  */
 async function deliver(msg, what) {
   const results = [];
   if (CFG.webhook) {
     const r = await sendDiscord(CFG.webhook, msg);
     results.push({ ch: 'Discord', ...r });
-  }
-  if (CFG.lineToken || CFG.lineTo) {
-    const r = await sendLine(CFG.lineToken, CFG.lineTo, msg);
-    results.push({ ch: 'LINE', ...r });
   }
   for (const r of results) {
     if (r.ok) log(`${what} → ${r.ch} สำเร็จ (${r.ms} มิลลิวินาที)`);
@@ -214,10 +192,9 @@ async function main() {
   if (!CFG.dryRun) {
     const chans = [];
     if (CFG.webhook) chans.push(['Discord', webhookProblem(CFG.webhook), 'DISCORD_WEBHOOK_URL']);
-    if (CFG.lineToken || CFG.lineTo) chans.push(['LINE', lineProblem(CFG.lineToken, CFG.lineTo), 'LINE_TOKEN / LINE_TO']);
 
     if (!chans.length) {
-      log('ยังไม่ได้ตั้งช่องทางแจ้งเตือนสักช่อง — ใส่ DISCORD_WEBHOOK_URL หรือ LINE_TOKEN + LINE_TO');
+      log('ยังไม่ได้ตั้ง DISCORD_WEBHOOK_URL จึงไม่มีที่ให้ส่งสัญญาณ');
       log('แก้ที่ Settings → Secrets and variables → Actions → Secrets');
       process.exit(1);
     }

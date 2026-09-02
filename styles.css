@@ -634,16 +634,6 @@ body.simple .narr p { font-size: var(--fs-sm); }
 .manage-list { margin: 6px 0 0; padding-left: 18px; }
 .manage-list li { margin-bottom: 5px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.55; }
 
-/* การตัดสินใจเรื่องขนาดไม้ — ต้องเห็นทั้งตอนเพิ่มและตอนไม่เพิ่ม
-   เพราะ "ทำไมไม่เพิ่ม" สำคัญพอ ๆ กับ "เพิ่มเท่าไร" */
-.boost-box {
-  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
-  margin-bottom: 8px; font-size: var(--fs-sm); background: var(--panel-2);
-}
-.boost-box.on { background: rgba(38,169,106,.1); border-color: rgba(38,169,106,.4); }
-.boost-box.on b { color: var(--up); }
-.boost-box .opt-why { display: block; margin-top: 4px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
-
 /* อายุของสัญญาณ — ตอบคำถามแรกของคนที่เพิ่งเห็นแจ้งเตือน: ยังเข้าทันไหม */
 .sig-age {
   background: rgba(38,169,106,.09); border: 1px solid rgba(38,169,106,.3);
