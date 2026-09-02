@@ -15,6 +15,7 @@ import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources
 import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
 import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict, fetchHistoricalNews, DEFAULT_NEWS_CFG } from '../js/newsfactor.js';
 import { isValidWebhook, webhookProblem, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
+import { lineProblem, toPlainText, sendLine, clipText } from '../js/line.js';
 import { NEWS_FEEDS, FEED_ORDER, surpriseOf, dedupe, similarity, sourceWeight, tokensOf } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
@@ -1787,6 +1788,74 @@ section('26) จุดตัดขาดทุนของผู้ใช้ แ
   ok('ทุน 50 บัญชีสัญญาเล็ก → เสี่ยงได้ตามที่ตั้งไว้จริง', !tinyCent.sizeForced,
     `เสี่ยง ${tinyCent.riskActual.toFixed(2)} จากที่ตั้งไว้ 0.50`);
   ok('บัญชีสัญญาเล็กไม่ต้องขึ้นคำเตือนทุนไม่พอ', !tinyCent.notes.some((n) => /ทุนไม่พอ/.test(n)));
+}
+
+// ── ส่งเข้า LINE ────────────────────────────────────────────────
+section('30) LINE — ช่องทางที่คนไทยเปิดแจ้งเตือนไว้จริง');
+{
+  const TOKEN = 'x'.repeat(80);
+  const UID = 'U' + '0123456789abcdef'.repeat(2);   // U + เลขฐานสิบหก 32 ตัว
+
+  ok('ตั้งค่าครบและถูกรูปแบบ → ไม่มีปัญหา', lineProblem(TOKEN, UID) === null);
+  for (const [t, u, why, kw] of [
+    ['', UID, 'ไม่ใส่โทเค็น', /LINE_TOKEN/],
+    [TOKEN, '', 'ไม่ใส่ผู้รับ', /LINE_TO/],
+    ['สั้นไป', UID, 'โทเค็นสั้นผิดปกติ', /สั้นผิดปกติ/],
+    [TOKEN, '@myshop', 'เอาไอดีค้นหาเพื่อนมาใส่', /ค้นหาเพื่อน/],
+    [TOKEN, 'U123', 'ไอดีสั้นเกิน', /รูปแบบ/],
+    [TOKEN, 'X' + '0'.repeat(32), 'ขึ้นต้นผิดตัว', /รูปแบบ/],
+  ]) {
+    const r = lineProblem(t, u);
+    ok(`${why} → บอกเหตุผลตรงจุด`, typeof r === 'string' && kw.test(r), r || 'ไม่บอกอะไรเลย');
+  }
+
+  /* LINE ไม่มี embed แบบ Discord ต้องแปลงเป็นข้อความล้วนที่อ่านออกบนมือถือ */
+  {
+    const msg = buildSignalMessage({
+      action: 'sell', score: -57.6, price: 4318.01, tf: '15m', instrument: 'PAXG/USD',
+      setup: { entry: 4318.01, sl: 4332, tpMain: 4290, mainR: 2, lots: 0.01, rrNow: 2,
+        riskActual: 14, rewardActual: 28, riskActualPct: 1.4, entryLimit: 4310, minRR: 1.2,
+        manage: ['อย่าขยับ SL', 'รอถึง 4304 ก่อน'] },
+      prob: { p: 41, n: 86 }, reasons: ['เส้นค่าเฉลี่ยชี้ลง'],
+    });
+    const t = toPlainText(msg);
+    ok('แปลงเป็นข้อความล้วนได้', typeof t === 'string' && t.length > 0);
+    ok('ไม่มีสัญลักษณ์จัดรูปแบบของ Discord หลงเหลือ', !t.includes('**') && !t.includes('`'), t.slice(0, 60));
+    for (const must of ['4318.01', '4332', '4290', 'อย่าขยับ SL']) {
+      ok(`ข้อความมีข้อมูลสำคัญครบ: ${must}`, t.includes(must));
+    }
+    ok('มีคำเตือนเพื่อการศึกษาติดไปด้วย', /เพื่อการศึกษา/.test(t));
+    ok('ไม่ยาวเกินขีดจำกัดของ LINE', t.length <= 5000, `ยาว ${t.length}`);
+  }
+
+  ok('ข้อความยาวเกินถูกตัดพร้อมบอกว่าถูกตัด',
+    clipText('ก'.repeat(6000)).length === 5000 && clipText('ก'.repeat(6000)).endsWith('...'));
+
+  /* ต้องไม่ยิงออกไปถ้าตั้งค่าไม่ถูก และต้องอ่านรหัสตอบกลับของ LINE เป็น */
+  {
+    let fired = false;
+    const r = await sendLine('', UID, 'x', { fetchImpl: async () => { fired = true; return { ok: true }; } });
+    ok('ตั้งค่าไม่ครบ → ไม่ยิงออกไปเลย', !r.ok && !fired);
+  }
+  for (const [code, kw] of [[401, /โทเค็น/], [403, /โทเค็น/], [429, /โควตา|ถี่/], [400, /ไอดีผู้รับ|เพื่อน/]]) {
+    const r = await sendLine(TOKEN, UID, 'x', { fetchImpl: async () => ({ ok: false, status: code }) });
+    ok(`LINE ตอบ ${code} → อธิบายเป็นภาษาคน`, !r.ok && kw.test(r.reason), r.reason);
+  }
+  {
+    const r = await sendLine(TOKEN, UID, 'x', { fetchImpl: async () => ({ ok: true, status: 200 }) });
+    ok('ส่งสำเร็จ → รายงานว่าสำเร็จ', r.ok === true);
+  }
+  {
+    /* ต้องส่งด้วย Bearer token และตัว body ต้องเป็นรูปแบบที่ LINE รับ */
+    let seen = null;
+    await sendLine(TOKEN, UID, 'ทดสอบ', { fetchImpl: async (u, init) => { seen = { u, init }; return { ok: true, status: 200 }; } });
+    ok('ยิงไปที่ปลายทาง push ของ LINE', /api\.line\.me\/v2\/bot\/message\/push/.test(seen.u));
+    ok('แนบโทเค็นแบบ Bearer', seen.init.headers.Authorization === `Bearer ${TOKEN}`);
+    const body = JSON.parse(seen.init.body);
+    ok('body มีผู้รับและข้อความตามรูปแบบของ LINE',
+      body.to === UID && Array.isArray(body.messages) && body.messages[0].type === 'text'
+      && body.messages[0].text === 'ทดสอบ');
+  }
 }
 
 // ── กฎหลังเข้าไม้ — ที่ที่ผู้ใช้เสียไม้จริง ────────────────────────

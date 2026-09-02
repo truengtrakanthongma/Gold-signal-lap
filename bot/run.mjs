@@ -21,6 +21,7 @@ import { confidenceScale } from '../js/learn.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
 import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
+import { sendLine, lineProblem } from '../js/line.js';
 import { instrumentOf } from '../js/instrument.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
@@ -34,6 +35,8 @@ const CFG = {
   bars: +(process.env.BOT_BARS || 720),
   statePath: process.env.BOT_STATE || 'bot/.state.json',
   webhook: process.env.DISCORD_WEBHOOK_URL || '',
+  lineToken: process.env.LINE_TOKEN || '',
+  lineTo: process.env.LINE_TO || '',
   dryRun: process.env.BOT_DRY_RUN === '1',
   testPing: process.env.BOT_TEST_PING === '1',
   /* เพิ่มขนาดไม้เมื่อสัญญาณชัด — ตั้งเป็น 1 เพื่อปิด */
@@ -167,6 +170,32 @@ function checkConfig() {
   return bad;
 }
 
+/*
+ * ส่งเข้าทุกช่องทางที่ตั้งค่าไว้
+ *
+ * ทำไมต้องมีหลายช่อง: ผู้ใช้รายงานว่า Discord ตอบรับแล้วแต่เขาไม่เห็นข้อความ
+ * ช่องทางที่ส่งถึงแต่คนไม่เห็น มีค่าเท่ากับไม่มี การมีสองช่องจึงไม่ใช่ของฟุ่มเฟือย
+ *
+ * ล้มช่องหนึ่งไม่ทำให้อีกช่องไม่ได้ส่ง แต่ต้องรายงานทุกช่องตามจริง
+ * และถือว่าสำเร็จเมื่อ "ถึงอย่างน้อยหนึ่งช่อง" ไม่ใช่ต้องครบทุกช่อง
+ */
+async function deliver(msg, what) {
+  const results = [];
+  if (CFG.webhook) {
+    const r = await sendDiscord(CFG.webhook, msg);
+    results.push({ ch: 'Discord', ...r });
+  }
+  if (CFG.lineToken || CFG.lineTo) {
+    const r = await sendLine(CFG.lineToken, CFG.lineTo, msg);
+    results.push({ ch: 'LINE', ...r });
+  }
+  for (const r of results) {
+    if (r.ok) log(`${what} → ${r.ch} สำเร็จ (${r.ms} มิลลิวินาที)`);
+    else log(`${what} → ${r.ch} ไม่สำเร็จ: ${r.reason}`);
+  }
+  return { ok: results.some((r) => r.ok), results };
+}
+
 async function main() {
   const badCfg = checkConfig();
   if (badCfg.length) {
@@ -176,11 +205,29 @@ async function main() {
     process.exit(1);
   }
 
-  const problem = CFG.dryRun ? null : webhookProblem(CFG.webhook);
-  if (problem) {
-    log(`ใช้ DISCORD_WEBHOOK_URL ไม่ได้: ${problem}`);
-    log('แก้ที่ Settings → Secrets and variables → Actions → DISCORD_WEBHOOK_URL');
-    process.exit(1);
+  /*
+   * ต้องมีช่องทางที่ใช้ได้อย่างน้อยหนึ่งช่อง
+   *
+   * ตรวจเฉพาะช่องที่ผู้ใช้ตั้งค่ามา ไม่บังคับให้มีครบทั้งสอง
+   * แต่ถ้าตั้งมาแล้วตั้งผิด ต้องหยุดและบอก ไม่ใช่ปล่อยให้เงียบทั้งวัน
+   */
+  if (!CFG.dryRun) {
+    const chans = [];
+    if (CFG.webhook) chans.push(['Discord', webhookProblem(CFG.webhook), 'DISCORD_WEBHOOK_URL']);
+    if (CFG.lineToken || CFG.lineTo) chans.push(['LINE', lineProblem(CFG.lineToken, CFG.lineTo), 'LINE_TOKEN / LINE_TO']);
+
+    if (!chans.length) {
+      log('ยังไม่ได้ตั้งช่องทางแจ้งเตือนสักช่อง — ใส่ DISCORD_WEBHOOK_URL หรือ LINE_TOKEN + LINE_TO');
+      log('แก้ที่ Settings → Secrets and variables → Actions → Secrets');
+      process.exit(1);
+    }
+    const broken = chans.filter(([, why]) => why);
+    if (broken.length === chans.length) {
+      log('ช่องทางแจ้งเตือนที่ตั้งไว้ใช้ไม่ได้ทั้งหมด จึงไม่เริ่มทำงาน:');
+      for (const [ch, why, env] of broken) log(`  • ${ch} (${env}): ${why}`);
+      process.exit(1);
+    }
+    for (const [ch, why, env] of broken) log(`ข้าม ${ch} (${env}): ${why}`);
   }
 
   /*
@@ -202,12 +249,12 @@ async function main() {
      * คนกดตรวจสถานะแล้วไม่มีอะไรเด้ง จะแยกไม่ออกว่าระบบปกติหรือพัง
      */
     if (CFG.testPing) {
-      await sendDiscord(CFG.webhook, buildSignalMessage({
+      await deliver(buildSignalMessage({
         action: 'warn', score: null, price: null, tf: CFG.interval,
         instrument: 'ตรวจสถานะระบบ',
         blocks: ['ดึงราคาไม่ได้เลยสักแหล่ง จึงคำนวณอะไรไม่ได้',
                  ...attempts.map((a) => `${a.key}: ${a.reason}`)],
-      }));
+      }), 'แจ้งว่าดึงราคาไม่ได้');
     }
     process.exit(1);
   }
@@ -251,9 +298,9 @@ async function main() {
       blocks: statusBlocks(ctx, scored, strong, strong && !blocked(ctx, scored)),
       reasons: topFactors(scored, Math.sign(scored.score) || 1, extra.newsLine),
     });
-    const res = await sendDiscord(CFG.webhook, msg);
-    if (!res.ok) { log('ส่งรายงานสถานะไม่สำเร็จ:', res.reason); process.exit(1); }
-    log(`ส่งรายงานสถานะเข้า Discord สำเร็จ (${res.ms} มิลลิวินาที) — ราคาในข้อความคือราคาจริงจาก ${label}`);
+    const res = await deliver(msg, 'รายงานสถานะ');
+    if (!res.ok) { log('ส่งรายงานสถานะไม่สำเร็จสักช่อง'); process.exit(1); }
+    log(`ราคาในข้อความคือราคาจริงจาก ${label}`);
     return;
   }
 
@@ -274,12 +321,13 @@ async function main() {
 
   if (CFG.dryRun) { log('โหมดทดสอบ ไม่ส่งจริง:\n' + JSON.stringify(msg, null, 2)); return; }
 
-  const res = await sendDiscord(CFG.webhook, msg);
+  const res = await deliver(msg, 'สัญญาณ');
   if (res.ok) {
-    log(`ส่งเข้า Discord สำเร็จ (${res.ms} มิลลิวินาที)`);
+    /* จำว่าเตือนแท่งนี้ไปแล้วก็ต่อเมื่อถึงมืออย่างน้อยหนึ่งช่อง
+       ไม่งั้นรอบหน้าจะข้ามไม้นี้ทั้งที่ผู้ใช้ไม่เคยได้รับอะไรเลย */
     saveState({ lastCandle: last.t, lastSide: side, lastAt: Date.now() });
   } else {
-    log('ส่งไม่สำเร็จ:', res.reason);
+    log('ส่งไม่สำเร็จสักช่อง — ไม่บันทึกว่าเตือนแล้ว จะได้ลองใหม่รอบหน้า');
     process.exit(1);
   }
 }
