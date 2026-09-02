@@ -11,6 +11,7 @@
 
 import * as ta from './indicators.js';
 import { detectPatterns } from './patterns.js';
+import { springUpthrust, rangeContraction, effortVsResult, holyGrailPullback } from './classic.js';
 import { findPivots, clusterLevels, nearestLevels, marketStructure, rsiDivergence, nearestRound } from './levels.js';
 
 export const DEFAULT_CFG = {
@@ -55,6 +56,14 @@ export const DEFAULT_CFG = {
 export const WEIGHTS = {
   emaTrend: 16, adxTrend: 12, macdMom: 12, rsiMom: 10, structure: 12,
   patterns: 10, volume: 8, bands: 8, levels: 10, divergence: 10, vwap: 6, stoch: 6,
+  /*
+   * ท่าจากตำราที่คนในวงการยอมรับ (ดู classic.js)
+   *
+   * ให้น้ำหนักพอประมาณไว้ก่อน เพราะ "ตำราบอกว่าดี" ไม่ใช่หลักฐานว่าดีกับ
+   * ทองกรอบ 15 นาทีของเรา ปุ่ม "เรียนรู้แล้วสอบน้ำหนัก" จะเป็นตัวตัดสิน
+   * จากผลเทรดจริงของผู้ใช้เองว่าควรได้น้ำหนักเท่าไร หรือควรเป็นศูนย์
+   */
+  classic: 10,
 };
 const TOTAL_WEIGHT = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
 
@@ -229,6 +238,32 @@ export function scoreAt(ctx, i) {
   if (patNet !== 0) {
     const best = pats.filter((p) => p.side === Math.sign(patNet)).sort((a, b) => b.strength - a.strength)[0];
     push('patterns', `Price Action: ${best.name}`, Math.sign(patNet), clamp(Math.abs(patNet), 0, 1), best.reason);
+  }
+
+  /*
+   * ── 6.5) ท่าจากตำรา — Wyckoff, Crabel, Raschke ────────────────────────
+   *
+   * แยกจากรูปแบบแท่งเทียนเพราะมองคนละอย่าง: แท่งเทียนดูรูปทรงของแท่ง
+   * ส่วนพวกนี้ดูพฤติกรรมรอบ "แนวราคา" และรอบการบีบ/คลายตัวของความผันผวน
+   *
+   * NR7 ไม่บอกทิศ จึงไม่เอามาบวกคะแนน แต่เก็บไว้เล่าให้ผู้ใช้ฟัง
+   * เพราะรู้ว่ากำลังจะมีการเคลื่อนไหว มีค่าต่อการตัดสินใจรอ
+   */
+  const classics = [
+    springUpthrust(candles, i, atrVal),
+    effortVsResult(candles, i, atrVal),
+    holyGrailPullback(candles, i, ctx, { adxMin: Math.max(25, cfg.adxTrendMin + 3) }),
+  ].filter(Boolean);
+  const squeeze = rangeContraction(candles, i);
+  const clNet = classics.reduce((a, c) => a + c.side * c.strength, 0);
+  if (clNet !== 0) {
+    const best = classics.filter((c) => c.side === Math.sign(clNet))
+      .sort((a, b) => b.strength - a.strength)[0];
+    push('classic', best.name, Math.sign(clNet), clamp(Math.abs(clNet), 0, 1), best.reason);
+  }
+  if (squeeze) {
+    factors.push({ key: 'classic', name: squeeze.name, side: 0, strength: 0, weight: 0,
+      contribution: 0, reason: squeeze.reason, info: true });
   }
 
   // ── 7) ปริมาณการซื้อขายยืนยัน ───────────────────────────────────────────

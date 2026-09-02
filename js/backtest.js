@@ -50,6 +50,22 @@ export const DEFAULT_BT = {
   exitStyle: 'partial',
 };
 
+/**
+ * ดัชนีสุดท้ายที่ยังรับไม้ใหม่ได้ โดยรับประกันว่าไม้จะปิดก่อนเส้นแบ่ง
+ *
+ * ทำไมต้องมี: toIndex จำกัดแค่ "แท่งที่เข้าไม้" ไม่ได้จำกัดแท่งที่ปิดไม้
+ * ไม้ที่เข้าตอนใกล้เส้นแบ่งจึงถือข้ามไปปิดในช่วงสอบได้ แปลว่าผลแพ้ชนะ
+ * ของไม้ที่เอาไปเรียนรู้ ถูกตัดสินด้วยข้อมูลที่ยังไม่ควรรู้
+ *
+ * ตรวจพบตอนเพิ่มปัจจัยใหม่แล้วเทสต์เส้นแบ่งล้ม — บั๊กนี้ซ่อนอยู่ก่อนหน้านั้น
+ * และไม่ล้มเพราะบังเอิญไม่มีไม้ไหนคาบเกี่ยวพอดี ไม่ใช่เพราะกันไว้จริง
+ * (adapt.js กันเรื่องนี้ไว้อยู่แล้ว ที่นี่คือเอามาใช้ให้ทั่วถึง)
+ */
+export function embargoIndex(splitAt, opts = {}) {
+  const maxHold = opts.maxHold === undefined ? DEFAULT_BT.maxHold : opts.maxHold;
+  return Math.max(0, splitAt - (maxHold + 2));
+}
+
 export function runBacktest(ctx, opts = {}) {
   const o = { ...DEFAULT_BT, ...opts };
   const { candles, cfg } = ctx;
@@ -332,7 +348,7 @@ export function optimizeExits(ctx, opts = {}) {
   for (const slAtrMult of slMults) {
     const tuned = { ...ctx, cfg: { ...ctx.cfg, slAtrMult } };
     for (const threshold of thresholds) {
-      const r = runBacktest(tuned, { ...o, threshold, toIndex: splitAt });
+      const r = runBacktest(tuned, { ...o, threshold, toIndex: embargoIndex(splitAt, o) });
       if (r.stats.n < minTrades) continue;
       const costR = 0;   // ต้นทุนถูกคิดไปแล้วตอนจำลอง (สเปรด+สลิปเพจ)
       for (const targetR of targets) {
@@ -377,7 +393,7 @@ export function optimizeExits(ctx, opts = {}) {
   const outEval = evaluateTarget(outRun.trades, best.targetR, 0);
 
   // การกระจายของระยะที่ราคาวิ่งไป และระยะที่ต้องทนติดลบ
-  const inRun = runBacktest(tunedCtx, { ...o, threshold: best.threshold, toIndex: splitAt });
+  const inRun = runBacktest(tunedCtx, { ...o, threshold: best.threshold, toIndex: embargoIndex(splitAt, o) });
   const all = [...inRun.trades, ...outRun.trades];
   const winners = all.filter((t) => (t.favBeforeStop || 0) >= best.targetR);
   const mfe = all.map((t) => t.favBeforeStop || 0);
@@ -447,7 +463,7 @@ export function walkForward(ctx, opts = {}) {
 
   const candidates = (o.thresholds || [25, 30, 35, 40, 45, 50, 55, 60]);
   const sweep = candidates.map((threshold) => {
-    const r = runBacktest(ctx, { ...o, threshold, toIndex: splitAt });
+    const r = runBacktest(ctx, { ...o, threshold, toIndex: embargoIndex(splitAt, o) });
     return { threshold, n: r.stats.n, winRate: r.stats.winRate, expectancy: r.stats.expectancy, totalR: r.stats.totalR };
   });
 
@@ -456,7 +472,7 @@ export function walkForward(ctx, opts = {}) {
   const best = usable.sort((a, b) => b.expectancy - a.expectancy)[0] || null;
   if (!best) return { ok: false, reason: 'ช่วงเรียนรู้ไม่มีเกณฑ์ไหนสร้างไม้ได้มากพอจะสรุป', sweep, splitAt };
 
-  const inSample = runBacktest(ctx, { ...o, threshold: best.threshold, toIndex: splitAt });
+  const inSample = runBacktest(ctx, { ...o, threshold: best.threshold, toIndex: embargoIndex(splitAt, o) });
   const outSample = runBacktest(ctx, { ...o, threshold: best.threshold, fromIndex: splitAt });
 
   const drop = inSample.stats.winRate !== null && outSample.stats.winRate !== null

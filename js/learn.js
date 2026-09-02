@@ -33,7 +33,7 @@
  *         ข้อมูลน้อย = เชื่อของเดิมเป็นหลัก, ข้อมูลมากขึ้น = เชื่อข้อมูลมากขึ้นตามลำดับ
  */
 
-import { runBacktest, wilsonInterval } from './backtest.js';
+import { runBacktest, wilsonInterval, embargoIndex } from './backtest.js';
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
 
@@ -301,7 +301,8 @@ export function learnAndValidate(ctx, opts = {}) {
     return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับแบ่งช่วงเรียนรู้/ช่วงสอบ — โหลดแท่งเทียนเพิ่มก่อน' };
   }
 
-  const inRun = runBacktest(ctx, { ...btOpts, threshold: learnThreshold, toIndex: splitAt });
+  /* หยุดรับไม้ใหม่ก่อนถึงเส้นแบ่งเท่าระยะถือสูงสุด ไม้ที่ใช้เรียนรู้จึงปิดก่อนเส้นแบ่งแน่นอน */
+  const inRun = runBacktest(ctx, { ...btOpts, threshold: learnThreshold, toIndex: embargoIndex(splitAt, btOpts) });
   const learned = learnWeights(inRun.trades, keys, base, opts);
   if (!learned.ok) return { ...learned, splitAt, learnThreshold, learnTrades: inRun.stats.n };
 

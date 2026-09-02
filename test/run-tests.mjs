@@ -7,7 +7,7 @@
  */
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
-import { runBacktest, optimizeExits } from '../js/backtest.js';
+import { runBacktest, optimizeExits, embargoIndex } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
@@ -17,6 +17,7 @@ import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict,
 import { isValidWebhook, webhookProblem, sendDiscord, buildSignalMessage, buildTestMessage } from '../js/discord.js';
 import { NEWS_FEEDS, FEED_ORDER, surpriseOf, dedupe, similarity, sourceWeight, tokensOf } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
+import { springUpthrust, rangeContraction, effortVsResult, holyGrailPullback } from '../js/classic.js';
 import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
 
 let pass = 0, fail = 0;
@@ -712,17 +713,30 @@ section('10) Pine Script (TradingView) ตรงกับเวอร์ชั�
       wPat: 'patterns', wVolume: 'volume', wBands: 'bands', wLevels: 'levels',
       wDiv: 'divergence', wVwap: 'vwap', wStoch: 'stoch',
     };
-    ok('มีน้ำหนักครบทั้ง 12 ปัจจัยเท่าเวอร์ชันเว็บ',
-      Object.keys(pineW).length === Object.keys(WEIGHTS).length,
-      `Pine ${Object.keys(pineW).length} · เว็บ ${Object.keys(WEIGHTS).length}`);
+    /*
+     * Pine ครอบ 12 ปัจจัยหลัก ส่วน classic (Wyckoff/Crabel/Raschke) มีเฉพาะบนเว็บ
+     *
+     * ตั้งใจให้ต่าง ไม่ใช่ลืม: ผู้ใช้เลิกใช้ TradingView ไปแล้ว การพอร์ต
+     * การจับ spring/upthrust ลง Pine จึงเป็นงานหนักที่ไม่มีใครได้ประโยชน์
+     * แต่ 12 ตัวที่มีทั้งสองฝั่งต้องมีน้ำหนักตรงกันเป๊ะ ไม่งั้นสองเวอร์ชัน
+     * จะให้คะแนนต่างกันโดยไม่มีใครรู้ตัว
+     */
+    const shared = Object.keys(map).map((k) => map[k]);
+    ok('Pine ครอบปัจจัยหลักครบทุกตัวที่ควรมี',
+      Object.keys(pineW).length === shared.length,
+      `Pine ${Object.keys(pineW).length} · ควรมี ${shared.length}`);
+    const webOnly = Object.keys(WEIGHTS).filter((k) => !shared.includes(k));
+    ok('ปัจจัยที่มีเฉพาะบนเว็บ ถูกระบุไว้ชัดว่าตัวไหน',
+      webOnly.length === 0 || webOnly.join(',') === 'classic', webOnly.join(', ') || 'ไม่มี');
     const mismatched = Object.entries(map)
       .filter(([pk, jk]) => pineW[pk] !== WEIGHTS[jk])
       .map(([pk, jk]) => `${pk}=${pineW[pk]} แต่เว็บ ${jk}=${WEIGHTS[jk]}`);
     ok('ค่าน้ำหนักทุกตัวตรงกับเวอร์ชันเว็บ', mismatched.length === 0, mismatched.join(' · '));
 
     const totalPine = Object.values(pineW).reduce((a, b) => a + b, 0);
-    const totalJs = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
-    ok('น้ำหนักรวมเท่ากัน (120)', totalPine === totalJs, `Pine ${totalPine} · เว็บ ${totalJs}`);
+    const totalShared = shared.reduce((a, k) => a + WEIGHTS[k], 0);
+    ok(`น้ำหนักรวมของปัจจัยที่มีทั้งสองฝั่งเท่ากัน (${totalShared})`,
+      totalPine === totalShared, `Pine ${totalPine} · เว็บเฉพาะตัวที่แชร์กัน ${totalShared}`);
 
     // ค่าตั้งต้นสำคัญต้องตรงกัน
     const num = (re) => { const m = pine.match(re); return m ? +m[1] : null; };
@@ -848,11 +862,26 @@ section('12) เรียนรู้น้ำหนักปัจจัย —
     const ctx = buildContext(makeCandles(3000, 101, 0.25), DEFAULT_CFG);
     const r = learnAndValidate(ctx, { keys: KEYS, baseWeights: WEIGHTS, threshold: 35 });
     if (r.ok) {
-      const inRun = runBacktest(ctx, { threshold: r.learnThreshold, toIndex: r.splitAt });
+      const inRun = runBacktest(ctx, { threshold: r.learnThreshold, toIndex: embargoIndex(r.splitAt) });
       ok('จำนวนไม้ที่ใช้เรียนรู้ = ไม้ในช่วงแรกเท่านั้น (ไม่มีไม้จากช่วงสอบปน)',
         r.rows === toDataset(inRun.trades, KEYS).length, `${r.rows} เทียบ ${inRun.trades.length}`);
       ok('ไม้ทุกไม้ที่ใช้เรียนรู้จบก่อนเส้นแบ่ง',
         inRun.trades.every((t) => t.exitIndex < r.splitAt));
+
+      /*
+       * พิสูจน์ว่าระยะกันชนจำเป็นจริง ไม่ใช่ใส่เผื่อไว้เฉย ๆ
+       *
+       * ถ้าตัดกันชนออก (ใช้ toIndex = splitAt ตรง ๆ แบบโค้ดเดิม) ต้องมีไม้
+       * ที่ถือข้ามเส้นแบ่งไปปิดในช่วงสอบ ซึ่งคือข้อมูลอนาคตรั่วเข้ามาตัดสิน
+       * ผลแพ้ชนะของไม้ที่เอาไปเรียนรู้ — บั๊กนี้ซ่อนอยู่จนกระทั่งการเพิ่ม
+       * ปัจจัยใหม่ทำให้ไม้ขยับมาคาบเกี่ยวพอดี
+       */
+      const noEmbargo = runBacktest(ctx, { threshold: r.learnThreshold, toIndex: r.splitAt });
+      const spill = noEmbargo.trades.filter((t) => t.exitIndex >= r.splitAt);
+      ok('ถ้าไม่มีระยะกันชน จะมีไม้ถือข้ามเส้นแบ่งจริง (กันชนจึงไม่ใช่ของเกิน)',
+        spill.length > 0, `ล้ำ ${spill.length} ไม้`);
+      ok('ระยะกันชนกว้างพอสำหรับระยะถือสูงสุด',
+        r.splitAt - embargoIndex(r.splitAt) >= 60);
     } else { ok('จำนวนไม้ที่ใช้เรียนรู้ = ไม้ในช่วงแรกเท่านั้น', false, r.reason); }
   }
 }
@@ -1921,6 +1950,194 @@ section('25) สัญญาณต้องอยู่นานพอให้�
   let weak = null;
   for (const sc of [30, 33, 31, 34]) weak = holdSignal(weak, sc, TH, { now: 0 });
   ok('คะแนนวนอยู่แถวเส้นปล่อยแต่ไม่เคยถึงเกณฑ์ → ไม่มีสัญญาณ', weak === null);
+}
+
+section('30) เทคนิคจากตำรา — ต้องจับได้จริงตามที่ตำราอธิบาย ไม่ใช่จับมั่ว');
+{
+  /*
+   * ตัวจับรูปแบบที่ "จับบ่อยเกินไป" อันตรายกว่าไม่มี เพราะมันเติมคะแนนให้ทุกแท่ง
+   * ตอนพัฒนาเคยเขียนแบบหลวมแล้ววัดได้ว่าเจอ spring ทุก 5 แท่ง ซึ่งมั่วชัด ๆ
+   * ชุดทดสอบนี้จึงมีทั้งเคสที่ "ต้องจับได้" และเคสที่ "ต้องไม่จับ" คู่กันเสมอ
+   */
+  const ATR = 3;
+  const bar = (o, h, l, c, v = 100) => ({ t: 0, o, h, l, c, v, closed: true });
+
+  // กรอบสะสม 44 แท่ง: ฐานอยู่แถว 3300 ยอดอยู่แถว 3310 ถูกทดสอบซ้ำหลายครั้ง
+  const rangeBars = () => {
+    const out = [];
+    for (let k = 0; k < 44; k++) {
+      const low = k % 2 === 0 ? 3300.4 : 3301.2;
+      const high = k % 2 === 0 ? 3309.6 : 3308.8;
+      out.push(bar(low + 2, high, low, high - 2));
+    }
+    return out;
+  };
+
+  // ── Spring (ไวคอฟฟ์) ─────────────────────────────────────────────────
+  {
+    const cs = rangeBars();
+    cs.push(bar(3302, 3303.5, 3298, 3303));   // ทะลุลงแล้วปิดกลับเข้ากรอบในแท่งเดียว
+    cs.push(bar(3303, 3306, 3302.5, 3305));   // แท่งปัจจุบัน ยังยืนเหนือแนว
+    const r = springUpthrust(cs, cs.length - 1, ATR);
+    ok('ทะลุแนวรับที่ถูกทดสอบซ้ำแล้วดีดกลับ → จับได้เป็น Spring', r !== null && r.name === 'Spring (Wyckoff)');
+    ok('Spring ชี้ฝั่งซื้อ (สวนทางกับการทะลุ)', r !== null && r.side === 1);
+    ok('บอกได้ว่าแนวที่ถูกกวาดอยู่ตรงไหน และเคยถูกทดสอบกี่ครั้ง', r !== null && Math.abs(r.level - 3300.4) < 0.01 && r.touches >= 2);
+    ok('ความแรงอยู่ในช่วง 0-1 เสมอ ไม่งั้นคะแนนรวมจะเพี้ยน', r !== null && r.strength > 0 && r.strength <= 1);
+  }
+
+  // ── Upthrust (กระจกของ Spring) ───────────────────────────────────────
+  {
+    const cs = rangeBars();
+    cs.push(bar(3308, 3312, 3306.5, 3307));
+    cs.push(bar(3307, 3307.5, 3304, 3305));
+    const r = springUpthrust(cs, cs.length - 1, ATR);
+    ok('ทะลุแนวต้านแล้วโดนตีกลับ → จับได้เป็น Upthrust', r !== null && r.name === 'Upthrust (Wyckoff)');
+    ok('Upthrust ชี้ฝั่งขาย', r !== null && r.side === -1);
+  }
+
+  // ── เคสที่ต้องไม่จับ ─────────────────────────────────────────────────
+  {
+    const cs = rangeBars();
+    cs.push(bar(3302, 3302.5, 3296, 3297));   // ทะลุลงแล้วปิดต่ำกว่าแนว = หลุดจริง
+    cs.push(bar(3297, 3298, 3295, 3296));
+    ok('ทะลุลงแล้วปิดต่ำกว่าแนว (หลุดจริง) → ไม่ใช่ spring', springUpthrust(cs, cs.length - 1, ATR) === null);
+  }
+  {
+    const cs = rangeBars();
+    cs.push(bar(3302, 3303.5, 3298, 3303));
+    cs.push(bar(3303, 3303.5, 3298.5, 3299));  // ปัจจุบันหลุดกลับลงไปใต้แนวแล้ว
+    ok('ดีดกลับแล้วแต่ตอนนี้หลุดแนวลงไปอีก → ไม่นับว่ายังใช้ได้', springUpthrust(cs, cs.length - 1, ATR) === null);
+  }
+  {
+    /* แนวที่มีความหมายต้องเคยถูกทดสอบ ไม่ใช่ก้นหลุมครั้งเดียวที่บังเอิญต่ำสุด */
+    const cs = [];
+    for (let k = 0; k < 44; k++) cs.push(bar(3305, 3309.6, 3303.4, 3307));
+    cs[10] = bar(3305, 3306, 3290, 3304);      // จุดต่ำสุดที่เกิดครั้งเดียว
+    cs.push(bar(3292, 3296, 3287, 3295));      // ทะลุใต้จุดนั้นแล้วดีดกลับ
+    cs.push(bar(3295, 3297, 3294, 3296));
+    const r = springUpthrust(cs, cs.length - 1, ATR);
+    ok('แนวที่ถูกแตะครั้งเดียว → ไม่นับเป็น spring แม้รูปแท่งจะเข้าเงื่อนไข', r === null);
+  }
+  ok('แท่งแรก ๆ ที่ข้อมูลยังไม่พอ → คืน null ไม่ใช่พังหรือเดา', springUpthrust(rangeBars(), 3, ATR) === null);
+
+  // ── NR7 (แครเบล) ─────────────────────────────────────────────────────
+  {
+    const cs = [];
+    for (let k = 0; k < 7; k++) cs.push(bar(3300, 3305, 3300, 3303));   // ช่วง 5
+    cs.push(bar(3302, 3302.6, 3301.6, 3302.4));                          // ช่วง 1 = แคบสุดใน 7
+    const r = rangeContraction(cs, cs.length - 1);
+    ok('แท่งที่แคบที่สุดในรอบ 7 → จับได้เป็น NR7', r !== null && r.name === 'NR7 (Crabel)');
+    ok('NR7 ไม่บอกทิศทาง (side = 0) เพราะตำราบอกแค่ว่าจะมีการเคลื่อนไหว', r !== null && r.side === 0);
+    cs.push(bar(3302, 3307, 3301, 3306));
+    ok('แท่งที่ช่วงราคากว้าง → ไม่ใช่ NR7', rangeContraction(cs, cs.length - 1) === null);
+  }
+  {
+    const cs = [];
+    for (let k = 0; k < 8; k++) cs.push(bar(3300, 3305, 3300, 3303));    // ช่วงเท่ากันหมด
+    ok('ช่วงราคาเท่ากันทุกแท่ง → ไม่นับว่าแคบที่สุด (เสมอไม่ใช่ชนะ)', rangeContraction(cs, cs.length - 1) === null);
+  }
+
+  // ── Effort vs Result (ไวคอฟฟ์) ───────────────────────────────────────
+  {
+    const cs = [];
+    for (let k = 0; k < 20; k++) cs.push(bar(3300, 3303, 3297, 3301, 100));
+    cs.push(bar(3301, 3301.6, 3300.6, 3301.4, 250));   // ปริมาณ 2.5 เท่า แต่ไปได้ 0.33 ATR
+    const r = effortVsResult(cs, cs.length - 1, ATR);
+    ok('ปริมาณพุ่งแต่ราคาแทบไม่ไปไหน → จับได้ว่ามีการดูดซับ', r !== null && r.name === 'Effort vs Result (Wyckoff)');
+    ok('แท่งเขียวแต่ไปไม่ไหว → ชี้ฝั่งขาย (สวนกับแท่ง)', r !== null && r.side === -1);
+    ok('ความแรงอยู่ในช่วง 0-1', r !== null && r.strength > 0 && r.strength <= 1);
+
+    const cs2 = cs.slice(0, 20);
+    cs2.push(bar(3301, 3308, 3300, 3307, 250));        // ปริมาณเยอะ และราคาก็ไปไกล
+    ok('ปริมาณเยอะแล้วราคาไปไกลด้วย → ปกติ ไม่ใช่การดูดซับ', effortVsResult(cs2, cs2.length - 1, ATR) === null);
+
+    const cs3 = cs.slice(0, 20);
+    cs3.push(bar(3301, 3301.6, 3300.6, 3301.4, 100));  // ราคานิ่ง แต่ปริมาณก็ปกติ
+    ok('ราคานิ่งโดยที่ปริมาณไม่ได้พุ่ง → ไม่ใช่สัญญาณ', effortVsResult(cs3, cs3.length - 1, ATR) === null);
+  }
+
+  // ── Holy Grail (รัสช์กี) ─────────────────────────────────────────────
+  {
+    const mk = (adxV, plus, minus, e, a, c) => ({
+      ctx: { adx: { adx: [adxV], plusDI: [plus], minusDI: [minus] }, ema20: [e], atr: [a] },
+      cs: [bar(0, 0, 0, 0), c],
+    });
+    const upBar = bar(3304, 3306, 3299.5, 3305);       // ย่อลงมาแตะเส้น 3300 แล้วปิดเหนือเส้น
+    const g = mk(35, 30, 12, 3300, 3, upBar);
+    g.ctx.adx.adx[1] = 35; g.ctx.adx.plusDI[1] = 30; g.ctx.adx.minusDI[1] = 12;
+    g.ctx.ema20[1] = 3300; g.ctx.atr[1] = 3;
+    const r = holyGrailPullback(g.cs, 1, g.ctx, { adxMin: 30 });
+    ok('เทรนด์แข็งแล้วย่อมาแตะเส้น 20 → จับได้เป็น Holy Grail', r !== null && r.name === 'Holy Grail (Raschke)');
+    ok('เทรนด์ขึ้น (+DI > -DI) → ชี้ฝั่งซื้อ ไม่ใช่สวนเทรนด์', r !== null && r.side === 1);
+
+    const w = mk(35, 30, 12, 3300, 3, upBar);
+    w.ctx.adx.adx[1] = 18; w.ctx.adx.plusDI[1] = 30; w.ctx.adx.minusDI[1] = 12;
+    w.ctx.ema20[1] = 3300; w.ctx.atr[1] = 3;
+    ok('ADX ต่ำ (ไม่มีเทรนด์) → ไม่เข้า เพราะตำราใช้เฉพาะตลาดที่มีเทรนด์', holyGrailPullback(w.cs, 1, w.ctx, { adxMin: 30 }) === null);
+
+    const f = mk(35, 30, 12, 3300, 3, bar(3310, 3312, 3308, 3311));   // ไม่ได้ย่อลงมาแตะเส้น
+    f.ctx.adx.adx[1] = 35; f.ctx.adx.plusDI[1] = 30; f.ctx.adx.minusDI[1] = 12;
+    f.ctx.ema20[1] = 3300; f.ctx.atr[1] = 3;
+    ok('เทรนด์แข็งแต่ยังไม่ย่อมาแตะเส้น → ยังไม่ใช่จังหวะเข้า', holyGrailPullback(f.cs, 1, f.ctx, { adxMin: 30 }) === null);
+
+    const nan = { adx: { adx: [NaN, NaN], plusDI: [NaN, NaN], minusDI: [NaN, NaN] }, ema20: [NaN, NaN], atr: [NaN, NaN] };
+    ok('ตัวชี้วัดยังคำนวณไม่ได้ (NaN) → คืน null ไม่ใช่ให้คะแนนมั่ว', holyGrailPullback(g.cs, 1, nan, { adxMin: 30 }) === null);
+    ok('ไม่มี ctx เลย → คืน null ไม่ใช่พัง', holyGrailPullback(g.cs, 1, { adx: null, ema20: null, atr: null }) === null);
+  }
+
+  // ── ห้ามมองอนาคต ─────────────────────────────────────────────────────
+  {
+    const cs = makeCandles(600, 31);
+    const ctx = buildContext(cs);
+    let checked = 0, same = true;
+    for (let i = 100; i < 560; i += 7) {
+      const cut = cs.slice(0, i + 1);
+      const cutCtx = buildContext(cut);
+      const a = ctx.atr[i];
+      const full = [springUpthrust(cs, i, a), rangeContraction(cs, i), effortVsResult(cs, i, a)];
+      const ca = cutCtx.atr[i];   // ใช้ ATR ที่คำนวณจากข้อมูลเท่าที่มี ไม่ใช่ยืมของชุดเต็ม
+      const part = [springUpthrust(cut, i, ca), rangeContraction(cut, i), effortVsResult(cut, i, ca)];
+      for (let k = 0; k < full.length; k++) {
+        checked++;
+        if (JSON.stringify(full[k]) !== JSON.stringify(part[k])) same = false;
+      }
+      const hgFull = holyGrailPullback(cs, i, ctx, { adxMin: 28 });
+      const hgPart = holyGrailPullback(cut, i, cutCtx, { adxMin: 28 });
+      checked++;
+      if ((hgFull === null) !== (hgPart === null)) same = false;
+      else if (hgFull && hgFull.side !== hgPart.side) same = false;
+    }
+    ok(`ตัดข้อมูลหลังแท่ง i ทิ้ง แล้วผลเหมือนเดิมทุกตัว (${checked} จุด)`, same);
+  }
+
+  // ── ความถี่ต้องสมเหตุสมผล ────────────────────────────────────────────
+  {
+    /*
+     * ไม่ได้ล็อกตัวเลขตายตัว เพราะความถี่ขึ้นกับลักษณะข้อมูล
+     * (วัดบนข้อมูลจำลองแบบผันผวนเป็นช่วงได้ ~1/134 แท่ง บนข้อมูลชุดนี้ได้ ~1/20)
+     * แต่ต้องกันสองขั้วที่เคยพลาดมาแล้ว: หลวมจนจับทุก 5 แท่ง กับแน่นจนไม่เคยจับได้เลย
+     */
+    const cs = makeCandles(4000, 7);
+    const ctx = buildContext(cs);
+    let sp = 0, n = 0;
+    for (let i = 60; i < cs.length; i++) { n++; if (springUpthrust(cs, i, ctx.atr[i])) sp++; }
+    const every = n / (sp || 1);
+    ok(`Spring/Upthrust ไม่ถี่จนไร้ความหมาย (พบ 1 ครั้งทุก ${every.toFixed(0)} แท่ง)`, sp > 0 && every >= 10, `พบ ${sp} ครั้งใน ${n} แท่ง`);
+  }
+
+  // ── ต่อเข้ากับระบบให้คะแนนแล้วยังปลอดภัย ─────────────────────────────
+  {
+    const cs = makeCandles(500, 41);
+    const ctx = buildContext(cs);
+    let bad = 0, seen = 0;
+    for (let i = 60; i < cs.length; i++) {
+      const s = scoreAt(ctx, i);
+      if (!Number.isFinite(s.score) || s.score < -100 || s.score > 100) bad++;
+      if (s.factors.some((f) => f.key === 'classic')) seen++;
+    }
+    ok('เปิดปัจจัยจากตำราแล้วคะแนนรวมยังอยู่ในช่วง -100..100 เสมอ', bad === 0, `เพี้ยน ${bad} แท่ง`);
+    ok('ปัจจัยจากตำราโผล่ในรายการเหตุผลจริง ไม่ใช่ต่อไว้เฉย ๆ', seen > 0, `พบ ${seen} แท่ง`);
+  }
 }
 
 console.log(`\n${'─'.repeat(52)}`);
