@@ -646,6 +646,16 @@ body.simple .narr p { font-size: var(--fs-sm); }
 .broker-box .tiny { margin: 7px 0; color: var(--text-3); line-height: 1.5; }
 .broker-box .risk-inputs { margin-top: 6px; }
 
+/* การตัดสินใจเรื่องขนาดไม้ — ต้องเห็นทั้งตอนเพิ่มและตอนไม่เพิ่ม
+   เพราะ "ทำไมไม่เพิ่ม" สำคัญพอ ๆ กับ "เพิ่มเท่าไร" */
+.boost-box {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+  margin-bottom: 8px; font-size: var(--fs-sm); background: var(--panel-2);
+}
+.boost-box.on { background: rgba(38,169,106,.1); border-color: rgba(38,169,106,.4); }
+.boost-box.on b { color: var(--up); }
+.boost-box .opt-why { display: block; margin-top: 4px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
+
 /* อายุของสัญญาณ — ตอบคำถามแรกของคนที่เพิ่งเห็นแจ้งเตือน: ยังเข้าทันไหม */
 .sig-age {
   background: rgba(38,169,106,.09); border: 1px solid rgba(38,169,106,.3);
@@ -980,6 +990,9 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
         <label>ความเสี่ยง/ไม้ (%)<input type="number" id="riskInput" value="1" min="0.1" max="10" step="0.1"></label>
         <label class="wide">จุดตัดขาดทุนของฉัน (ว่างไว้ = ให้ระบบวางให้)
           <input type="number" id="slManualInput" placeholder="เช่น 4362.50" step="0.01"></label>
+        <label class="chk wide"><input type="checkbox" id="boostToggle" checked>
+          เพิ่มขนาดไม้เมื่อสัญญาณชัด — เฉพาะเมื่อผลย้อนหลังพิสูจน์ได้ว่าคุ้ม</label>
+        <label>เพิ่มได้มากสุด (เท่า)<input type="number" id="boostMaxInput" value="2" min="1" max="5" step="0.5"></label>
       </div>
       <details class="broker-box">
         <summary>ตั้งค่าโบรกเกอร์ของคุณ — ถ้าไม่ตรง จำนวนไม้จะผิดทุกครั้ง</summary>
@@ -2355,6 +2368,8 @@ function buildSetup(ctx, i, scored, opts = {}) {
     lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
     minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
     slPrice = null,        // ผู้ใช้กำหนดจุดตัดขาดทุนเอง (ชนะค่าที่ระบบคำนวณ)
+    riskMult = 1,          // ตัวคูณความเสี่ยงเมื่อสัญญาณชัด (ดู confidenceScale)
+    maxRiskPct = cfg.maxRiskPct === undefined ? 3 : cfg.maxRiskPct,
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
     slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
@@ -2431,7 +2446,21 @@ function buildSetup(ctx, i, scored, opts = {}) {
   if (side > 0 && round.distAbove < slDist) notes.push(`เลขกลม ${round.above} อยู่ใกล้ (ห่าง ${round.distAbove.toFixed(2)}) — ทองมักมีแรงขายรอที่เลขกลม เผื่อทยอยปิดบางส่วนก่อน`);
   if (side < 0 && round.distBelow < slDist) notes.push(`เลขกลม ${round.below} อยู่ใกล้ (ห่าง ${round.distBelow.toFixed(2)}) — มักมีแรงซื้อรับที่เลขกลม เผื่อทยอยปิดบางส่วนก่อน`);
 
-  const riskMoney = account * (riskPct / 100);
+  /*
+   * เพดานความเสี่ยงต่อไม้ต้องมาก่อนตัวคูณเสมอ
+   *
+   * ตัวคูณมีไว้เพิ่มไม้ตอนสัญญาณชัด แต่ต้องไม่มีทางที่มันจะพาความเสี่ยง
+   * ทะลุเพดานที่ตั้งไว้ ไม่ว่าคะแนนจะสวยแค่ไหน — ไม้เดียวไม่ควรตัดสินพอร์ต
+   */
+  const wantPct = riskPct * (riskMult > 0 ? riskMult : 1);
+  const usePct = Math.min(wantPct, maxRiskPct);
+  const riskMoney = account * (usePct / 100);
+  const riskCapped = wantPct > maxRiskPct + 1e-9;
+  if (riskMult > 1.001) {
+    notes.push(`เพิ่มขนาดไม้เป็น ${(usePct / riskPct).toFixed(2)} เท่าของปกติ `
+      + `(เสี่ยง ${usePct.toFixed(2)}% ของทุน แทน ${riskPct.toFixed(2)}%)`
+      + (riskCapped ? ` — ชนเพดาน ${maxRiskPct}% ต่อไม้แล้ว จึงไม่เพิ่มไปมากกว่านี้` : ''));
+  }
   const lotsRaw = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
 
   /*
@@ -2513,6 +2542,7 @@ function buildSetup(ctx, i, scored, opts = {}) {
     slDist, slAtr: slDist / atrVal, atr: atrVal, slManual,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
+    riskPctUsed: usePct, riskMult, riskCapped, maxRiskPct,
     riskActual, riskActualPct, rewardActual, sizeForced,
     notes,
     plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `
@@ -4147,7 +4177,7 @@ function clip(text, max) {
  * และเหตุผลสั้น ๆ — ไม่ใช่ยัดทุกอย่างลงไปจนอ่านบนมือถือไม่ไหว
  */
 function buildSignalMessage(o) {
-  const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [] } = o;
+  const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [], sizing = null } = o;
   const isTrade = action === 'buy' || action === 'sell';
   /* warn ต้องมีหัวเรื่องของตัวเอง ไม่งั้นข้อความ "ดึงราคาไม่ได้" จะพาดหัวว่า
      "ยังไม่มีสัญญาณ" ซึ่งอ่านแล้วเข้าใจว่าตลาดเงียบ ทั้งที่จริงคือระบบมองไม่เห็นตลาด */
@@ -4188,6 +4218,17 @@ function buildSignalMessage(o) {
      * "ตอนนี้ยังเข้าทันไหม" ซึ่งตอบไม่ได้ถ้าบอกมาแค่ราคาเข้าจุดเดียว
      * ตัวเลขนี้คือราคาที่แย่ที่สุดที่อัตราส่วนได้:เสีย ยังคุ้มอยู่ เลยไปแล้วให้ปล่อยผ่าน
      */
+    /*
+     * ทำไมไม้นี้ใหญ่กว่า/เท่าปกติ
+     *
+     * การเห็นขนาดไม้โตขึ้นโดยไม่รู้เหตุผล น่ากลัวกว่าไม่โตเลย
+     * และถ้าไม่โต ก็ควรรู้ว่าเพราะอะไร จะได้ไม่นึกว่าฟีเจอร์เสีย
+     */
+    if (sizing && sizing.boosted) {
+      fields.push({ name: `เพิ่มขนาดไม้ ${sizing.mult.toFixed(2)}× (สัญญาณชัด)`,
+        value: clip(sizing.why, 1000), inline: false });
+    }
+
     if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
       fields.push({ name: `ยังเข้าได้ถึง (ได้:เสีย ≥ ${setup.minRR})`,
         value: '`' + setup.entryLimit.toFixed(2) + '` — เลยราคานี้ไปแล้วอย่าไล่ราคา', inline: false });
@@ -6295,7 +6336,68 @@ function learnAndValidate(ctx, opts = {}) {
     learnTrades: inRun.stats.n, outBase: a, outNew: b, verdict };
 }
 
-  return {fitLogistic, logLoss, baselineLogLoss, toDataset, standardize, bootstrapSigns, learnWeights, probBetter, learnAndValidate};
+/**
+ * ควรเพิ่มขนาดไม้เมื่อสัญญาณ "ชัด" ไหม — และเพิ่มได้เท่าไร
+ *
+ * การเพิ่มไม้ตอนมั่นใจเป็นวิธีทำเงินที่ถูกต้อง *ถ้า* ความมั่นใจนั้นวัดได้จริง
+ * ถ้าไม่จริง มันคือการเร่งขาดทุนให้เร็วขึ้นเป็นเท่าตัว ซึ่งแย่กว่าไม่เพิ่มเลย
+ * คนส่วนใหญ่พังตรงนี้เพราะเชื่อความรู้สึกว่า "ไม้นี้ชัวร์"
+ *
+ * ที่นี่จึงไม่เชื่อคะแนนโดยอัตโนมัติ แต่ไปดูจากผลจริงในอดีตว่า
+ * ไม้คะแนนสูงเคยทำเงินได้ดีกว่าไม้ทั่วไปหรือเปล่า และดีกว่าแบบที่ไม่ใช่ความบังเอิญ
+ * (ใช้การสุ่มซ้ำแบบเดียวกับที่ใช้ตัดสินน้ำหนักปัจจัย)
+ *
+ * ถ้าหลักฐานไม่ผ่าน จะคืนตัวคูณ 1 พร้อมบอกเหตุผล ไม่ใช่เงียบ ๆ แล้วไม่ทำอะไร
+ * ผู้ใช้จะได้รู้ว่า "ยังไม่เพิ่มให้ เพราะอะไร" ไม่ใช่นึกว่าฟีเจอร์พัง
+ */
+function confidenceScale(bt, score, opts = {}) {
+  const threshold = opts.threshold;
+  /* 1.3 ไม่ใช่เลขสวย ๆ แต่มาจากการวัด: ที่ 1.5 เท่า มีไม้เข้าเงื่อนไขแค่ 108 จาก 2,772
+     ซึ่งน้อยเกินกว่าจะสรุปอะไรได้ ส่วน 1.3 ได้ 542 ไม้ พอให้ด่านตัดสินอย่างมีความหมาย */
+  const boostAt = opts.boostAt === undefined ? 1.3 : opts.boostAt;   // กี่เท่าของเกณฑ์ถึงเรียกว่าชัด
+  const maxMult = opts.maxMult === undefined ? 2 : opts.maxMult;     // เพิ่มไม้ได้มากสุดกี่เท่า
+  const minN = opts.minN === undefined ? 20 : opts.minN;             // ต้องมีตัวอย่างอย่างน้อยเท่าไร
+  const conf = opts.conf === undefined ? 0.9 : opts.conf;            // ต้องมั่นใจเท่าไรว่าดีกว่าจริง
+
+  const no = (why) => ({ mult: 1, boosted: false, why });
+
+  if (!Number.isFinite(threshold) || threshold <= 0) return no('ไม่รู้เกณฑ์สัญญาณ จึงไม่เพิ่มขนาดไม้');
+  if (!bt || !bt.trades || !bt.trades.length) {
+    return no('ยังไม่มีผลทดสอบย้อนหลัง — กดปุ่ม "ทดสอบย้อนหลัง" ก่อน แล้วระบบจะรู้ว่าคะแนนสูงคุ้มให้เพิ่มไม้ไหม');
+  }
+
+  const a = Math.abs(score);
+  const line = threshold * boostAt;
+  if (a < line) return no(`คะแนน ${a.toFixed(1)} ยังไม่ถึงระดับที่นับว่าชัด (ต้อง ${line.toFixed(0)} ขึ้นไป)`);
+
+  const strong = [];
+  const rest = [];
+  for (const t of bt.trades) (t.absScore >= line ? strong : rest).push(t.rMultiple);
+  if (strong.length < minN) return no(`ไม้คะแนน ≥ ${line.toFixed(0)} ในอดีตมีแค่ ${strong.length} ไม้ (ต้องการ ${minN}) ยังสรุปไม่ได้`);
+  if (rest.length < minN) return no(`ไม้คะแนนปกติมีแค่ ${rest.length} ไม้ ยังไม่มีอะไรให้เทียบ`);
+
+  const mean = (xs) => xs.reduce((sum, x) => sum + x, 0) / xs.length;
+  const mStrong = mean(strong);
+  const mRest = mean(rest);
+  const p = probBetter(rest, strong);
+
+  if (!(mStrong > mRest) || p === null || p < conf) {
+    return no(`คะแนนสูงยังไม่พิสูจน์ว่าให้ผลดีกว่า — ${mStrong.toFixed(2)}R เทียบ ${mRest.toFixed(2)}R `
+      + `มั่นใจ ${p === null ? '—' : (p * 100).toFixed(0) + '%'} (ต้องการ ${(conf * 100).toFixed(0)}%)`);
+  }
+
+  /* ยิ่งเกินเส้นมาก ยิ่งเพิ่มมาก แต่ชนเพดานที่ maxMult เสมอ
+     ไต่ขึ้นเต็มเพดานเมื่อเกินเส้นไปอีกครึ่งหนึ่งของเกณฑ์ */
+  const ramp = Math.min(1, (a - line) / (threshold * 0.5));
+  return {
+    mult: 1 + (maxMult - 1) * ramp,
+    boosted: true, p, n: strong.length, strongR: mStrong, restR: mRest, line,
+    why: `ไม้คะแนน ≥ ${line.toFixed(0)} ในอดีต ${strong.length} ไม้ ทำได้เฉลี่ย ${mStrong.toFixed(2)}R ต่อไม้ `
+      + `เทียบกับ ${mRest.toFixed(2)}R ของไม้ทั่วไป — มั่นใจ ${(p * 100).toFixed(0)}% ว่าไม่ใช่ความบังเอิญ`,
+  };
+}
+
+  return {fitLogistic, logLoss, baselineLogLoss, toDataset, standardize, bootstrapSigns, learnWeights, probBetter, learnAndValidate, confidenceScale};
 })();
 
 __m.adapt = (function () {
@@ -6659,7 +6761,7 @@ __m.app = (function () {
   const {MarketFeed, TF, mergeCandle} = __m.feed;
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal} = __m.signals;
   const {runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt} = __m.backtest;
-  const {learnAndValidate} = __m.learn;
+  const {learnAndValidate, confidenceScale} = __m.learn;
   const {autoTune, explainAdaptation} = __m.adapt;
   const {SOURCES, testAllSources} = __m.sources;
   const {fetchNews, economicCalendar, GOLD_DRIVERS} = __m.news;
@@ -6704,6 +6806,7 @@ const state = {
   ctx: null,
   scored: null,
   combined: null,
+  boost: null,       // ผลการตัดสินว่าควรเพิ่มขนาดไม้ไหม (ดู confidenceScale)
   hold: null,        // สัญญาณที่กำลังถืออยู่ (ดู holdSignal) — กันแผนกะพริบหายต่อหน้า
   setup: null,
   action: 'wait',
@@ -6731,6 +6834,7 @@ const settings = {
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
   // ค่าของโบรกเกอร์ — ระบบเดาแทนผู้ใช้ไม่ได้ ผิดเมื่อไหร่จำนวนไม้ผิดทั้งหมด
   contractSize: 100, minLot: 0.01, lotStep: 0.01, slManual: null,
+  boostOnStrong: true, boostMax: 2,   // เพิ่มไม้เมื่อสัญญาณชัด — เฉพาะเมื่อข้อมูลรองรับ
   smartSession: true, historyBars: 3000,
   learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
   adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
@@ -6837,6 +6941,8 @@ function buildStaticUI() {
   $('minLotInput').value = settings.minLot;
   $('lotStepInput').value = settings.lotStep;
   $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
+  $('boostToggle').checked = settings.boostOnStrong !== false;
+  $('boostMaxInput').value = settings.boostMax || 2;
   $('thresholdInput').value = settings.threshold;
   $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
@@ -6905,7 +7011,8 @@ function bindEvents() {
     chart.render();
   });
 
-  ['accountInput', 'riskInput', 'contractInput', 'minLotInput', 'lotStepInput', 'slManualInput']
+  ['accountInput', 'riskInput', 'contractInput', 'minLotInput', 'lotStepInput', 'slManualInput',
+   'boostToggle', 'boostMaxInput']
     .forEach((id) => $(id).addEventListener('input', () => {
       settings.account = +$('accountInput').value || 1000;
       settings.riskPct = +$('riskInput').value || 1;
@@ -6915,6 +7022,8 @@ function bindEvents() {
       /* ว่าง = ให้ระบบวางให้ ไม่ใช่ศูนย์ ซึ่งจะกลายเป็นจุดตัดขาดทุนที่ราคา 0 */
       const raw = $('slManualInput').value.trim();
       settings.slManual = raw === '' ? null : (Number.isFinite(+raw) ? +raw : null);
+      settings.boostOnStrong = $('boostToggle').checked;
+      settings.boostMax = +$('boostMaxInput').value || 2;
       saveSettings();
       if (state.scored) { rebuildSetup(); renderPlan(); }
     }));
@@ -7476,8 +7585,18 @@ function rebuildSetup() {
   if (!at || !state.ctx || !state.scored || !state.combined) { state.setup = null; return; }
   const score = state.combined.score;
   const side = state.hold ? state.hold.side : Math.sign(score);
+
+  /*
+   * เพิ่มขนาดไม้เมื่อสัญญาณชัด — แต่ต้องมีหลักฐานจากผลเทรดจริงในอดีตเท่านั้น
+   * ถ้ายังไม่เคยกดทดสอบย้อนหลัง หรือข้อมูลไม่รองรับ ตัวคูณจะเป็น 1 พร้อมเหตุผล
+   */
+  state.boost = settings.boostOnStrong === false
+    ? { mult: 1, boosted: false, why: 'ปิดการเพิ่มไม้อัตโนมัติไว้ในการตั้งค่า' }
+    : confidenceScale(state.bt, score, { threshold: settings.threshold, maxMult: settings.boostMax || 2 });
+
   state.setup = state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold) && side
     ? buildSetup(state.ctx, at.index, { ...state.scored, side }, {
+        riskMult: state.boost.mult,
         account: settings.account, riskPct: settings.riskPct, entryPrice: at.price, side,
         targetR: activeTargetR(),
         slAtrMult: settings.slAtr,
@@ -7523,6 +7642,12 @@ function renderPlan() {
   const ageMin = held ? Math.max(0, Math.round((Date.now() - held.startedAt) / 60000)) : null;
   box.innerHTML = `
     ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
+    ${state.boost ? `<div class="boost-box${state.boost.boosted ? ' on' : ''}">
+      ${state.boost.boosted
+        ? `<b>เพิ่มขนาดไม้ให้ ${state.boost.mult.toFixed(2)} เท่า</b> — สัญญาณนี้เข้าเกณฑ์ "ชัด" และมีหลักฐานรองรับ`
+        : '<b>ยังไม่เพิ่มขนาดไม้</b>'}
+      <span class="opt-why">${state.boost.why}</span>
+    </div>` : ''}
     ${held ? `<div class="sig-age${held.held ? ' fading' : ''}">
       สัญญาณนี้เกิดมา <b>${ageMin === 0 ? 'ไม่ถึง 1' : ageMin}</b> นาที · คะแนนแรงสุดที่เคยไปถึง <b>${held.peak.toFixed(1)}</b>
       ${held.held
@@ -7742,7 +7867,10 @@ function doBacktest() {
     renderBacktest();
     renderWalkForward();
     renderSignal();
-    renderPlan();   // แผนต้องใช้ค่าที่เพิ่งหาได้ ไม่ใช่รอรอบวิเคราะห์ถัดไป
+    /* ต้องคิดแผนใหม่ ไม่ใช่แค่วาดใหม่: ผลทดสอบที่เพิ่งได้คือหลักฐานที่ใช้ตัดสิน
+       ว่าจะเพิ่มขนาดไม้ไหม ถ้าวาดเฉย ๆ จะยังเห็น "ยังไม่มีผลทดสอบย้อนหลัง" ค้างอยู่ */
+    rebuildSetup();
+    renderPlan();
     if ($('togMarkers').checked) {
       chart.setData({ markers: state.bt.trades.map((t) => ({ index: t.index, side: t.side })) });
       chart.render();

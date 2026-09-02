@@ -8,7 +8,7 @@
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest, optimizeExits } from '../js/backtest.js';
-import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
+import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset, confidenceScale } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
 import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
@@ -1787,6 +1787,77 @@ section('26) จุดตัดขาดทุนของผู้ใช้ แ
   ok('ทุน 50 บัญชีสัญญาเล็ก → เสี่ยงได้ตามที่ตั้งไว้จริง', !tinyCent.sizeForced,
     `เสี่ยง ${tinyCent.riskActual.toFixed(2)} จากที่ตั้งไว้ 0.50`);
   ok('บัญชีสัญญาเล็กไม่ต้องขึ้นคำเตือนทุนไม่พอ', !tinyCent.notes.some((n) => /ทุนไม่พอ/.test(n)));
+}
+
+// ── เพิ่มไม้ตอนสัญญาณชัด ต้องมีหลักฐาน ไม่ใช่ความรู้สึก ────────────
+section('27) เพิ่มขนาดไม้เมื่อสัญญาณชัด — ต้องพิสูจน์ได้ก่อน');
+{
+  const TH = 40;
+  const LINE = TH * 1.5;   // 60
+  /* สร้างชุดไม้ปลอมขึ้นมาคุมตัวแปรได้ทั้งหมด จะได้รู้ว่าด่านทำงานตามที่ตั้งใจจริง */
+  const mk = (n, absScore, rs) => Array.from({ length: n }, (_, i) => ({ absScore, rMultiple: rs[i % rs.length] }));
+
+  /* 1. ไม่มีหลักฐาน = ไม่เพิ่ม */
+  ok('ไม่มีผลทดสอบย้อนหลัง → ไม่เพิ่มไม้',
+    confidenceScale(null, 90, { threshold: TH }).mult === 1);
+  ok('ไม่รู้เกณฑ์ → ไม่เพิ่มไม้',
+    confidenceScale({ trades: [] }, 90, {}).mult === 1);
+
+  /* 2. คะแนนยังไม่ถึงระดับที่นับว่าชัด = ไม่เพิ่ม แม้ข้อมูลจะสวย */
+  {
+    const bt = { trades: [...mk(60, 70, [2, 2, 2, -1]), ...mk(60, 45, [-1, -1, 1, -1])] };
+    const r = confidenceScale(bt, 50, { threshold: TH });
+    ok('คะแนนต่ำกว่าเส้น → ไม่เพิ่ม', r.mult === 1 && /ยังไม่ถึงระดับ/.test(r.why), r.why);
+  }
+
+  /* 3. ตัวอย่างน้อยเกินไป = ไม่เพิ่ม แม้ผลจะดูดีมาก */
+  {
+    const bt = { trades: [...mk(5, 70, [5, 5, 5]), ...mk(60, 45, [-1, -1, 1, -1])] };
+    const r = confidenceScale(bt, 70, { threshold: TH });
+    ok('ไม้คะแนนสูงมีน้อยเกินไป → ไม่เพิ่ม แม้ตัวเลขจะสวย', r.mult === 1 && /ยังสรุปไม่ได้/.test(r.why), r.why);
+  }
+
+  /* 4. คะแนนสูงไม่ได้ดีกว่าจริง = ไม่เพิ่ม — นี่คือด่านที่สำคัญที่สุด */
+  {
+    const same = [1.5, -1, -1, 0.8, -1, 2, -1, -1];
+    const bt = { trades: [...mk(80, 70, same), ...mk(80, 45, same)] };
+    const r = confidenceScale(bt, 70, { threshold: TH });
+    ok('คะแนนสูงให้ผลพอ ๆ กัน → ไม่เพิ่ม', r.mult === 1 && /ยังไม่พิสูจน์/.test(r.why), r.why);
+  }
+  {
+    // แย่กว่าด้วยซ้ำ ยิ่งต้องไม่เพิ่ม
+    const bt = { trades: [...mk(80, 70, [-1, -1, -1, 1]), ...mk(80, 45, [2, 2, -1, 1])] };
+    const r = confidenceScale(bt, 70, { threshold: TH });
+    ok('คะแนนสูงให้ผลแย่กว่า → ไม่เพิ่มเด็ดขาด', r.mult === 1, r.why);
+  }
+
+  /* 5. ดีกว่าจริงและชัดเจน = เพิ่มได้ */
+  {
+    const bt = { trades: [...mk(120, 70, [3, 3, 2.5, -1, 3, 2]), ...mk(120, 45, [-1, -1, -1, 1, -1, -1])] };
+    const r = confidenceScale(bt, 70, { threshold: TH });
+    ok('คะแนนสูงดีกว่าชัดเจน → เพิ่มไม้', r.boosted === true && r.mult > 1, r.why);
+    ok('เหตุผลมีตัวเลขจริงให้ตรวจสอบ', /R ต่อไม้/.test(r.why) && /มั่นใจ/.test(r.why), r.why);
+
+    const stronger = confidenceScale(bt, 200, { threshold: TH });
+    ok('คะแนนยิ่งสูง ยิ่งเพิ่มมาก', stronger.mult > r.mult);
+    ok('แต่ไม่เกินเพดานที่ตั้งไว้', stronger.mult <= 2 + 1e-9, `ได้ ${stronger.mult}`);
+  }
+
+  /* 6. เพดานความเสี่ยงต่อไม้ต้องชนะตัวคูณเสมอ */
+  {
+    const c2 = makeCandles(400, 33);
+    const ctx2 = buildContext(c2, DEFAULT_CFG);
+    const j = c2.length - 1;
+    const sc2 = scoreAt(ctx2, j);
+    const opts = { account: 10000, riskPct: 2, entryPrice: c2[j].c, side: 1, contractSize: 100 };
+    const plain = buildSetup(ctx2, j, { ...sc2, side: 1 }, opts);
+    const boost = buildSetup(ctx2, j, { ...sc2, side: 1 }, { ...opts, riskMult: 5 });
+    ok('ตัวคูณ 5 เท่าไม่ทำให้ทะลุเพดาน 3% ต่อไม้', boost.riskPctUsed <= 3 + 1e-9, `ได้ ${boost.riskPctUsed}%`);
+    ok('ระบบรู้ตัวว่าชนเพดาน', boost.riskCapped === true);
+    ok('ยังเพิ่มขึ้นจริงเมื่อเทียบกับปกติ', boost.riskActual > plain.riskActual);
+    ok('บอกผู้ใช้ว่าเพิ่มไม้ให้แล้วเท่าไร', boost.notes.some((n) => /เพิ่มขนาดไม้/.test(n)));
+    ok('ไม่ใส่ตัวคูณ → ไม่มีข้อความเรื่องเพิ่มไม้', !plain.notes.some((n) => /เพิ่มขนาดไม้/.test(n)));
+  }
 }
 
 // ── สัญญาณกะพริบจนกดตามไม่ทัน ────────────────────────────────

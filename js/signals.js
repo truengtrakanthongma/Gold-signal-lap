@@ -385,6 +385,8 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
     minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
     slPrice = null,        // ผู้ใช้กำหนดจุดตัดขาดทุนเอง (ชนะค่าที่ระบบคำนวณ)
+    riskMult = 1,          // ตัวคูณความเสี่ยงเมื่อสัญญาณชัด (ดู confidenceScale)
+    maxRiskPct = cfg.maxRiskPct === undefined ? 3 : cfg.maxRiskPct,
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
     slAtrMult = null,      // ความกว้าง SL ที่หามาจากสถิติ
@@ -461,7 +463,21 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   if (side > 0 && round.distAbove < slDist) notes.push(`เลขกลม ${round.above} อยู่ใกล้ (ห่าง ${round.distAbove.toFixed(2)}) — ทองมักมีแรงขายรอที่เลขกลม เผื่อทยอยปิดบางส่วนก่อน`);
   if (side < 0 && round.distBelow < slDist) notes.push(`เลขกลม ${round.below} อยู่ใกล้ (ห่าง ${round.distBelow.toFixed(2)}) — มักมีแรงซื้อรับที่เลขกลม เผื่อทยอยปิดบางส่วนก่อน`);
 
-  const riskMoney = account * (riskPct / 100);
+  /*
+   * เพดานความเสี่ยงต่อไม้ต้องมาก่อนตัวคูณเสมอ
+   *
+   * ตัวคูณมีไว้เพิ่มไม้ตอนสัญญาณชัด แต่ต้องไม่มีทางที่มันจะพาความเสี่ยง
+   * ทะลุเพดานที่ตั้งไว้ ไม่ว่าคะแนนจะสวยแค่ไหน — ไม้เดียวไม่ควรตัดสินพอร์ต
+   */
+  const wantPct = riskPct * (riskMult > 0 ? riskMult : 1);
+  const usePct = Math.min(wantPct, maxRiskPct);
+  const riskMoney = account * (usePct / 100);
+  const riskCapped = wantPct > maxRiskPct + 1e-9;
+  if (riskMult > 1.001) {
+    notes.push(`เพิ่มขนาดไม้เป็น ${(usePct / riskPct).toFixed(2)} เท่าของปกติ `
+      + `(เสี่ยง ${usePct.toFixed(2)}% ของทุน แทน ${riskPct.toFixed(2)}%)`
+      + (riskCapped ? ` — ชนเพดาน ${maxRiskPct}% ต่อไม้แล้ว จึงไม่เพิ่มไปมากกว่านี้` : ''));
+  }
   const lotsRaw = slDist > 0 ? riskMoney / (slDist * contractSize) : 0;
 
   /*
@@ -543,6 +559,7 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     slDist, slAtr: slDist / atrVal, atr: atrVal, slManual,
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
+    riskPctUsed: usePct, riskMult, riskCapped, maxRiskPct,
     riskActual, riskActualPct, rewardActual, sizeForced,
     notes,
     plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `

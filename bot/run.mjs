@@ -17,6 +17,7 @@
 
 import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } from '../js/signals.js';
 import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
+import { confidenceScale } from '../js/learn.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
 import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
@@ -35,6 +36,8 @@ const CFG = {
   webhook: process.env.DISCORD_WEBHOOK_URL || '',
   dryRun: process.env.BOT_DRY_RUN === '1',
   testPing: process.env.BOT_TEST_PING === '1',
+  /* เพิ่มขนาดไม้เมื่อสัญญาณชัด — ตั้งเป็น 1 เพื่อปิด */
+  boostMax: +(process.env.BOT_BOOST_MAX || 2),
 };
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -104,10 +107,15 @@ function statusBlocks(ctx, scored, strong, noSetup) {
 /** ข้อมูลประกอบที่ทั้งสัญญาณจริงและรายงานสถานะใช้ร่วมกัน */
 async function gatherContext(ctx, scored, key, label) {
   // สถิติย้อนหลังของกรอบเวลานี้ ใช้บอกอัตราชนะที่เคยเกิดจริง
+  // และใช้ตัดสินด้วยว่าไม้คะแนนสูงเคยทำเงินได้ดีกว่าจริงหรือเปล่า
   let prob = null;
+  let boost = { mult: 1, boosted: false, why: 'คำนวณสถิติย้อนหลังไม่ได้ จึงไม่เพิ่มขนาดไม้' };
   try {
     const bt = runBacktest(ctx, { threshold: CFG.threshold, exitStyle: 'full' });
     prob = probabilityFor(scored.score, bt);
+    boost = CFG.boostMax > 1
+      ? confidenceScale(bt, scored.score, { threshold: CFG.threshold, maxMult: CFG.boostMax })
+      : { mult: 1, boosted: false, why: 'ปิดการเพิ่มขนาดไม้ไว้ (BOT_BOOST_MAX = 1)' };
   } catch (e) { log('คำนวณสถิติย้อนหลังไม่ได้:', e.message); }
 
   // บรรยากาศข่าว (ถ้าดึงได้) — ไม่ใช่เงื่อนไขบังคับ แค่ใส่เป็นบริบท
@@ -117,20 +125,21 @@ async function gatherContext(ctx, scored, key, label) {
     if (news.ok && news.climate.n) newsLine = `${news.climate.label} (${news.climate.n} ข่าว จาก ${news.label})`;
   } catch (e) { /* ข่าวดึงไม่ได้ไม่ควรทำให้สัญญาณราคาหายไป */ }
 
-  return { prob, newsLine, inst: instrumentOf(key, ''), label };
+  return { prob, boost, newsLine, inst: instrumentOf(key, ''), label };
 }
 
 /** ข้อความสัญญาณจริง — คืน null เมื่อวางแผนเทรดไม่ได้ */
 function signalMessage(ctx, i, scored, side, last, extra) {
   const setup = buildSetup(ctx, i, { ...scored, side }, {
     account: CFG.account, riskPct: CFG.riskPct, entryPrice: last.c, side,
+    riskMult: extra.boost ? extra.boost.mult : 1,
   });
   if (!setup) return null;
   return buildSignalMessage({
     action: side > 0 ? 'buy' : 'sell',
     score: scored.score, price: last.c, tf: CFG.interval,
     instrument: `${extra.inst.name} · ${extra.label}`,
-    setup, prob: extra.prob,
+    setup, prob: extra.prob, sizing: extra.boost,
     reasons: topFactors(scored, side, extra.newsLine),
   });
 }

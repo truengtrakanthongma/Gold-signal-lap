@@ -120,7 +120,7 @@ function clip(text, max) {
  * และเหตุผลสั้น ๆ — ไม่ใช่ยัดทุกอย่างลงไปจนอ่านบนมือถือไม่ไหว
  */
 export function buildSignalMessage(o) {
-  const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [] } = o;
+  const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [], sizing = null } = o;
   const isTrade = action === 'buy' || action === 'sell';
   /* warn ต้องมีหัวเรื่องของตัวเอง ไม่งั้นข้อความ "ดึงราคาไม่ได้" จะพาดหัวว่า
      "ยังไม่มีสัญญาณ" ซึ่งอ่านแล้วเข้าใจว่าตลาดเงียบ ทั้งที่จริงคือระบบมองไม่เห็นตลาด */
@@ -161,6 +161,17 @@ export function buildSignalMessage(o) {
      * "ตอนนี้ยังเข้าทันไหม" ซึ่งตอบไม่ได้ถ้าบอกมาแค่ราคาเข้าจุดเดียว
      * ตัวเลขนี้คือราคาที่แย่ที่สุดที่อัตราส่วนได้:เสีย ยังคุ้มอยู่ เลยไปแล้วให้ปล่อยผ่าน
      */
+    /*
+     * ทำไมไม้นี้ใหญ่กว่า/เท่าปกติ
+     *
+     * การเห็นขนาดไม้โตขึ้นโดยไม่รู้เหตุผล น่ากลัวกว่าไม่โตเลย
+     * และถ้าไม่โต ก็ควรรู้ว่าเพราะอะไร จะได้ไม่นึกว่าฟีเจอร์เสีย
+     */
+    if (sizing && sizing.boosted) {
+      fields.push({ name: `เพิ่มขนาดไม้ ${sizing.mult.toFixed(2)}× (สัญญาณชัด)`,
+        value: clip(sizing.why, 1000), inline: false });
+    }
+
     if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
       fields.push({ name: `ยังเข้าได้ถึง (ได้:เสีย ≥ ${setup.minRR})`,
         value: '`' + setup.entryLimit.toFixed(2) + '` — เลยราคานี้ไปแล้วอย่าไล่ราคา', inline: false });
