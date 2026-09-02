@@ -1789,6 +1789,67 @@ section('26) จุดตัดขาดทุนของผู้ใช้ แ
   ok('บัญชีสัญญาเล็กไม่ต้องขึ้นคำเตือนทุนไม่พอ', !tinyCent.notes.some((n) => /ทุนไม่พอ/.test(n)));
 }
 
+// ── ค่าที่กรอกผิดต้องไม่กลายเป็นตัวเลขพังบนหน้าจอ ─────────────────
+section('28) ค่าที่ใส่ผิดต้องไม่ทำให้ได้ตัวเลขที่ส่งคำสั่งไม่ได้');
+{
+  /*
+   * ค่าพวกนี้มาจากช่องกรอกของผู้ใช้และตัวแปรของ GitHub Actions ซึ่งพิมพ์ผิดได้
+   * เจอมาแล้วตอนไล่ตรวจ: BOT_ACCOUNT ที่พิมพ์ผิดให้ NaN ทั้งแผน
+   * ขนาดสัญญา 0 ให้จำนวนไม้เป็นอนันต์ และติดลบให้ความเสี่ยงติดลบ
+   * ตัวเลขแบบนั้นถ้าไปถึง Discord = ผู้ใช้ส่งคำสั่งผิดด้วยเงินจริง
+   */
+  const c3 = makeCandles(400, 51);
+  const ctx3 = buildContext(c3, DEFAULT_CFG);
+  const k = c3.length - 1;
+  const sc3 = scoreAt(ctx3, k);
+  const price = c3[k].c;
+  const fields = ['entry', 'sl', 'tpMain', 'slDist', 'lots', 'lotsRaw', 'riskMoney',
+    'riskActual', 'rewardActual', 'rrNow', 'entryLimit', 'oz', 'riskPctUsed'];
+
+  const sane = (label, extra) => {
+    const st = buildSetup(ctx3, k, { ...sc3, side: 1 },
+      { account: 1000, riskPct: 1, entryPrice: price, side: 1, ...extra });
+    if (st === null) { ok(`${label} → ปฏิเสธอย่างสุภาพ`, true); return null; }
+    const bad = fields.filter((f) => st[f] !== undefined && !Number.isFinite(st[f]));
+    ok(`${label} → ทุกตัวเลขยังเป็นจำนวนจริง`, bad.length === 0, bad.join(', '));
+    ok(`${label} → ไม่มีค่าติดลบที่ไม่ควรติดลบ`,
+      st.lots >= 0 && st.riskActual >= 0 && st.slDist > 0,
+      `lots ${st.lots} risk ${st.riskActual} slDist ${st.slDist}`);
+    return st;
+  };
+
+  sane('ทุนเป็น NaN', { account: NaN });
+  sane('ทุนติดลบ', { account: -500 });
+  sane('ความเสี่ยงเป็น NaN', { riskPct: NaN });
+  sane('ขนาดสัญญาเป็น 0', { contractSize: 0 });
+  sane('ขนาดสัญญาติดลบ', { contractSize: -100 });
+  sane('ขั้นล็อตเป็น 0', { lotStep: 0 });
+  sane('ไม้เล็กสุดติดลบ', { minLot: -1 });
+  sane('ตัวคูณเป็น NaN', { riskMult: NaN });
+  sane('SL ที่ใส่เองเป็น NaN', { slPrice: NaN });
+  sane('SL เท่ากับราคาเข้าพอดี', { slPrice: price });
+
+  /* เปลี่ยนค่าให้แล้วต้องบอก ไม่ใช่เปลี่ยนเงียบ ๆ */
+  {
+    const st = buildSetup(ctx3, k, { ...sc3, side: 1 },
+      { account: NaN, riskPct: 1, entryPrice: price, side: 1 });
+    ok('ค่าที่ใช้ไม่ได้ → เตือนผู้ใช้ว่ากรอกผิด', st.notes.some((n) => /ใช้ไม่ได้/.test(n)),
+      st.notes.join(' | ') || 'ไม่มีคำเตือน');
+  }
+  {
+    const good = buildSetup(ctx3, k, { ...sc3, side: 1 },
+      { account: 1000, riskPct: 1, entryPrice: price, side: 1 });
+    ok('ค่าปกติ → ไม่มีคำเตือนกวนใจ', !good.notes.some((n) => /ใช้ไม่ได้/.test(n)));
+  }
+
+  /* เกณฑ์ที่พังต้องไม่กลายเป็น "ผ่านทุกอย่าง" */
+  ok('holdSignal: คะแนน NaN → ไม่มีสัญญาณ', holdSignal(null, NaN, 40) === null);
+  ok('holdSignal: เกณฑ์ 0 → ไม่มีสัญญาณ (ไม่ใช่ผ่านหมด)', holdSignal(null, 5, 0) === null);
+  ok('holdSignal: เกณฑ์ติดลบ → ไม่มีสัญญาณ', holdSignal(null, 5, -40) === null);
+  ok('holdSignal: คะแนน Infinity → ไม่มีสัญญาณ', holdSignal(null, Infinity, 40) === null);
+  ok('holdSignal: ค่าปกติยังทำงานเหมือนเดิม', holdSignal(null, 45, 40) !== null);
+}
+
 // ── เพิ่มไม้ตอนสัญญาณชัด ต้องมีหลักฐาน ไม่ใช่ความรู้สึก ────────────
 section('27) เพิ่มขนาดไม้เมื่อสัญญาณชัด — ต้องพิสูจน์ได้ก่อน');
 {

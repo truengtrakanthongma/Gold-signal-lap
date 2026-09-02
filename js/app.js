@@ -1337,7 +1337,9 @@ function renderNews() {
     return `<article class="wn-item">
       <div class="wn-head">
         <span class="wn-dir" style="color:${dirCol};border-color:${dirCol}">${dirLabel}</span>
-        <a href="${it.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(it.title)}</a>
+        ${safeUrl(it.url)
+          ? `<a href="${safeUrl(it.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(it.title)}</a>`
+          : escapeHtml(it.title)}
       </div>
       <div class="wn-src">${escapeHtml(it.source || '')}${it.at ? ' · ' + AGO(Date.now() - it.at) : ''}${
         a.conflicted ? ' · <b style="color:var(--warn)">ตัวขับขัดกันเอง ทิศไม่ชัด</b>' : ''}</div>
@@ -1346,6 +1348,23 @@ function renderNews() {
         ${d.why}</div>`).join('')}
     </article>`;
   }).join('');
+}
+
+/**
+ * ลิงก์จากภายนอกต้องถูกตรวจก่อนใส่ลง href — คืนค่าว่างถ้าไม่ปลอดภัย
+ *
+ * ข่าวมาจาก Reddit และ GDELT ซึ่งใครก็ส่ง URL เข้าไปได้
+ * ถ้าเอาใส่ href ตรง ๆ จะเปิดช่องสองทาง:
+ *   1. อัญประกาศใน URL ทำให้หลุดออกจากแอตทริบิวต์ แล้วแทรก HTML ของตัวเองได้
+ *   2. สคีมอย่าง javascript: ทำให้คลิกเดียวรันโค้ดของคนอื่นในหน้าเรา
+ * จึงอนุญาตเฉพาะ http/https และหนีอักขระเสมอ
+ */
+function safeUrl(u) {
+  try {
+    const parsed = new URL(String(u));
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return escapeHtml(parsed.href);
+  } catch (e) { return ''; }
 }
 
 /** ข้อความจากภายนอกต้องหนีอักขระก่อนใส่ลงหน้าเว็บเสมอ */
@@ -1807,10 +1826,10 @@ function renderContextTab() {
 
   const nfp = nextNFP(now);
   $('newsBox').innerHTML = [
-    risk.blocked ? `<div class="news-item"><span class="badge hot">กำลังอยู่ในช่วงข่าว</span><span>${risk.active.map((e) => e.title).join(', ')}</span></div>` : '',
+    risk.blocked ? `<div class="news-item"><span class="badge hot">กำลังอยู่ในช่วงข่าว</span><span>${risk.active.map((e) => escapeHtml(e.title)).join(', ')}</span></div>` : '',
     `<div class="news-item"><span>US Non-Farm Payrolls (คำนวณอัตโนมัติ)</span><span>${nfp ? thTime(nfp) : '—'}</span></div>`,
     ...state.events.slice().sort((a, b) => new Date(a.time) - new Date(b.time)).map((e, i) => `
-      <div class="news-item"><span>${e.title}</span><span>${thTime(e.time)} <button class="btn tiny-btn" data-ev="${i}">ลบ</button></span></div>`),
+      <div class="news-item"><span>${escapeHtml(e.title)}</span><span>${thTime(e.time)} <button class="btn tiny-btn" data-ev="${i}">ลบ</button></span></div>`),
   ].join('');
   $('newsBox').querySelectorAll('[data-ev]').forEach((b) => b.addEventListener('click', () => {
     const idx = +b.dataset.ev;

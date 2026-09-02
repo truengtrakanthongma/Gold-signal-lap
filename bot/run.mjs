@@ -144,7 +144,38 @@ function signalMessage(ctx, i, scored, side, last, extra) {
   });
 }
 
+/*
+ * ตรวจค่าตั้งค่าก่อนเริ่มทำงาน
+ *
+ * ค่าพวกนี้มาจาก Variables ของ GitHub ซึ่งพิมพ์ผิดได้ง่าย เช่นใส่ "1,000"
+ * แล้ว +"1,000" ได้ NaN ผลคือ Math.abs(score) >= NaN เป็นเท็จตลอด
+ * บอทจึงไม่เตือนเลยสักครั้ง โดยที่ทุกรอบขึ้นติกเขียวสวยงาม
+ * ความเงียบแบบนั้นแยกไม่ออกจาก "ตลาดยังไม่มีจังหวะ" — เสียเวลาเป็นวันกว่าจะรู้
+ */
+function checkConfig() {
+  const bad = [];
+  const pos = (name, v, envName) => { if (!Number.isFinite(v) || v <= 0) bad.push(`${envName} (${name}) = ${JSON.stringify(process.env[envName])} → ใช้เป็นตัวเลขไม่ได้`); };
+  pos('เกณฑ์คะแนน', CFG.threshold, 'BOT_THRESHOLD');
+  pos('ทุน', CFG.account, 'BOT_ACCOUNT');
+  pos('ความเสี่ยงต่อไม้', CFG.riskPct, 'BOT_RISK_PCT');
+  pos('จำนวนแท่งที่ดึง', CFG.bars, 'BOT_BARS');
+  if (!Number.isFinite(CFG.boostMax) || CFG.boostMax < 1) {
+    bad.push(`BOT_BOOST_MAX = ${JSON.stringify(process.env.BOT_BOOST_MAX)} → ต้องเป็นตัวเลขตั้งแต่ 1 ขึ้นไป (1 = ปิดการเพิ่มไม้)`);
+  }
+  const unknown = CFG.sources.filter((k) => !SOURCES[k]);
+  if (unknown.length === CFG.sources.length) bad.push(`BOT_SOURCES = ไม่รู้จักสักแหล่ง (${CFG.sources.join(', ')})`);
+  return bad;
+}
+
 async function main() {
+  const badCfg = checkConfig();
+  if (badCfg.length) {
+    log('ตั้งค่าผิด จึงไม่เริ่มทำงาน — ถ้าปล่อยผ่าน บอทจะเงียบทั้งวันโดยไม่มีอะไรฟ้อง:');
+    for (const b of badCfg) log('  •', b);
+    log('แก้ที่ Settings → Secrets and variables → Actions → Variables');
+    process.exit(1);
+  }
+
   const problem = CFG.dryRun ? null : webhookProblem(CFG.webhook);
   if (problem) {
     log(`ใช้ DISCORD_WEBHOOK_URL ไม่ได้: ${problem}`);

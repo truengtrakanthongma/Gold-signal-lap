@@ -365,6 +365,9 @@ export function combineTimeframes(entry, htf1, htf2) {
 export function holdSignal(prev, score, threshold, opts = {}) {
   const releaseFrac = opts.releaseFrac === undefined ? 0.75 : opts.releaseFrac;
   const now = opts.now === undefined ? Date.now() : opts.now;
+  /* คะแนนหรือเกณฑ์ที่ไม่ใช่จำนวนจริงบวก แปลว่าอะไรบางอย่างพังต้นทาง
+     ปลอดภัยที่สุดคือถือว่าไม่มีสัญญาณ ไม่ใช่ปล่อยให้ทุกอย่างผ่านเกณฑ์ 0 */
+  if (!Number.isFinite(score) || !Number.isFinite(threshold) || threshold <= 0) return null;
   const side = Math.sign(score);
   const abs = Math.abs(score);
   const start = () => (abs >= threshold ? { side, startedAt: now, peak: abs, held: false } : null);
@@ -381,11 +384,12 @@ export function holdSignal(prev, score, threshold, opts = {}) {
 export function buildSetup(ctx, i, scored, opts = {}) {
   const cfg = ctx.cfg;
   const {
-    account = 1000, riskPct = 1, contractSize = 100, // XAU/USD 1 lot = 100 ออนซ์
-    lotStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
-    minLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
+    account: rawAccount = 1000, riskPct: rawRisk = 1,
+    contractSize: rawContract = 100,   // XAU/USD 1 lot = 100 ออนซ์
+    lotStep: rawStep = cfg.lotStep === undefined ? 0.01 : cfg.lotStep,
+    minLot: rawMinLot = cfg.minLot === undefined ? 0.01 : cfg.minLot,
     slPrice = null,        // ผู้ใช้กำหนดจุดตัดขาดทุนเอง (ชนะค่าที่ระบบคำนวณ)
-    riskMult = 1,          // ตัวคูณความเสี่ยงเมื่อสัญญาณชัด (ดู confidenceScale)
+    riskMult: rawMult = 1, // ตัวคูณความเสี่ยงเมื่อสัญญาณชัด (ดู confidenceScale)
     maxRiskPct = cfg.maxRiskPct === undefined ? 3 : cfg.maxRiskPct,
     side = scored.side, entryPrice = ctx.candles[i].c,
     targetR = null,        // เป้าหมายหลักที่หามาจากสถิติ (ถ้าไม่ส่งมาใช้ 2R ตามเดิม)
@@ -394,6 +398,30 @@ export function buildSetup(ctx, i, scored, opts = {}) {
   if (!side) return null;
   const atrVal = scored.atr || ctx.atr[i];
   const notes = [];
+
+  /*
+   * กรองค่าที่รับเข้ามาก่อนเอาไปคูณหาร
+   *
+   * ค่าพวกนี้มาจากช่องกรอกของผู้ใช้และจากตัวแปรของ GitHub Actions
+   * ซึ่งพิมพ์ผิดได้ทั้งคู่ พิมพ์ "abc" ใน BOT_ACCOUNT ก็ได้ NaN
+   * ใส่ขนาดสัญญาเป็น 0 ก็ได้จำนวนไม้เป็นอนันต์ ใส่ติดลบก็ได้ความเสี่ยงติดลบ
+   * ตัวเลขพวกนั้นถ้าหลุดไปถึงหน้าจอหรือเข้า Discord = ส่งคำสั่งผิดด้วยเงินจริง
+   *
+   * เปลี่ยนกลับเป็นค่าที่ปลอดภัยแล้วบอกให้รู้ ไม่ใช่เปลี่ยนเงียบ ๆ
+   * เพราะการเงียบทำให้ผู้ใช้ไม่รู้ว่าตัวเองกรอกผิด
+   */
+  const clean = (v, fallback, label, needPositive) => {
+    const ok = Number.isFinite(v) && (needPositive ? v > 0 : v >= 0);
+    if (ok) return v;
+    notes.push(`⚠ ค่า "${label}" ที่ใส่มาใช้ไม่ได้ (${v}) — ใช้ ${fallback} แทน ตรวจการตั้งค่าอีกครั้ง`);
+    return fallback;
+  };
+  const account = clean(rawAccount, 0, 'ทุน', false);
+  const riskPct = clean(rawRisk, 0, 'ความเสี่ยงต่อไม้ (%)', false);
+  const contractSize = clean(rawContract, 100, 'ขนาดสัญญา (ออนซ์ต่อล็อต)', true);
+  const lotStep = clean(rawStep, 0.01, 'ขั้นของขนาดไม้', true);
+  const minLot = clean(rawMinLot, 0.01, 'ไม้เล็กที่สุด', true);
+  const riskMult = Number.isFinite(rawMult) && rawMult > 0 ? rawMult : 1;
 
   // SL: ใช้ค่าที่กว้างกว่าระหว่าง ATR กับใต้/เหนือ swing ล่าสุด แต่ไม่เกินเพดาน
   let slDist = atrVal * (slAtrMult || cfg.slAtrMult);
@@ -469,7 +497,7 @@ export function buildSetup(ctx, i, scored, opts = {}) {
    * ตัวคูณมีไว้เพิ่มไม้ตอนสัญญาณชัด แต่ต้องไม่มีทางที่มันจะพาความเสี่ยง
    * ทะลุเพดานที่ตั้งไว้ ไม่ว่าคะแนนจะสวยแค่ไหน — ไม้เดียวไม่ควรตัดสินพอร์ต
    */
-  const wantPct = riskPct * (riskMult > 0 ? riskMult : 1);
+  const wantPct = riskPct * riskMult;
   const usePct = Math.min(wantPct, maxRiskPct);
   const riskMoney = account * (usePct / 100);
   const riskCapped = wantPct > maxRiskPct + 1e-9;

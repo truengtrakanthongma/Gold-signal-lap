@@ -374,7 +374,7 @@ export class Chart {
     let started = false;
     for (let i = start; i < end; i++) {
       const v = series[i];
-      if (v === null || v === undefined) { started = false; continue; }
+      if (!Number.isFinite(v)) { started = false; continue; }
       if (started && breakAt && breakAt(i)) started = false;
       const x = this.xI(i), y = this.yP(v);
       if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
@@ -390,6 +390,17 @@ export class Chart {
     return new Date(a.t).getUTCDate() !== new Date(b.t).getUTCDate();
   }
 
+  /*
+   * ค่าที่ "ไม่มี" ในชุดตัวชี้วัดมาได้สามแบบ: null (ยังคำนวณไม่ได้),
+   * undefined (ดัชนีเกินความยาวของชุด) และ NaN (คำนวณแล้วพัง)
+   *
+   * โค้ดเดิมเช็กแค่ null ตัว undefined จึงหลุดผ่านไปเรียก .toFixed แล้วโยน error
+   * เกิดจริงตอนข้อมูลอัปเดต: แท่งเทียนยาวขึ้นก่อนที่ตัวชี้วัดจะคำนวณเสร็จ
+   * ชั่วขณะนั้นดัชนีสุดท้ายของแท่งจึงเกินความยาวของ rsi อยู่ไม่กี่มิลลิวินาที
+   * ตรวจพบตอนไล่กดหน้าเว็บจริง — โยนออกมา 40 ครั้งในการใช้งานปกติ
+   *
+   * Number.isFinite ครอบทั้งสามแบบในเงื่อนไขเดียว จึงใช้ตัวนี้ทุกที่แทน
+   */
   _drawSub(key, top, h, start, end, x0, x1) {
     const g = this.g;
     g.strokeStyle = COL.grid;
@@ -425,14 +436,14 @@ export class Chart {
       let st = false;
       for (let i = start; i < end; i++) {
         const v = this.ind.rsi[i];
-        if (v === null) { st = false; continue; }
+        if (!Number.isFinite(v)) { st = false; continue; }
         const px = this.xI(i), py = y(v);
         if (!st) { g.moveTo(px, py); st = true; } else g.lineTo(px, py);
       }
       g.stroke();
       const lastRsi = this.ind.rsi[end - 1];
       g.fillStyle = COL.text;
-      g.fillText(`RSI(14) ${lastRsi !== null ? lastRsi.toFixed(1) : '-'}`, x0 + 4, top + 11);
+      g.fillText(`RSI(14) ${Number.isFinite(lastRsi) ? lastRsi.toFixed(1) : '-'}`, x0 + 4, top + 11);
       return;
     }
 
@@ -440,16 +451,16 @@ export class Chart {
       let mmax = 1e-9;
       for (let i = start; i < end; i++) {
         for (const v of [this.ind.macd.line[i], this.ind.macd.signal[i], this.ind.macd.hist[i]]) {
-          if (v !== null) mmax = Math.max(mmax, Math.abs(v));
+          if (Number.isFinite(v)) mmax = Math.max(mmax, Math.abs(v));
         }
       }
       const y = (v) => top + 6 + inner / 2 - (v / mmax) * (inner / 2);
       g.strokeStyle = COL.grid; g.beginPath(); g.moveTo(x0, y(0)); g.lineTo(x1, y(0)); g.stroke();
       for (let i = start; i < end; i++) {
         const hv = this.ind.macd.hist[i];
-        if (hv === null) continue;
+        if (!Number.isFinite(hv)) continue;
         const prev = this.ind.macd.hist[i - 1];
-        const rising = prev === null ? true : hv > prev;
+        const rising = !Number.isFinite(prev) ? true : hv > prev;
         g.fillStyle = hv >= 0 ? (rising ? 'rgba(34,197,94,0.8)' : 'rgba(34,197,94,0.35)')
                               : (rising ? 'rgba(239,68,68,0.35)' : 'rgba(239,68,68,0.8)');
         const yy = y(hv), y0v = y(0);
@@ -460,7 +471,7 @@ export class Chart {
         let st = false;
         for (let i = start; i < end; i++) {
           const v = series[i];
-          if (v === null) { st = false; continue; }
+          if (!Number.isFinite(v)) { st = false; continue; }
           const px = this.xI(i), py = y(v);
           if (!st) { g.moveTo(px, py); st = true; } else g.lineTo(px, py);
         }
@@ -500,7 +511,7 @@ export class Chart {
       `L ${c.l.toFixed(2)}  C ${c.c.toFixed(2)}`,
       `เปลี่ยน ${(((c.c - c.o) / c.o) * 100).toFixed(2)}%`,
     ];
-    if (this.ind && this.ind.rsi[i] !== null) txt.push(`RSI ${this.ind.rsi[i].toFixed(1)}`);
+    if (this.ind && Number.isFinite(this.ind.rsi[i])) txt.push(`RSI ${this.ind.rsi[i].toFixed(1)}`);
     g.font = '11px system-ui';
     const w = Math.max(...txt.map((t) => g.measureText(t).width)) + 14;
     const bx = Math.min(x + 12, x1 - w), by = Math.max(y0 + 4, y - 70);
