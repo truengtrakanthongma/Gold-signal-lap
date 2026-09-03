@@ -68,6 +68,18 @@ export const DEFAULT_BT = {
    * อันไหนคุ้มกว่าสำหรับทองกรอบ 15 นาที ต้องวัด ไม่ใช่เชื่อตาม
    */
   trailAtrMult: 3,
+  /*
+   * วิธีเข้าไม้ — ต้องตรงกับที่แอปบอกผู้ใช้ให้ทำ ไม่งั้นสถิติวัดคนละเรื่องกับที่สอน
+   *
+   *  'market'   เข้าที่ราคาตลาดของแท่งถัดไปทันที
+   *  'pullback' ตั้ง limit รอราคาย่อกลับมาที่แนวใกล้ ๆ (entryIdeal) ตามที่แผนบอก
+   *             ได้เปรียบ: จุดตัดขาดทุนอยู่ที่แนวเดิม แต่เข้าใกล้ขึ้น = ระยะเสี่ยงสั้นลง
+   *                       ตลาดขยับเท่าเดิมจึงได้ R มากกว่า
+   *             เสียเปรียบ: บางไม้ราคาไม่ย่อกลับมา = อดเข้า ทั้งที่ทิศถูก
+   *             อันไหนคุ้มกว่า ต้องวัด ไม่ใช่เดา
+   */
+  entryMode: 'market',
+  fillWindow: 8,      // รอราคาย่อกลับมาได้กี่แท่ง ก่อนถือว่าไม่ได้ไม้นี้
 };
 
 /** สไตล์ที่ลากจุดตัดขาดทุนตามราคา (ไม่มีเป้าตายตัว) */
@@ -95,6 +107,7 @@ export function runBacktest(ctx, opts = {}) {
   const n = candles.length;
   const stopAt = Math.min(o.toIndex === undefined ? n : o.toIndex, n) - 2;
   const trades = [];
+  const missed = [];   // สัญญาณที่ทิศถูกแต่ราคาไม่ย่อกลับมาให้เข้า (เฉพาะโหมดรอย่อ)
   let i = Math.max(o.warmup, 2, o.fromIndex || 0);
 
   while (i < stopAt) {
@@ -104,9 +117,42 @@ export function runBacktest(ctx, opts = {}) {
 
     const side = Math.sign(s.score);
     const rawEntry = candles[i + 1].o;
-    const entry = side > 0 ? rawEntry + o.spread / 2 : rawEntry - o.spread / 2;
-    const setup = buildSetup(ctx, i, { ...s, side }, { entryPrice: entry });
-    if (!setup || setup.slDist <= 0) { i++; continue; }
+    const mktEntry = side > 0 ? rawEntry + o.spread / 2 : rawEntry - o.spread / 2;
+    const setup0 = buildSetup(ctx, i, { ...s, side }, { entryPrice: mktEntry });
+    if (!setup0 || setup0.slDist <= 0) { i++; continue; }
+
+    /*
+     * เข้าแบบรอย่อ — จำลองสิ่งที่แผนบอกผู้ใช้จริง ๆ ("ตั้ง limit ที่ราคานี้")
+     *
+     * จุดตัดขาดทุนต้องอยู่ที่ "ระดับราคาเดิม" ไม่ใช่ขยับตามจุดเข้า
+     * เพราะมันคือแนวโครงสร้างที่บอกว่าแผนผิด ไม่ใช่ระยะที่ยอมเสีย
+     * ผลคือเข้าใกล้แนวขึ้น → ระยะเสี่ยงสั้นลง → ตลาดขยับเท่าเดิมได้ R มากกว่า
+     */
+    let entry = mktEntry, setup = setup0, entryIdx = i + 1, waitBars = 0;
+    if (o.entryMode === 'pullback' && setup0.entryIdeal !== null) {
+      const want = setup0.entryIdeal;
+      let filled = false;
+      for (let j = i + 1; j <= Math.min(i + 1 + o.fillWindow, n - 1); j++) {
+        const b = candles[j];
+        /* แตะราคาที่รอไว้ = ได้ไม้ ถ้าแท่งเดียวกันลงไปถึง SL ด้วย
+           ลูปจำลองข้างล่างจะนับเป็นแพ้เอง ซึ่งเป็นสมมติฐานที่แย่ที่สุด = ปลอดภัย */
+        if (side > 0 ? b.l <= want : b.h >= want) {
+          filled = true; entryIdx = j; waitBars = j - (i + 1);
+          entry = side > 0 ? want + o.spread / 2 : want - o.spread / 2;
+          break;
+        }
+      }
+      if (!filled) {
+        /* ราคาไม่ย่อกลับมาในกรอบที่รอ = อดเข้าไม้นี้ ต้องนับไว้ด้วย
+           ไม่งั้นสถิติจะโชว์แต่ไม้ที่ได้เข้า ซึ่งเป็นการเลือกเฉพาะเคสที่สวย
+           ข้ามไปพ้นกรอบที่รอ เพราะสัญญาณเดิมถือว่าหมดโอกาสไปแล้ว */
+        missed.push({ index: i, side, score: s.score, want, t: candles[i + 1].t });
+        i += o.fillWindow + 1;
+        continue;
+      }
+      setup = buildSetup(ctx, i, { ...s, side }, { entryPrice: entry, slPrice: setup0.sl });
+      if (!setup || setup.slDist <= 0) { i++; continue; }
+    }
 
     const { sl, tp1, tp2, slDist } = setup;
 
@@ -122,7 +168,7 @@ export function runBacktest(ctx, opts = {}) {
     // ไปได้ไกลสุดกี่ R "ก่อน" จะโดน SL — ตัวเลขนี้ทำให้ประเมินเป้าหมายทุกระดับได้
     // โดยไม่ต้องจำลองใหม่: เป้า T จะถึงก็ต่อเมื่อ favBeforeStop >= T
     let favBeforeStop = 0;
-    for (let j = i + 1; j <= Math.min(i + o.maxHold, n - 1); j++) {
+    for (let j = entryIdx; j <= Math.min(entryIdx + o.maxHold, n - 1); j++) {
       const b = candles[j];
       const favPrev = maxFav;   // ค่าก่อนนับแท่งนี้ ใช้ตอนแท่งนี้เป็นแท่งที่โดน SL
       const fav = side > 0 ? (b.h - entry) / slDist : (entry - b.l) / slDist;
@@ -214,7 +260,7 @@ export function runBacktest(ctx, opts = {}) {
     }
 
     if (exitIdx === null) {
-      exitIdx = Math.min(i + o.maxHold, n - 1);
+      exitIdx = Math.min(entryIdx + o.maxHold, n - 1);
       const last = candles[exitIdx].c;
       const openR = side > 0 ? (last - entry) / slDist : (entry - last) / slDist;
       result = 'timeout';
@@ -228,7 +274,7 @@ export function runBacktest(ctx, opts = {}) {
       }
     }
 
-    const d = new Date(candles[i + 1].t);
+    const d = new Date(candles[entryIdx].t);
     // เก็บว่าปัจจัยไหนเห็นด้วย/ค้าน เพื่อย้อนดูทีหลังว่าปัจจัยไหนทำนายได้จริง
     //
     // ปัจจัยเดียวอาจถูกบันทึกหลายรายการที่ชี้คนละทาง (เช่น MACD ทิศทางขึ้น แต่จุดตัดชี้ลง)
@@ -253,19 +299,19 @@ export function runBacktest(ctx, opts = {}) {
     for (const k of Object.keys(features)) features[k] = Math.max(-1, Math.min(1, features[k]));
     trades.push({
       agree, against, features,
-      index: i, entryIndex: i + 1, exitIndex: exitIdx, t: candles[i + 1].t,
+      index: i, entryIndex: entryIdx, exitIndex: exitIdx, t: candles[entryIdx].t,
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
       entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv, favBeforeStop,
-      bars: exitIdx - i, hourTh: (d.getUTCHours() + 7) % 24,
+      bars: exitIdx - entryIdx, waitBars, entryIdx, hourTh: (d.getUTCHours() + 7) % 24,
       exitStyle: style,
     });
     i = exitIdx + 1; // ไม้เดียวต่อครั้ง (ไม่ซ้อนไม้ = ใกล้เคียงการเทรดจริง)
   }
 
-  return summarize(trades, o);
+  return summarize(trades, o, missed);
 }
 
-function summarize(trades, o) {
+function summarize(trades, o, missed = []) {
   const n = trades.length;
   const wins1R = trades.filter((t) => t.hit1R).length;
   const grossWin = trades.filter((t) => t.rMultiple > 0).reduce((a, t) => a + t.rMultiple, 0);
@@ -353,7 +399,16 @@ function summarize(trades, o) {
       avgMaxFavWinners: wonTrades.length ? wonTrades.reduce((a, t) => a + t.maxFav, 0) / wonTrades.length : null,
       avgMaxAdv: n ? trades.reduce((a, t) => a + t.maxAdv, 0) / n : null,
       timeouts: trades.filter((t) => t.result === 'timeout').length,
+      /*
+       * ตัวเลขของโหมดรอย่อ — ต้องอ่านคู่กับ expectancy เสมอ
+       * เพราะ expectancy นับเฉพาะไม้ที่ได้เข้า ซึ่งเป็นการเลือกเฉพาะเคสที่ราคาย่อกลับมาจริง
+       * ถ้าดูแต่ expectancy จะสรุปว่าการรอดีกว่าเสมอ ทั้งที่อาจอดเข้าไม้ดี ๆ ไปครึ่งหนึ่ง
+       */
+      missed: missed.length,
+      signals: n + missed.length,
+      fillRate: (n + missed.length) ? (n / (n + missed.length)) * 100 : null,
     },
+    missed,
     opts: o,
   };
 }

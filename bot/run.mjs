@@ -17,6 +17,7 @@
 
 import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } from '../js/signals.js';
 import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
+import { DEFAULT_STRATEGY, toBacktestOpts, describeStrategy } from '../js/strategy.js';
 import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
 import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
@@ -35,6 +36,20 @@ const CFG = {
   webhook: process.env.DISCORD_WEBHOOK_URL || '',
   dryRun: process.env.BOT_DRY_RUN === '1',
   testPing: process.env.BOT_TEST_PING === '1',
+};
+
+/*
+ * กลยุทธ์ของบอท — อ่านจากนิยามกลางชุดเดียวกับเว็บ
+ *
+ * เดิมตรงนี้เขียน exitStyle: 'full' ทิ้งไว้ในโค้ด ขณะที่เว็บใช้ค่าที่ผู้ใช้ตั้ง
+ * ผลคืออัตราชนะที่บอทส่งเข้า Discord มาจากวิธีบริหารไม้คนละท่ากับที่หน้าเว็บโชว์
+ * ตัวเลขเดียวกันจึงไม่ตรงกันสองที่ ทั้งที่ควรเป็นระบบเดียว
+ */
+const STRATEGY = {
+  ...DEFAULT_STRATEGY,
+  threshold: CFG.threshold,
+  exitStyle: process.env.BOT_EXIT_STYLE || DEFAULT_STRATEGY.exitStyle,
+  entryMode: process.env.BOT_ENTRY_MODE || DEFAULT_STRATEGY.entryMode,
 };
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -106,7 +121,7 @@ async function gatherContext(ctx, scored, key, label) {
   // สถิติย้อนหลังของกรอบเวลานี้ ใช้บอกอัตราชนะที่เคยเกิดจริง
   let prob = null;
   try {
-    const bt = runBacktest(ctx, { threshold: CFG.threshold, exitStyle: 'full' });
+    const bt = runBacktest(ctx, toBacktestOpts(STRATEGY));
     prob = probabilityFor(scored.score, bt);
   } catch (e) { log('คำนวณสถิติย้อนหลังไม่ได้:', e.message); }
 
@@ -152,6 +167,12 @@ function checkConfig() {
   pos('จำนวนแท่งที่ดึง', CFG.bars, 'BOT_BARS');
   const unknown = CFG.sources.filter((k) => !SOURCES[k]);
   if (unknown.length === CFG.sources.length) bad.push(`BOT_SOURCES = ไม่รู้จักสักแหล่ง (${CFG.sources.join(', ')})`);
+  /* ชื่อท่าที่พิมพ์ผิดจะไม่ทำให้เครื่องจำลองพัง แต่จะตกไปใช้ท่าตั้งต้นเงียบ ๆ
+     แล้วอัตราชนะที่ส่งเข้า Discord จะมาจากท่าที่ไม่มีใครตั้งใจเลือก */
+  const styles = ['partial', 'full', 'full-be', 'trail', 'trail-1R'];
+  if (!styles.includes(STRATEGY.exitStyle)) bad.push(`BOT_EXIT_STYLE = ${JSON.stringify(STRATEGY.exitStyle)} → ไม่รู้จัก (ใช้ได้: ${styles.join(', ')})`);
+  const modes = ['market', 'pullback'];
+  if (!modes.includes(STRATEGY.entryMode)) bad.push(`BOT_ENTRY_MODE = ${JSON.stringify(STRATEGY.entryMode)} → ไม่รู้จัก (ใช้ได้: ${modes.join(', ')})`);
   return bad;
 }
 

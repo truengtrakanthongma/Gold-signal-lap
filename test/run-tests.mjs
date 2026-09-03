@@ -8,6 +8,7 @@
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle } from '../js/backtest.js';
+import { tuneStrategy, evaluateStrategy, toBacktestOpts, describeStrategy, DEFAULT_STRATEGY } from '../js/strategy.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
@@ -2264,6 +2265,129 @@ section('32) เลือกวิธีบริหารไม้จากข�
   {
     const tiny = compareExitStyles(buildContext(makeCandles(300, 5)), { threshold: 30 });
     ok('ข้อมูลน้อยเกินไป → บอกตรง ๆ ว่าสรุปไม่ได้ ไม่ใช่เดาท่าให้', tiny.ok === false || tiny.level === 'unknown');
+  }
+}
+
+section('33) เข้าไม้แบบรอราคาย่อ — ต้องวัดสิ่งที่แอปสั่งให้ทำจริง ๆ');
+{
+  /*
+   * ช่องโหว่ที่เจอ: แผนบอกผู้ใช้ว่า "ตั้ง limit ที่ราคานี้ รอราคาย่อกลับมา"
+   * แต่การทดสอบย้อนหลังเข้าที่ราคาตลาดเสมอ สถิติที่โชว์จึงวัดคนละกลยุทธ์
+   * กับที่สอนให้ทำ ตัวเลขทุกตัวที่ผู้ใช้เห็นจึงไม่ตรงกับสิ่งที่เขาจะเจอจริง
+   */
+  const cs = makeCandles(3000, 61);
+  const ctx = buildContext(cs);
+  const mkt = runBacktest(ctx, { entryMode: 'market', threshold: 30 });
+  const pb = runBacktest(ctx, { entryMode: 'pullback', threshold: 30 });
+
+  ok('โหมดเข้าเลย: ไม่มีไม้ที่อดเข้า', mkt.stats.missed === 0 && mkt.stats.fillRate === 100);
+  ok('โหมดรอย่อ: มีไม้ที่ราคาไม่ย่อกลับมาให้เข้า และนับไว้', pb.stats.missed > 0, `อดเข้า ${pb.stats.missed} ไม้`);
+  ok('รายงานบอกจำนวนสัญญาณทั้งหมด ไม่ใช่เฉพาะไม้ที่ได้เข้า',
+    pb.stats.signals === pb.stats.n + pb.stats.missed);
+
+  /* หัวใจของการรอ: จุดตัดขาดทุนอยู่ที่แนวเดิม แต่เข้าใกล้ขึ้น = ระยะเสี่ยงสั้นลง
+     ถ้าระยะไม่สั้นลง แปลว่าการรอไม่ได้ประโยชน์อะไรเลย แค่อดเข้าเฉย ๆ */
+  {
+    const avg = (r) => r.trades.reduce((a, t) => a + t.slDist, 0) / r.trades.length;
+    ok('รอย่อแล้วระยะเสี่ยงต่อไม้สั้นลงจริง', avg(pb) < avg(mkt), `${avg(pb).toFixed(2)} < ${avg(mkt).toFixed(2)}`);
+  }
+
+  /* ไม้ที่ได้เข้าต้องเข้าที่แท่งที่ราคาแตะจุดที่รอไว้จริง ไม่ใช่แท่งที่เห็นสัญญาณ */
+  {
+    const waited = pb.trades.filter((t) => t.waitBars > 0);
+    ok('มีไม้ที่รอข้ามแท่งกว่าจะได้เข้า และบันทึกว่ารอกี่แท่ง', waited.length > 0, `${waited.length} ไม้`);
+    ok('แท่งที่เข้าไม้ตรงกับจำนวนแท่งที่รอเสมอ',
+      pb.trades.every((t) => t.entryIndex === t.index + 1 + t.waitBars));
+    ok('จำนวนแท่งที่ถือ นับจากแท่งที่ได้เข้าจริง ไม่ใช่แท่งที่เห็นสัญญาณ',
+      pb.trades.every((t) => t.bars === t.exitIndex - t.entryIndex));
+  }
+
+  /* ห้ามรอเกินกรอบที่ตั้งไว้ — ไม่งั้นกลายเป็นรอไม่มีที่สิ้นสุดแล้วเลือกเฉพาะไม้ที่สวย */
+  ok('ไม่มีไม้ไหนรอเกินกรอบที่ตั้งไว้', pb.trades.every((t) => t.waitBars <= 8), `กรอบ 8 แท่ง`);
+  {
+    const short = runBacktest(ctx, { entryMode: 'pullback', fillWindow: 2, threshold: 30 });
+    ok('กรอบรอสั้นลง → อดเข้ามากขึ้น (กรอบมีผลจริง ไม่ใช่ตัวแปรหลอก)',
+      short.stats.fillRate < pb.stats.fillRate, `${short.stats.fillRate.toFixed(0)}% < ${pb.stats.fillRate.toFixed(0)}%`);
+  }
+
+  /* ห้ามมองอนาคต: ตัดข้อมูลท้ายทิ้ง ไม้ที่ปิดไปแล้วต้องเหมือนเดิม */
+  {
+    const cut = 2000;
+    const part = runBacktest(buildContext(cs.slice(0, cut)), { entryMode: 'pullback', threshold: 30 });
+    const byIdx = new Map(part.trades.map((t) => [t.index, t]));
+    let compared = 0, bad = 0;
+    for (const t of pb.trades) {
+      if (t.exitIndex >= cut - 2) continue;
+      const q = byIdx.get(t.index);
+      compared++;
+      if (!q || q.entryIndex !== t.entryIndex || Math.abs(q.rMultiple - t.rMultiple) > 1e-9) bad++;
+    }
+    ok(`โหมดรอย่อไม่มองอนาคต — ตัดข้อมูลท้ายแล้วไม้เดิมเหมือนเดิม (${compared} ไม้)`, compared > 20 && bad === 0, `ต่าง ${bad}`);
+  }
+}
+
+section('34) รวมทุกกลยุทธ์เป็นชุดเดียว — เลือกจากช่วงเรียน สอบครั้งเดียว');
+{
+  /*
+   * ก่อนหน้านี้มีเครื่องวัดหลายตัวแยกกัน แต่ละตัวแบ่งข้อมูลเอง ตัดสินเอง
+   * ผู้ใช้เห็นตัวเลขหลายชุดที่ไม่ประกอบกัน และไม่มีชุดไหนตอบได้ว่า
+   * "ถ้าทำตามระบบนี้ทั้งระบบ จะได้เท่าไร" ซึ่งเป็นคำถามเดียวที่สำคัญจริง
+   */
+  const ctx = buildContext(makeCandles(3000, 73));
+  const res = tuneStrategy(ctx);
+  ok('หากลยุทธ์ได้ผลออกมา', res.ok === true, res.reason || '');
+  ok('ได้กลยุทธ์ชุดเดียวที่ครบทุกทางเลือก', res.ok
+    && ['threshold', 'slAtrMult', 'targetR', 'exitStyle', 'entryMode', 'maxHold'].every((k) => res.strategy[k] !== undefined));
+  ok('อธิบายกลยุทธ์เป็นภาษาคนได้ครบทั้งชุด',
+    typeof res.describe === 'string' && /คะแนนถึง/.test(res.describe) && /เป้า/.test(res.describe));
+  ok('มีคำตัดสินเดียว ไม่ใช่หลายคำตัดสินให้เลือกเอง', typeof res.verdict === 'string' && res.verdict.length > 30);
+  ok('ระดับผลเป็นค่าที่รู้จัก', ['good', 'weak', 'bad', 'unknown'].includes(res.level));
+  ok('รายงานทั้งช่วงเรียนและช่วงสอบคู่กันเสมอ (เห็นได้ว่าตกลงเท่าไร)',
+    res.inSample.n >= 0 && res.outSample.n >= 0 && res.dropOff !== undefined);
+
+  /* หัวใจ: ทุกอย่างต้องเลือกจากช่วงเรียนเท่านั้น
+     แก้ข้อมูลเฉพาะช่วงสอบ แล้วกลยุทธ์ที่เลือกต้องไม่ขยับแม้แต่ค่าเดียว */
+  {
+    const base = makeCandles(3000, 73);
+    const at = Math.floor(3000 * 0.6);
+    const tampered = base.map((c, k) => (k > at ? { ...c, o: c.o + 40, h: c.h + 40, l: c.l + 40, c: c.c + 40 } : c));
+    const r2 = tuneStrategy(buildContext(tampered));
+    ok('แก้เฉพาะช่วงสอบ → กลยุทธ์ที่เลือกเหมือนเดิมทุกค่า (ไม่ได้แอบดูช่วงสอบ)',
+      r2.ok && JSON.stringify(r2.strategy) === JSON.stringify(res.strategy),
+      `${JSON.stringify(res.strategy)} vs ${JSON.stringify(r2.strategy)}`);
+  }
+
+  /* ถ้าช่วงสอบขาดทุน ต้องบอกว่าอย่าเทรด ไม่ใช่โชว์ตัวเลขช่วงเรียนที่สวยกว่า */
+  ok('ช่วงสอบขาดทุน → คำตัดสินต้องเป็น "อย่าเทรดตาม" ไม่ใช่ "ใช้ได้"',
+    res.outSample.expectancy === null || res.outSample.expectancy > 0 || res.level === 'bad' || res.level === 'unknown',
+    `expectancy=${res.outSample.expectancy} level=${res.level}`);
+  ok('ประกาศว่าดีได้เฉพาะตอนมีตัวเลขความน่าจะเป็นรองรับ',
+    res.level !== 'good' || (res.prob !== null && res.prob >= 0.9), `prob=${res.prob}`);
+
+  /* เลือกด้วย R รวม ไม่ใช่ R ต่อไม้ — ไม่งั้นโหมดรอย่อจะชนะเพราะอดเข้าไม้แย่ ๆ ไป */
+  {
+    const top = res.combos[0];
+    ok('อันดับหนึ่งของตารางคือชุดที่ R รวมสูงสุด (ไม้ที่อดเข้าถูกนับด้วยโดยปริยาย)',
+      res.combos.every((c) => (c.totalR || -Infinity) <= (top.totalR || -Infinity)));
+    ok('กลยุทธ์ที่เลือกตรงกับอันดับหนึ่งของตาราง',
+      res.strategy.entryMode === top.entryMode && res.strategy.exitStyle === top.exitStyle);
+    ok('ตารางบอกด้วยว่าแต่ละชุดอดเข้าไปกี่ไม้', res.combos.every((c) => c.missed !== undefined));
+  }
+
+  ok('ไม่ส่งข้อมูลดิบของทุกไม้ออกมาพร้อมผล', res.inSample.rs === undefined && res.outSample.trades === undefined);
+  ok('ข้อมูลน้อยเกินไป → บอกตรง ๆ ว่าหาไม่ได้', tuneStrategy(buildContext(makeCandles(250, 3))).ok === false);
+
+  /* กลยุทธ์เดียวกันต้องแปลงเป็นตัวเลือกของเครื่องจำลองที่ตรงกันเสมอ
+     เพราะถ้าแอปกับบอทแปลงคนละแบบ ก็กลับไปเป็นสองระบบเหมือนเดิม */
+  {
+    const st = { ...DEFAULT_STRATEGY, threshold: 42, exitStyle: 'trail', entryMode: 'pullback' };
+    const o = toBacktestOpts(st);
+    ok('แปลงกลยุทธ์เป็นตัวเลือกเครื่องจำลองครบทุกค่าที่มีผลต่อการเทรด',
+      o.threshold === 42 && o.exitStyle === 'trail' && o.entryMode === 'pullback'
+      && o.maxHold === st.maxHold && o.spread === st.spread && o.useFilters === st.useFilters);
+    const a = evaluateStrategy(ctx, st), b = runBacktest(ctx, toBacktestOpts(st));
+    ok('รันผ่านกลยุทธ์ กับรันเครื่องจำลองตรง ๆ ได้ผลเท่ากันเป๊ะ',
+      a.n === b.stats.n && Math.abs(a.totalR - b.stats.totalR) < 1e-9);
   }
 }
 

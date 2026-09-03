@@ -527,6 +527,9 @@ body.simple .narr p { font-size: var(--fs-sm); }
 .learn-table .num { text-align: right; font-family: 'JetBrains Mono', monospace; }
 /* แถวของท่าที่ระบบเลือกไว้จากช่วงเรียน — ต้องหาเจอทันทีโดยไม่ต้องไล่อ่านทั้งตาราง */
 .learn-table tr.row-pick td { background: rgba(240,180,41,.08); }
+/* บรรทัดสรุปกลยุทธ์ทั้งชุด — ต้องอ่านได้จบในบรรทัดเดียวว่าระบบจะทำอะไรบ้าง */
+.strat-line { font-size: var(--fs-xs); color: var(--text); margin: 8px 0 2px;
+  padding: 8px 10px; background: rgba(2,6,23,.4); border-radius: 7px; border-left: 3px solid var(--gold); line-height: 1.6; }
 .learn-table tr.row-pick td:first-child { box-shadow: inset 2px 0 0 var(--gold); }
 
 .adapt-story { margin-top: 12px; display: grid; gap: 9px; }
@@ -1036,7 +1039,6 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
       <span id="btStatus" class="tiny"></span>
     </div>
     <div id="wfBox" class="wf-box"></div>
-    <div id="exitBox" class="wf-box"></div>
     <div id="btSummary" class="bt-summary"></div>
     <div class="bt-grid">
       <div><h3>ความน่าจะเป็นตามระดับคะแนน</h3><div id="btBands"></div></div>
@@ -3047,6 +3049,18 @@ const DEFAULT_BT = {
    * อันไหนคุ้มกว่าสำหรับทองกรอบ 15 นาที ต้องวัด ไม่ใช่เชื่อตาม
    */
   trailAtrMult: 3,
+  /*
+   * วิธีเข้าไม้ — ต้องตรงกับที่แอปบอกผู้ใช้ให้ทำ ไม่งั้นสถิติวัดคนละเรื่องกับที่สอน
+   *
+   *  'market'   เข้าที่ราคาตลาดของแท่งถัดไปทันที
+   *  'pullback' ตั้ง limit รอราคาย่อกลับมาที่แนวใกล้ ๆ (entryIdeal) ตามที่แผนบอก
+   *             ได้เปรียบ: จุดตัดขาดทุนอยู่ที่แนวเดิม แต่เข้าใกล้ขึ้น = ระยะเสี่ยงสั้นลง
+   *                       ตลาดขยับเท่าเดิมจึงได้ R มากกว่า
+   *             เสียเปรียบ: บางไม้ราคาไม่ย่อกลับมา = อดเข้า ทั้งที่ทิศถูก
+   *             อันไหนคุ้มกว่า ต้องวัด ไม่ใช่เดา
+   */
+  entryMode: 'market',
+  fillWindow: 8,      // รอราคาย่อกลับมาได้กี่แท่ง ก่อนถือว่าไม่ได้ไม้นี้
 };
 
 /** สไตล์ที่ลากจุดตัดขาดทุนตามราคา (ไม่มีเป้าตายตัว) */
@@ -3074,6 +3088,7 @@ function runBacktest(ctx, opts = {}) {
   const n = candles.length;
   const stopAt = Math.min(o.toIndex === undefined ? n : o.toIndex, n) - 2;
   const trades = [];
+  const missed = [];   // สัญญาณที่ทิศถูกแต่ราคาไม่ย่อกลับมาให้เข้า (เฉพาะโหมดรอย่อ)
   let i = Math.max(o.warmup, 2, o.fromIndex || 0);
 
   while (i < stopAt) {
@@ -3083,9 +3098,42 @@ function runBacktest(ctx, opts = {}) {
 
     const side = Math.sign(s.score);
     const rawEntry = candles[i + 1].o;
-    const entry = side > 0 ? rawEntry + o.spread / 2 : rawEntry - o.spread / 2;
-    const setup = buildSetup(ctx, i, { ...s, side }, { entryPrice: entry });
-    if (!setup || setup.slDist <= 0) { i++; continue; }
+    const mktEntry = side > 0 ? rawEntry + o.spread / 2 : rawEntry - o.spread / 2;
+    const setup0 = buildSetup(ctx, i, { ...s, side }, { entryPrice: mktEntry });
+    if (!setup0 || setup0.slDist <= 0) { i++; continue; }
+
+    /*
+     * เข้าแบบรอย่อ — จำลองสิ่งที่แผนบอกผู้ใช้จริง ๆ ("ตั้ง limit ที่ราคานี้")
+     *
+     * จุดตัดขาดทุนต้องอยู่ที่ "ระดับราคาเดิม" ไม่ใช่ขยับตามจุดเข้า
+     * เพราะมันคือแนวโครงสร้างที่บอกว่าแผนผิด ไม่ใช่ระยะที่ยอมเสีย
+     * ผลคือเข้าใกล้แนวขึ้น → ระยะเสี่ยงสั้นลง → ตลาดขยับเท่าเดิมได้ R มากกว่า
+     */
+    let entry = mktEntry, setup = setup0, entryIdx = i + 1, waitBars = 0;
+    if (o.entryMode === 'pullback' && setup0.entryIdeal !== null) {
+      const want = setup0.entryIdeal;
+      let filled = false;
+      for (let j = i + 1; j <= Math.min(i + 1 + o.fillWindow, n - 1); j++) {
+        const b = candles[j];
+        /* แตะราคาที่รอไว้ = ได้ไม้ ถ้าแท่งเดียวกันลงไปถึง SL ด้วย
+           ลูปจำลองข้างล่างจะนับเป็นแพ้เอง ซึ่งเป็นสมมติฐานที่แย่ที่สุด = ปลอดภัย */
+        if (side > 0 ? b.l <= want : b.h >= want) {
+          filled = true; entryIdx = j; waitBars = j - (i + 1);
+          entry = side > 0 ? want + o.spread / 2 : want - o.spread / 2;
+          break;
+        }
+      }
+      if (!filled) {
+        /* ราคาไม่ย่อกลับมาในกรอบที่รอ = อดเข้าไม้นี้ ต้องนับไว้ด้วย
+           ไม่งั้นสถิติจะโชว์แต่ไม้ที่ได้เข้า ซึ่งเป็นการเลือกเฉพาะเคสที่สวย
+           ข้ามไปพ้นกรอบที่รอ เพราะสัญญาณเดิมถือว่าหมดโอกาสไปแล้ว */
+        missed.push({ index: i, side, score: s.score, want, t: candles[i + 1].t });
+        i += o.fillWindow + 1;
+        continue;
+      }
+      setup = buildSetup(ctx, i, { ...s, side }, { entryPrice: entry, slPrice: setup0.sl });
+      if (!setup || setup.slDist <= 0) { i++; continue; }
+    }
 
     const { sl, tp1, tp2, slDist } = setup;
 
@@ -3101,7 +3149,7 @@ function runBacktest(ctx, opts = {}) {
     // ไปได้ไกลสุดกี่ R "ก่อน" จะโดน SL — ตัวเลขนี้ทำให้ประเมินเป้าหมายทุกระดับได้
     // โดยไม่ต้องจำลองใหม่: เป้า T จะถึงก็ต่อเมื่อ favBeforeStop >= T
     let favBeforeStop = 0;
-    for (let j = i + 1; j <= Math.min(i + o.maxHold, n - 1); j++) {
+    for (let j = entryIdx; j <= Math.min(entryIdx + o.maxHold, n - 1); j++) {
       const b = candles[j];
       const favPrev = maxFav;   // ค่าก่อนนับแท่งนี้ ใช้ตอนแท่งนี้เป็นแท่งที่โดน SL
       const fav = side > 0 ? (b.h - entry) / slDist : (entry - b.l) / slDist;
@@ -3193,7 +3241,7 @@ function runBacktest(ctx, opts = {}) {
     }
 
     if (exitIdx === null) {
-      exitIdx = Math.min(i + o.maxHold, n - 1);
+      exitIdx = Math.min(entryIdx + o.maxHold, n - 1);
       const last = candles[exitIdx].c;
       const openR = side > 0 ? (last - entry) / slDist : (entry - last) / slDist;
       result = 'timeout';
@@ -3207,7 +3255,7 @@ function runBacktest(ctx, opts = {}) {
       }
     }
 
-    const d = new Date(candles[i + 1].t);
+    const d = new Date(candles[entryIdx].t);
     // เก็บว่าปัจจัยไหนเห็นด้วย/ค้าน เพื่อย้อนดูทีหลังว่าปัจจัยไหนทำนายได้จริง
     //
     // ปัจจัยเดียวอาจถูกบันทึกหลายรายการที่ชี้คนละทาง (เช่น MACD ทิศทางขึ้น แต่จุดตัดชี้ลง)
@@ -3232,19 +3280,19 @@ function runBacktest(ctx, opts = {}) {
     for (const k of Object.keys(features)) features[k] = Math.max(-1, Math.min(1, features[k]));
     trades.push({
       agree, against, features,
-      index: i, entryIndex: i + 1, exitIndex: exitIdx, t: candles[i + 1].t,
+      index: i, entryIndex: entryIdx, exitIndex: exitIdx, t: candles[entryIdx].t,
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
       entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv, favBeforeStop,
-      bars: exitIdx - i, hourTh: (d.getUTCHours() + 7) % 24,
+      bars: exitIdx - entryIdx, waitBars, entryIdx, hourTh: (d.getUTCHours() + 7) % 24,
       exitStyle: style,
     });
     i = exitIdx + 1; // ไม้เดียวต่อครั้ง (ไม่ซ้อนไม้ = ใกล้เคียงการเทรดจริง)
   }
 
-  return summarize(trades, o);
+  return summarize(trades, o, missed);
 }
 
-function summarize(trades, o) {
+function summarize(trades, o, missed = []) {
   const n = trades.length;
   const wins1R = trades.filter((t) => t.hit1R).length;
   const grossWin = trades.filter((t) => t.rMultiple > 0).reduce((a, t) => a + t.rMultiple, 0);
@@ -3332,7 +3380,16 @@ function summarize(trades, o) {
       avgMaxFavWinners: wonTrades.length ? wonTrades.reduce((a, t) => a + t.maxFav, 0) / wonTrades.length : null,
       avgMaxAdv: n ? trades.reduce((a, t) => a + t.maxAdv, 0) / n : null,
       timeouts: trades.filter((t) => t.result === 'timeout').length,
+      /*
+       * ตัวเลขของโหมดรอย่อ — ต้องอ่านคู่กับ expectancy เสมอ
+       * เพราะ expectancy นับเฉพาะไม้ที่ได้เข้า ซึ่งเป็นการเลือกเฉพาะเคสที่ราคาย่อกลับมาจริง
+       * ถ้าดูแต่ expectancy จะสรุปว่าการรอดีกว่าเสมอ ทั้งที่อาจอดเข้าไม้ดี ๆ ไปครึ่งหนึ่ง
+       */
+      missed: missed.length,
+      signals: n + missed.length,
+      fillRate: (n + missed.length) ? (n / (n + missed.length)) * 100 : null,
     },
+    missed,
     opts: o,
   };
 }
@@ -3705,6 +3762,190 @@ function compareExitStyles(ctx, opts = {}) {
 }
 
   return {SESSION_BUCKETS, sessionBucketAt, DEFAULT_BT, isTrailStyle, embargoIndex, runBacktest, evaluateTarget, optimizeExits, walkForward, probabilityFor, wilsonInterval, compareExitStyles};
+})();
+
+__m.strategy = (function () {
+  const {runBacktest, optimizeExits, embargoIndex, DEFAULT_BT} = __m.backtest;
+/**
+ * strategy.js — กลยุทธ์เดียว หนึ่งชุดตัวเลข
+ *
+ * ปัญหาที่ไฟล์นี้แก้:
+ * ก่อนหน้านี้ระบบมีเครื่องวัดหลายตัวแยกกันอยู่ — หาจุดตัดขาดทุนที่ดีที่สุด,
+ * เทียบวิธีบริหารไม้, ตรวจแบบแบ่งข้อมูล, เรียนรู้น้ำหนักปัจจัย — แต่ละตัว
+ * แบ่งข้อมูลเอง ให้คำตัดสินเอง คนอ่านจึงเห็นตัวเลขหลายชุดที่ไม่ประกอบกัน
+ * และไม่มีตัวเลขไหนตอบได้ว่า "ถ้าทำตามระบบนี้ทั้งระบบ จะได้เท่าไร"
+ *
+ * ที่แย่กว่านั้น: แผนบอกผู้ใช้ให้ "ตั้ง limit รอราคาย่อ" แต่การทดสอบย้อนหลัง
+ * เข้าไม้ที่ราคาตลาดเสมอ สถิติที่โชว์จึงไม่เคยวัดสิ่งที่แอปสั่งให้ทำเลย
+ *
+ * ที่นี่รวมทุกทางเลือกไว้ในวัตถุเดียว (Strategy) แบ่งข้อมูลจุดเดียว
+ * เลือกทุกอย่างจากช่วงเรียนอย่างเดียว แล้วสอบครั้งเดียวบนช่วงที่ไม่เคยเห็น
+ * ได้ออกมาเป็นคำตัดสินเดียว กับสถิติชุดเดียวที่เอาไปรวมกันได้จริง
+ */
+
+
+/** ทุกทางเลือกของระบบ รวมไว้ที่เดียว — ที่ไหนก็ตามที่เทรด ต้องอ่านจากวัตถุนี้ */
+const DEFAULT_STRATEGY = {
+  threshold: DEFAULT_BT.threshold,
+  slAtrMult: null,        // null = ใช้ค่าจาก cfg ของบริบท
+  targetR: 2,
+  maxHold: DEFAULT_BT.maxHold,
+  exitStyle: DEFAULT_BT.exitStyle,
+  entryMode: DEFAULT_BT.entryMode,
+  fillWindow: DEFAULT_BT.fillWindow,
+  useFilters: DEFAULT_BT.useFilters,
+  spread: DEFAULT_BT.spread,
+  slippage: DEFAULT_BT.slippage,
+};
+
+const EXIT_TH = {
+  partial: 'ปิดครึ่งที่ 1R แล้วเลื่อนกันทุน', full: 'ถือเต็มไม้ถึงเป้า',
+  'full-be': 'ถือเต็มไม้ แล้วเลื่อนกันทุนหลังผ่าน 1R',
+  trail: 'ลากจุดตัดตามราคา ไม่มีเป้าตายตัว', 'trail-1R': 'ปิดครึ่งที่ 1R แล้วลากที่เหลือ',
+};
+const ENTRY_TH = { market: 'เข้าที่ราคาตลาดทันทีที่สัญญาณครบ', pullback: 'ตั้ง limit รอราคาย่อกลับมาที่แนวใกล้' };
+
+/** อธิบายกลยุทธ์ทั้งชุดเป็นภาษาคน — ใช้ทั้งบนเว็บ ในบอท และในรายงาน */
+function describeStrategy(st) {
+  const s = { ...DEFAULT_STRATEGY, ...st };
+  return [
+    `เข้าเมื่อคะแนนถึง ${s.threshold}`,
+    ENTRY_TH[s.entryMode] || s.entryMode,
+    s.slAtrMult ? `จุดตัดขาดทุน ${s.slAtrMult} เท่าของ ATR` : 'จุดตัดขาดทุนตามค่าตั้งต้น',
+    `เป้า ${s.targetR}R`,
+    EXIT_TH[s.exitStyle] || s.exitStyle,
+    `ถือได้ไม่เกิน ${s.maxHold} แท่ง`,
+  ].join(' · ');
+}
+
+/** แปลงกลยุทธ์เป็นตัวเลือกของเครื่องจำลอง — ที่เดียวที่แปลง จะได้ไม่หลุดกัน */
+function toBacktestOpts(st, extra = {}) {
+  const s = { ...DEFAULT_STRATEGY, ...st };
+  return {
+    threshold: s.threshold, maxHold: s.maxHold, spread: s.spread, slippage: s.slippage,
+    useFilters: s.useFilters, exitStyle: s.exitStyle, entryMode: s.entryMode,
+    fillWindow: s.fillWindow, ...extra,
+  };
+}
+
+/** บริบทที่ปรับความกว้าง SL ตามกลยุทธ์แล้ว */
+function ctxFor(ctx, st) {
+  return st.slAtrMult ? { ...ctx, cfg: { ...ctx.cfg, slAtrMult: st.slAtrMult } } : ctx;
+}
+
+/** รันกลยุทธ์หนึ่งชุดบนช่วงข้อมูลหนึ่งช่วง แล้วคืนสถิติชุดเดียว */
+function evaluateStrategy(ctx, st, range = {}) {
+  const s = { ...DEFAULT_STRATEGY, ...st };
+  const r = runBacktest(ctxFor(ctx, s), toBacktestOpts(s, range));
+  return {
+    n: r.stats.n, missed: r.stats.missed, signals: r.stats.signals, fillRate: r.stats.fillRate,
+    winRate: r.stats.winRate, realWinRate: r.stats.realWinRate, expectancy: r.stats.expectancy,
+    totalR: r.stats.totalR, maxDD: r.stats.maxDD, profitFactor: r.stats.profitFactor,
+    avgBars: r.stats.avgBars, maxLossStreak: r.stats.maxLossStreak,
+    rs: r.trades.map((t) => t.rMultiple), trades: r.trades,
+  };
+}
+
+/*
+ * โอกาสที่ผลชุดหนึ่งดีกว่าอีกชุดจริง ไม่ใช่บังเอิญ (bootstrap)
+ * เขียนซ้ำในไฟล์นี้แทนการ import จาก learn.js เพื่อไม่ให้เกิดการเรียกวนกลับ
+ * ซึ่งตัวรวมไฟล์เป็นหน้าเดียวรับไม่ได้ (โมดูลถูกต่อกันตามลำดับ)
+ */
+function probPositive(rs, { samples = 2000, seed = 20260903 } = {}) {
+  if (!rs.length) return null;
+  let stt = seed >>> 0;
+  const rnd = () => { stt = (stt * 1664525 + 1013904223) >>> 0; return stt / 4294967296; };
+  let wins = 0;
+  for (let k = 0; k < samples; k++) {
+    let sum = 0;
+    for (let j = 0; j < rs.length; j++) sum += rs[(rnd() * rs.length) | 0];
+    if (sum > 0) wins++;
+  }
+  return wins / samples;
+}
+
+/**
+ * หากลยุทธ์ที่ดีที่สุด แล้วสอบครั้งเดียว — จุดแบ่งข้อมูลจุดเดียวสำหรับทุกอย่าง
+ *
+ * ขั้นที่ 1 หาเกณฑ์คะแนน · ความกว้าง SL · เป้าหมาย  (จากช่วงเรียน)
+ * ขั้นที่ 2 หาวิธีเข้าไม้ · วิธีบริหารไม้ ที่เข้ากับค่าจากขั้นที่ 1 (จากช่วงเรียน)
+ * ขั้นที่ 3 เอาชุดที่ได้ไปสอบบนช่วงที่ไม่เคยเห็น ครั้งเดียว
+ *
+ * ทำเป็นขั้นแทนการกวาดทุกคู่พร้อมกัน เพราะกวาดพร้อมกันคือ 2,800 รอบจำลอง
+ * ซึ่งค้างบนมือถือ และยิ่งกวาดมาก ยิ่งเจอค่าที่ดีเพราะบังเอิญมากตามไปด้วย
+ */
+function tuneStrategy(ctx, opts = {}) {
+  const base = { ...DEFAULT_STRATEGY, ...(opts.base || {}) };
+  const n = ctx.candles.length;
+  const splitRatio = opts.splitRatio || 0.6;
+  const splitAt = Math.floor(n * splitRatio);
+  const warmup = opts.warmup === undefined ? DEFAULT_BT.warmup : opts.warmup;
+  if (splitAt - warmup < 80) return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับหากลยุทธ์ที่ดีที่สุด' };
+
+  // ── ขั้นที่ 1: เกณฑ์ · ความกว้าง SL · เป้าหมาย ────────────────────────
+  const stage1 = optimizeExits(ctx, { ...toBacktestOpts(base), splitRatio });
+  if (!stage1.ok) return { ok: false, reason: stage1.reason };
+  let best = { ...base, threshold: stage1.best.threshold, slAtrMult: stage1.best.slAtrMult, targetR: stage1.best.targetR };
+
+  // ── ขั้นที่ 2: วิธีเข้า × วิธีออก บนช่วงเรียนเท่านั้น ─────────────────
+  const entryModes = opts.entryModes || ['market', 'pullback'];
+  const exitStyles = opts.exitStyles || ['partial', 'full', 'full-be', 'trail', 'trail-1R'];
+  const learnTo = embargoIndex(splitAt, { maxHold: best.maxHold });
+  const combos = [];
+  for (const entryMode of entryModes) {
+    for (const exitStyle of exitStyles) {
+      const cand = { ...best, entryMode, exitStyle };
+      const r = evaluateStrategy(ctx, cand, { toIndex: learnTo });
+      combos.push({ entryMode, exitStyle, n: r.n, missed: r.missed, fillRate: r.fillRate,
+        expectancy: r.expectancy, totalR: r.totalR, winRate: r.winRate });
+    }
+  }
+  /* เลือกด้วย R รวม ไม่ใช่ R ต่อไม้
+     เพราะวิธีเข้าแบบรอย่อจะ "อดเข้า" บางไม้ ทำให้ R ต่อไม้ดูดีขึ้นได้
+     ทั้งที่เก็บกำไรรวมได้น้อยลง — R รวมเป็นตัวเดียวที่นับไม้ที่อดเข้าไปด้วยโดยปริยาย */
+  const usable = combos.filter((c) => c.n >= (opts.minTrades || 15));
+  const pool = usable.length ? usable : combos;
+  pool.sort((a, b) => (b.totalR || -Infinity) - (a.totalR || -Infinity));
+  best = { ...best, entryMode: pool[0].entryMode, exitStyle: pool[0].exitStyle };
+
+  // ── ขั้นที่ 3: สอบครั้งเดียว บนข้อมูลที่ไม่เคยเห็น ────────────────────
+  const inSample = evaluateStrategy(ctx, best, { toIndex: learnTo });
+  const outSample = evaluateStrategy(ctx, best, { fromIndex: splitAt });
+  const prob = outSample.n >= 10 ? probPositive(outSample.rs) : null;
+
+  let level, verdict;
+  if (outSample.n < 15) {
+    level = 'unknown';
+    verdict = `ไม้ในช่วงสอบมีแค่ ${outSample.n} ไม้ ยังน้อยเกินกว่าจะสรุปว่ากลยุทธ์นี้ใช้ได้จริง — อย่าเพิ่งเทรดตาม`;
+  } else if (outSample.expectancy <= 0) {
+    level = 'bad';
+    verdict = `บนข้อมูลที่ระบบไม่เคยเห็น กลยุทธ์นี้ขาดทุน (${outSample.expectancy.toFixed(3)}R ต่อไม้) — `
+      + 'แปลว่าค่าที่หามาได้คือการจูนเข้ากับอดีต ไม่ใช่ความได้เปรียบจริง อย่าเทรดตาม';
+  } else if (prob !== null && prob >= 0.9) {
+    level = 'good';
+    verdict = `บนข้อมูลที่ระบบไม่เคยเห็น กลยุทธ์นี้ได้ ${outSample.expectancy.toFixed(3)}R ต่อไม้ `
+      + `จาก ${outSample.n} ไม้ (โอกาสที่กำไรจริงไม่ใช่บังเอิญ ${(prob * 100).toFixed(0)}%)`;
+  } else {
+    level = 'weak';
+    verdict = `บนข้อมูลที่ระบบไม่เคยเห็น กลยุทธ์นี้ได้ ${outSample.expectancy.toFixed(3)}R ต่อไม้ `
+      + `แต่ยังไม่พอสรุป (โอกาสที่กำไรจริงไม่ใช่บังเอิญแค่ ${prob === null ? '—' : (prob * 100).toFixed(0) + '%'}) — `
+      + 'เก็บข้อมูลเพิ่มแล้วทดสอบใหม่ก่อนลงเงินจริง';
+  }
+
+  const strip = (r) => { const { rs, trades, ...rest } = r; return rest; };
+  return {
+    ok: true, splitAt, strategy: best, describe: describeStrategy(best),
+    inSample: strip(inSample), outSample: strip(outSample), prob, level, verdict,
+    combos: pool,
+    // ส่งต่อรายละเอียดจากขั้นที่ 1 ให้แผงอธิบาย "ตัวเลขนี้มาจากไหน" ใช้ต่อได้
+    stage1: { grid: stage1.grid, slAdvice: stage1.slAdvice, mfe: stage1.mfe, maeWinners: stage1.maeWinners, reachRates: stage1.reachRates },
+    // ยุบสองสิ่งที่เคยแยกกันให้เหลือชุดเดียว: ค่าที่เลือก กับผลสอบของค่าที่เลือกนั้น
+    dropOff: inSample.expectancy !== null && outSample.expectancy !== null
+      ? inSample.expectancy - outSample.expectancy : null,
+  };
+}
+
+  return {DEFAULT_STRATEGY, describeStrategy, toBacktestOpts, evaluateStrategy, tuneStrategy};
 })();
 
 __m.sources = (function () {
@@ -7108,7 +7349,8 @@ function explainAdaptation(res, tfLabel = '') {
 __m.app = (function () {
   const {MarketFeed, TF, mergeCandle} = __m.feed;
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal} = __m.signals;
-  const {runBacktest, walkForward, optimizeExits, compareExitStyles, probabilityFor, wilsonInterval, sessionBucketAt} = __m.backtest;
+  const {runBacktest, probabilityFor, wilsonInterval, sessionBucketAt} = __m.backtest;
+  const {tuneStrategy, toBacktestOpts} = __m.strategy;
   const {learnAndValidate} = __m.learn;
   const {autoTune, explainAdaptation} = __m.adapt;
   const {SOURCES, testAllSources} = __m.sources;
@@ -7126,6 +7368,7 @@ __m.app = (function () {
 /**
  * app.js — ตัวเชื่อมทุกส่วนเข้าด้วยกัน: ข้อมูลสด → วิเคราะห์ → กราฟ/เหตุผล → แจ้งเตือน
  */
+
 
 
 
@@ -7224,11 +7467,11 @@ function cfg() {
 /**
  * เป้าหมายที่ใช้จริง
  * ค่าที่ระบบศึกษาตลาดแล้วจูนเองมาก่อน เพราะมันถูกวัดผลกับหลายช่วงเวลา
- * ส่วน optimizeExits วัดกับการแบ่งครั้งเดียว จึงเป็นตัวสำรอง
+ * ส่วนกลยุทธ์ชุดเดียวจากปุ่มทดสอบ วัดกับการแบ่งครั้งเดียว จึงเป็นตัวสำรอง
  */
 function activeTargetR() {
   if (settings.adaptParams && Number.isFinite(settings.adaptParams.targetR)) return settings.adaptParams.targetR;
-  return state.opt && state.opt.ok ? state.opt.best.targetR : null;
+  return state.strat && state.strat.ok ? state.strat.strategy.targetR : null;
 }
 
 // ── เริ่มระบบ ────────────────────────────────────────────────────────────
@@ -7858,7 +8101,7 @@ function renderSignal() {
   if (state.blocks && state.blocks.length) {
     parts.push(`<span style="color:var(--gold)"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M3.8 3.8l8.4 8.4"/></svg> ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
   }
-  if (state.wf && state.wf.ok && state.wf.verdict.level === 'bad') {
+  if (state.strat && state.strat.ok && state.strat.level === 'bad') {
     parts.push('<span style="color:var(--down)">⚠ ระบบสอบไม่ผ่านบนข้อมูลที่ไม่เคยเห็น — กฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ ดูรายละเอียดในแท็บผลทดสอบย้อนหลัง</span>');
   }
   $('candleState').innerHTML = parts.join('<br>');
@@ -7880,7 +8123,7 @@ function renderPlainAdvice() {
   const ex = explain({ ...state.scored, side: side || 1 });
   const top3 = ex.pro.slice(0, 3).map((f) => `<li>${f.reason}</li>`).join('');
 
-  const failWarn = state.wf && state.wf.ok && state.wf.verdict.level === 'bad'
+  const failWarn = state.strat && state.strat.ok && state.strat.level === 'bad'
     ? `<div class="next-step" style="background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.4)">
         <b>⚠ อ่านก่อนตัดสินใจ:</b> ระบบทดสอบตัวเองกับข้อมูลที่ไม่เคยเห็นแล้ว<b>ขาดทุน</b>
         แปลว่ากฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ — ใช้ดูเพื่อเรียนรู้ได้ แต่ยังไม่ควรเทรดตาม</div>`
@@ -7958,7 +8201,7 @@ function renderPlan() {
      ไม่ใช่ตามขนาดไม้ที่เทรดได้จริง ตัวเลขบนหน้าจอกับที่เด้งเข้า Discord จึงไม่ตรงกัน */
   const riskMoney = s.riskActual;
   const lots = s.lots;
-  const opt = state.opt && state.opt.ok ? state.opt : null;
+  const opt = state.strat && state.strat.ok ? state.strat.stage1 : null;
   const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
   const sign = s.side > 0 ? '+' : '-';
   const rr = Math.abs(s.tpMain - s.entry) / s.slDist;
@@ -8103,7 +8346,7 @@ function renderPlan() {
           ไม้ที่วิ่งไกลสุด 10% ไปได้เกิน <b>${opt.mfe.p90.toFixed(2)} เท่า</b> (จาก ${opt.mfe.n} ไม้)</p>
         ` : `<h4>ตัวเลขนี้มาจากไหน</h4>
           <p>ยังหาค่าที่ดีที่สุดจากสถิติไม่ได้ จึงใช้ค่าตั้งต้น (จุดตัดขาดทุน 1.5 เท่าของระยะแกว่ง · เป้า 2 เท่าของความเสี่ยง)</p>
-          <p class="why-hint"><b>เหตุผล:</b> ${state.opt && state.opt.reason ? state.opt.reason : 'ยังไม่ได้ทดสอบย้อนหลัง'}</p>`}
+          <p class="why-hint"><b>เหตุผล:</b> ${state.strat && state.strat.reason ? state.strat.reason : 'ยังไม่ได้ทดสอบย้อนหลัง'}</p>`}
 
         <h4>บันไดเป้าหมายแบบอื่น</h4>
         <table class="why-table"><tbody>
@@ -8184,26 +8427,29 @@ function doBacktest() {
   $('btStatus').textContent = 'กำลังคำนวณ…';
   setTimeout(() => {
     const t0 = performance.now();
-    state.opt = optimizeExits(state.ctx, {
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
+    /*
+     * เครื่องวัดเดียว จุดแบ่งข้อมูลเดียว คำตัดสินเดียว
+     *
+     * เมื่อก่อนตรงนี้เรียกเครื่องวัดสามตัวแยกกัน แต่ละตัวแบ่งข้อมูลเอง
+     * แล้วให้คำตัดสินของตัวเอง ผู้ใช้จึงเห็นตัวเลขสามชุดที่ไม่ประกอบกัน
+     * และไม่มีชุดไหนตอบได้ว่า "ถ้าทำตามระบบนี้ทั้งระบบ จะได้เท่าไร"
+     */
+    state.strat = tuneStrategy(state.ctx, {
+      base: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
     });
-    state.wf = walkForward(state.ctx, {
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
-    });
-    state.bt = runBacktest(state.ctx, {
-      threshold: settings.threshold, maxHold: settings.maxHold,
-      spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
-    });
-    /* เทียบวิธีบริหารไม้ทุกท่าบนข้อมูลชุดนี้ — ตอบคำถาม "ควรใช้ท่าไหน"
-       ด้วยตัวเลขของผู้ใช้เอง แทนที่จะให้เลือกจากชื่อท่าที่อ่านไม่ออกว่าต่างกันยังไง */
-    state.exitCmp = compareExitStyles(state.ctx, {
-      threshold: settings.threshold, maxHold: settings.maxHold,
-      spread: settings.spread, useFilters: settings.volFilter,
-    });
+    /* ตารางไม้และสถิติรวม ต้องมาจากกลยุทธ์ชุดเดียวกับที่การ์ดข้างบนตัดสิน
+       ไม่งั้นก็กลับไปเป็นสองชุดตัวเลขที่ไม่ตรงกันเหมือนเดิม */
+    state.bt = state.strat.ok
+      ? runBacktest(state.strat.strategy.slAtrMult
+          ? { ...state.ctx, cfg: { ...state.ctx.cfg, slAtrMult: state.strat.strategy.slAtrMult } }
+          : state.ctx, toBacktestOpts(state.strat.strategy))
+      : runBacktest(state.ctx, {
+        threshold: settings.threshold, maxHold: settings.maxHold,
+        spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
+      });
     $('btStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที · ข้อมูล ${state.candles.length} แท่ง (${TF[state.tf].label})`;
     renderBacktest();
-    renderWalkForward();
-    renderExitCompare();
+    renderStrategy();
     renderSignal();
     /* ต้องคิดแผนใหม่ ไม่ใช่แค่วาดใหม่: ผลทดสอบที่เพิ่งได้คือหลักฐานที่ใช้ตัดสิน
        ว่าจะเพิ่มขนาดไม้ไหม ถ้าวาดเฉย ๆ จะยังเห็น "ยังไม่มีผลทดสอบย้อนหลัง" ค้างอยู่ */
@@ -8220,95 +8466,90 @@ const EXIT_LABEL = {
   partial: 'ปิดครึ่งที่ 1R', full: 'ถือเต็มไม้ถึงเป้า', 'full-be': 'ถือเต็มไม้ + กันทุน',
   trail: 'ลากจุดตัดตามราคา', 'trail-1R': 'ปิดครึ่งแล้วลากที่เหลือ',
 };
+const ENTRY_LABEL = { market: 'เข้าที่ราคาตลาดทันที', pullback: 'ตั้ง limit รอราคาย่อ' };
 
 /**
- * เทียบวิธีบริหารไม้ — ตำราแต่ละเล่มเชียร์คนละท่า ให้ข้อมูลเป็นคนตัดสิน
+ * การ์ดเดียวที่ตอบว่า "ถ้าทำตามระบบนี้ทั้งระบบ จะได้เท่าไร"
  *
- * เลือกท่าจากช่วงเรียน แล้วพิสูจน์บนช่วงสอบที่ไม่เคยเห็น
- * ถ้าท่าที่เลือกไว้แพ้ตอนสอบ ต้องขึ้นว่าแพ้ ไม่ใช่ซ่อนแล้วแนะนำต่อ
+ * เมื่อก่อนตรงนี้เป็นสามการ์ด — ตรวจแบบแบ่งข้อมูล, หาค่าที่ดีที่สุด, เทียบวิธีบริหารไม้
+ * แต่ละใบแบ่งข้อมูลเองและให้คำตัดสินของตัวเอง คนอ่านจึงต้องเอาสามชุดมาปะติดปะต่อเอง
+ * ทั้งที่คำถามจริงมีข้อเดียว ตอนนี้จึงเหลือชุดเดียว: เลือกจากช่วงเรียน สอบครั้งเดียว
  */
-function renderExitCompare() {
-  const el = $('exitBox');
-  const c = state.exitCmp;
-  if (!c) { el.innerHTML = ''; return; }
-  if (!c.ok) {
-    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังเทียบวิธีบริหารไม้ไม่ได้</div>
-      <div class="tiny" style="margin:0">${c.reason}</div></div>`;
+function renderStrategy() {
+  const el = $('wfBox');
+  const st = state.strat;
+  if (!st) { el.innerHTML = ''; return; }
+  if (!st.ok) {
+    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังหากลยุทธ์ที่ดีที่สุดไม่ได้</div>
+      <div class="tiny" style="margin:0">${st.reason}</div></div>`;
     return;
   }
   const num = (v, d = 3, suf = 'R') => (Number.isFinite(v) ? v.toFixed(d) + suf : '—');
-  const testBy = new Map(c.test.map((r) => [r.style, r]));
-  const rows = [...c.test].sort((a, b) => (b.expectancy || -Infinity) - (a.expectancy || -Infinity)).map((t) => {
-    const l = c.learn.find((x) => x.style === t.style);
-    const isPick = t.style === c.pick;
-    const isNow = t.style === settings.exitStyle;
-    return `<tr class="${isPick ? 'row-pick' : ''}">
-      <td>${EXIT_LABEL[t.style] || t.style}${isPick ? ' <span class="tiny">← เลือกจากช่วงเรียน</span>' : ''}${isNow ? ' <span class="tiny">← ที่ใช้อยู่</span>' : ''}</td>
-      <td class="num">${num(l && l.expectancy)}</td>
-      <td class="num"><b>${num(t.expectancy)}</b></td>
-      <td class="num">${Number.isFinite(t.winRate) ? t.winRate.toFixed(0) + '%' : '—'}</td>
-      <td class="num">${t.n}</td>
-      <td class="num">${num(t.maxDD, 1)}</td>
+  const pct = (v) => (Number.isFinite(v) ? `${v.toFixed(1)}%` : '—');
+  const S = st.strategy;
+  const cls = st.level === 'good' ? 'good' : st.level === 'bad' ? 'bad' : 'weak';
+
+  const rows = st.combos.slice(0, 6).map((c) => {
+    const on = c.entryMode === S.entryMode && c.exitStyle === S.exitStyle;
+    return `<tr class="${on ? 'row-pick' : ''}">
+      <td>${ENTRY_LABEL[c.entryMode] || c.entryMode} + ${EXIT_LABEL[c.exitStyle] || c.exitStyle}${on ? ' <span class="tiny">← ที่เลือก</span>' : ''}</td>
+      <td class="num">${c.n}</td>
+      <td class="num">${c.missed || 0}</td>
+      <td class="num">${num(c.expectancy)}</td>
+      <td class="num"><b>${num(c.totalR, 0)}</b></td>
     </tr>`;
   }).join('');
-  const same = c.recommend === settings.exitStyle;
-  el.innerHTML = `
-    <div class="wf-card ${c.level === 'confirmed' ? 'good' : c.level === 'failed' ? 'bad' : 'weak'}">
-      <div class="wf-verdict">วิธีบริหารไม้: ${c.verdict}</div>
-      <table class="learn-table">
-        <thead><tr><th>วิธี</th><th class="num">ช่วงเรียน</th><th class="num">ช่วงสอบ</th><th class="num">ชนะ</th><th class="num">ไม้</th><th class="num">DD</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div class="tiny" style="margin:8px 0 0">
-        ${same ? `ตอนนี้ใช้ "${EXIT_LABEL[settings.exitStyle] || settings.exitStyle}" อยู่แล้ว ซึ่งตรงกับที่ข้อมูลชุดนี้แนะนำ`
-          : `ข้อมูลชุดนี้แนะนำ "${EXIT_LABEL[c.recommend] || c.recommend}" — ตอนนี้ตั้งไว้เป็น "${EXIT_LABEL[settings.exitStyle] || settings.exitStyle}"`}
-        · คอลัมน์ "ช่วงสอบ" คือตัวเลขที่ควรเชื่อ เพราะระบบไม่เคยเห็นข้อมูลส่วนนั้นตอนเลือก
-        · ผลนี้ผูกกับตลาดช่วงที่โหลดมาเท่านั้น ตลาดเปลี่ยนลักษณะเมื่อไร ต้องกดทดสอบใหม่
-      </div>
-    </div>`;
-}
 
-/**
- * ผลตรวจสอบแบบแบ่งข้อมูล — ตัวเลขที่ควรเชื่อจริง ๆ
- * วางไว้เหนือสถิติรวม เพราะสถิติรวมเป็นการวัดผลบนข้อมูลชุดเดียวกับที่ใช้ตั้งกฎ
- */
-function renderWalkForward() {
-  const el = $('wfBox');
-  const wf = state.wf;
-  if (!wf) { el.innerHTML = ''; return; }
-  if (!wf.ok) {
-    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังตรวจสอบแบบแบ่งข้อมูลไม่ได้</div>
-      <div class="tiny" style="margin:0">${wf.reason}</div></div>`;
-    return;
-  }
-  const io = wf.inSample.stats, oo = wf.outSample.stats;
-  const pct = (v) => (v === null ? '—' : `${v.toFixed(1)}%`);
-  const r = (v) => (v === null ? '—' : `${v.toFixed(3)}R`);
+  /* ตั้งค่าที่ใช้อยู่ตรงกับกลยุทธ์ที่วัดมาไหม — ถ้าไม่ตรง ตัวเลขข้างบนก็ไม่ใช่ของพี่ */
+  const diffs = [];
+  if (settings.threshold !== S.threshold) diffs.push(`เกณฑ์คะแนน ${settings.threshold} → ${S.threshold}`);
+  if (settings.exitStyle !== S.exitStyle) diffs.push(`วิธีบริหารไม้ → ${EXIT_LABEL[S.exitStyle] || S.exitStyle}`);
+
   el.innerHTML = `
-    <div class="wf-card ${wf.verdict.level}">
-      <div class="wf-verdict">${wf.verdict.text}</div>
-      <div class="tiny" style="margin:0">
-        แบ่งข้อมูลเป็นสองท่อน: ใช้ท่อนแรกหาว่าเกณฑ์คะแนนเท่าไรดีที่สุด (ได้ <b>${wf.chosenThreshold}</b>)
-        แล้วเอาเกณฑ์นั้นไปวัดผลกับท่อนหลังที่ระบบไม่เคยเห็น — ตัวเลขจากท่อนหลังคือตัวเลขที่ควรเชื่อ
-      </div>
+    <div class="wf-card ${cls}">
+      <div class="wf-verdict">${st.verdict}</div>
+      <div class="strat-line"><b>กลยุทธ์ที่วัดมาได้:</b> ${st.describe}</div>
       <div class="wf-compare">
         <div class="wf-side">
           <h4>ช่วงเรียนรู้ (ตัวเลขมักสวยเกินจริง)</h4>
-          <div class="big">${pct(io.winRate)}</div>
-          <div class="sub">${io.n} ไม้ · ค่าคาดหวัง ${r(io.expectancy)}</div>
+          <div class="big">${num(st.inSample.expectancy)}</div>
+          <div class="sub">${st.inSample.n} ไม้ · ชนะ ${pct(st.inSample.winRate)}</div>
         </div>
         <div class="wf-side trusted">
           <h4><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg> ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
-          <div class="big" style="color:${oo.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${pct(oo.winRate)}</div>
-          <div class="sub">${oo.n} ไม้ · ค่าคาดหวัง ${r(oo.expectancy)}</div>
+          <div class="big" style="color:${st.outSample.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${num(st.outSample.expectancy)}</div>
+          <div class="sub">${st.outSample.n} ไม้ · ชนะ ${pct(st.outSample.winRate)}</div>
         </div>
         <div class="wf-side">
           <h4>ผลตกลงเท่าไร</h4>
-          <div class="big" style="color:${wf.drop === null ? 'var(--muted)' : wf.drop > 15 ? 'var(--down)' : 'var(--up)'}">${wf.drop === null ? '—' : (wf.drop > 0 ? '-' : '+') + Math.abs(wf.drop).toFixed(1) + '%'}</div>
-          <div class="sub">ตกเกิน 15% = ระบบจำข้อมูลเก่า มากกว่าเข้าใจตลาด</div>
+          <div class="big" style="color:${st.dropOff === null ? 'var(--muted)' : st.dropOff > 0.3 ? 'var(--down)' : 'var(--up)'}">${st.dropOff === null ? '—' : num(st.dropOff)}</div>
+          <div class="sub">ตกเยอะ = ระบบจำข้อมูลเก่า มากกว่าเข้าใจตลาด</div>
         </div>
       </div>
+      <table class="learn-table">
+        <thead><tr><th>วิธีเข้า + วิธีออก (ลองบนช่วงเรียน)</th><th class="num">ไม้</th><th class="num">อดเข้า</th><th class="num">R/ไม้</th><th class="num">R รวม</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="tiny" style="margin:8px 0 0">
+        เลือกด้วย <b>R รวม</b> ไม่ใช่ R ต่อไม้ — เพราะการรอราคาย่อจะอดเข้าบางไม้
+        ซึ่งทำให้ R ต่อไม้ดูดีขึ้นได้ทั้งที่เก็บกำไรรวมได้น้อยลง คอลัมน์ "อดเข้า" คือไม้ที่เสียไปจากการรอ
+        ${diffs.length ? `<br><span style="color:var(--gold)">⚠ ตั้งค่าที่ใช้อยู่ยังไม่ตรงกับกลยุทธ์ที่วัดมา (${diffs.join(' · ')}) —
+          ตัวเลขข้างบนจึงยังไม่ใช่ผลของค่าที่พี่ตั้งไว้</span>
+          <button id="applyStrat" class="btn" style="margin-top:8px">ใช้กลยุทธ์นี้กับการตั้งค่า</button>` : ''}
+      </div>
     </div>`;
+
+  const btn = $('applyStrat');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      settings.threshold = S.threshold;
+      settings.exitStyle = S.exitStyle;
+      saveSettings();
+      $('thresholdInput').value = S.threshold;
+      $('exitStyleSel').value = S.exitStyle;
+      doBacktest();
+    });
+  }
 }
 
 /**
