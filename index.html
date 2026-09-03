@@ -180,21 +180,18 @@
 
   <div class="tab-panel active" id="tab-backtest">
     <div class="bt-controls">
-      <label>วิธีบริหารไม้
-        <select id="exitStyleSel">
-          <option value="full">ถือเต็มไม้ถึงเป้า — ชนะทีได้เต็ม</option>
-          <option value="partial">ปิดครึ่งที่ 1R — ผลนุ่มกว่า แต่กำไรต่อไม้น้อย</option>
-          <option value="full-be">ถือเต็มไม้ + เลื่อน SL กันทุน</option>
-          <option value="trail">ลากจุดตัดตามราคา ไม่มีเป้าตายตัว (Chandelier)</option>
-          <option value="trail-1R">ปิดครึ่งที่ 1R แล้วลากที่เหลือ</option>
-        </select>
-      </label>
       <button id="runBt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
-      <label>คะแนนขั้นต่ำ <input type="number" id="thresholdInput" value="35" min="10" max="90" step="1"></label>
-      <label>ถือได้สูงสุด (แท่ง) <input type="number" id="maxHoldInput" value="60" min="5" max="300" step="5"></label>
-      <label>สเปรด (USD) <input type="number" id="spreadInput" value="0.30" min="0" max="3" step="0.05"></label>
       <span id="btStatus" class="tiny"></span>
     </div>
+    <!-- วิธีบริหารไม้กับเกณฑ์คะแนน ไม่ให้เลือกเองแล้ว — ระบบวัดเองว่าอันไหนดีที่สุด
+         แล้วใช้อันนั้น การให้เลือกเองทั้งที่วัดได้ คือการโยนการตัดสินใจกลับไปให้ผู้ใช้เดา -->
+    <details class="adv-box">
+      <summary>ตั้งค่าขั้นสูง (ปกติไม่ต้องแตะ)</summary>
+      <div class="bt-controls">
+        <label>ถือได้สูงสุด (แท่ง) <input type="number" id="maxHoldInput" value="60" min="5" max="300" step="5"></label>
+        <label>สเปรด (USD) <input type="number" id="spreadInput" value="0.30" min="0" max="3" step="0.05"></label>
+      </div>
+    </details>
     <div id="wfBox" class="wf-box"></div>
     <div id="btSummary" class="bt-summary"></div>
     <div class="bt-grid">
@@ -361,7 +358,9 @@
     <div class="settings-grid">
       <div class="card">
         <h2>เกณฑ์สัญญาณ</h2>
-        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <input type="number" id="setThreshold" value="35" min="10" max="90"></label>
+        <!-- เกณฑ์คะแนนไม่ให้ตั้งเองแล้ว ระบบวัดเองว่าเลขไหนได้ผลดีที่สุดกับข้อมูลจริง
+             แล้วใช้เลขนั้น โชว์ไว้ให้เห็นเฉย ๆ ว่าตอนนี้ใช้เท่าไรและมาจากไหน -->
+        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <output id="setThreshold" class="ro-val">35</output></label>
         <label>ตัวคูณ ATR สำหรับ Stop Loss <input type="number" id="setSlAtr" value="1.5" min="0.5" max="5" step="0.1"></label>
         <label>ADX ขั้นต่ำที่ถือว่ามีเทรนด์ <input type="number" id="setAdx" value="22" min="10" max="40"></label>
         <label>กรอบเวลาใหญ่ที่ 1 <select id="setHtf1"></select></label>

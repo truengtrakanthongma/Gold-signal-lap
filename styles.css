@@ -512,6 +512,13 @@ body.simple .narr p { font-size: var(--fs-sm); }
 /* แถวของท่าที่ระบบเลือกไว้จากช่วงเรียน — ต้องหาเจอทันทีโดยไม่ต้องไล่อ่านทั้งตาราง */
 .learn-table tr.row-pick td { background: rgba(240,180,41,.08); }
 /* บรรทัดสรุปกลยุทธ์ทั้งชุด — ต้องอ่านได้จบในบรรทัดเดียวว่าระบบจะทำอะไรบ้าง */
+/* กล่องตั้งค่าขั้นสูง — มีไว้ให้ตรวจสอบได้ ไม่ใช่ให้ต้องตั้ง */
+.adv-box { margin: 10px 0 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(2,6,23,.25); }
+.adv-box > summary { cursor: pointer; padding: 8px 12px; font-size: var(--fs-xs); color: var(--muted); }
+.adv-box[open] > summary { border-bottom: 1px solid var(--line); }
+.adv-box > *:not(summary) { padding: 4px 12px 12px; }
+.ro-val { font-family: 'JetBrains Mono', monospace; color: var(--gold); font-weight: 600; }
+
 .strat-line { font-size: var(--fs-xs); color: var(--text); margin: 8px 0 2px;
   padding: 8px 10px; background: rgba(2,6,23,.4); border-radius: 7px; border-left: 3px solid var(--gold); line-height: 1.6; }
 .learn-table tr.row-pick td:first-child { box-shadow: inset 2px 0 0 var(--gold); }

@@ -74,6 +74,9 @@ const settings = {
    * เทียบกันไม่ได้ — ตั้งเป็น 'full' ทำให้ทั้งระบบพูดภาษาเดียวกัน
    */
   exitStyle: 'full',
+  /* ค่าตั้งต้นเป็นเข้าเลย เพราะวัดแล้วการรอย่อแพ้ในตลาดที่มีเทรนด์
+     ปุ่มทดสอบจะเขียนทับด้วยค่าที่วัดได้จากข้อมูลจริงอีกที */
+  entryMode: 'market',
 };
 
 const feed = new MarketFeed();
@@ -166,8 +169,7 @@ function buildStaticUI() {
   $('minLotInput').value = settings.minLot;
   $('lotStepInput').value = settings.lotStep;
   $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
-  $('thresholdInput').value = settings.threshold;
-  $('setThreshold').value = settings.threshold;
+  $('setThreshold').textContent = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
   $('setAdx').value = settings.adxMin;
   $('setUsdThb').value = settings.usdThb;
@@ -248,11 +250,6 @@ function bindEvents() {
       if (state.scored) { rebuildSetup(); renderPlan(); }
     }));
 
-  $('exitStyleSel').value = settings.exitStyle || 'full';
-  $('exitStyleSel').addEventListener('change', (e) => {
-    settings.exitStyle = e.target.value; saveSettings();
-    analyze(false, false); doBacktest();
-  });
   $('runBt').addEventListener('click', () => doBacktest());
   $('runNewsTest').addEventListener('click', () => doNewsTest());
   $('refreshNews').addEventListener('click', () => loadNews());
@@ -264,18 +261,14 @@ function bindEvents() {
   $('runLearn').addEventListener('click', () => doLearn());
   $('applyLearn').addEventListener('click', () => applyLearned(state.learn && state.learn.weights));
   $('resetLearn').addEventListener('click', () => applyLearned(null));
-  ['thresholdInput', 'maxHoldInput', 'spreadInput'].forEach((id) => $(id).addEventListener('change', () => {
-    settings.threshold = +$('thresholdInput').value || 35;
+  ['maxHoldInput', 'spreadInput'].forEach((id) => $(id).addEventListener('change', () => {
     settings.maxHold = +$('maxHoldInput').value || 60;
     settings.spread = +$('spreadInput').value || 0;
-    $('setThreshold').value = settings.threshold;
     saveSettings();
   }));
-  ['setThreshold', 'setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
-    settings.threshold = +$('setThreshold').value || 35;
+  ['setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
     settings.slAtr = +$('setSlAtr').value || 1.5;
     settings.adxMin = +$('setAdx').value || 22;
-    $('thresholdInput').value = settings.threshold;
     saveSettings(); analyze(true, false);
   }));
   $('setHtf1').addEventListener('change', (e) => { settings.htf1 = e.target.value; saveSettings(); reload(); });
@@ -874,6 +867,14 @@ function renderPlan() {
   const hasPullback = s.entryIdeal !== null;
   const gapToIdeal = hasPullback ? Math.abs(s.entry - s.entryIdeal) : 0;
   const idealIsClose = hasPullback && gapToIdeal < s.slDist * 0.25;
+  /*
+   * บอกวิธีเข้าไม้ "วิธีเดียว" ตามที่วัดมา ไม่ใช่กางสองทางให้ผู้ใช้เลือกเอง
+   *
+   * ของเดิมโชว์ "ดีที่สุด: รอย่อ" คู่กับ "หรือ: เข้าเลย" ทุกครั้ง
+   * ซึ่งเป็นการโยนการตัดสินใจกลับไปให้คนอ่าน ทั้งที่ระบบวัดคำตอบไว้แล้ว
+   * และคำว่า "ดีที่สุด" ก็ไม่เคยผ่านการวัด — วัดแล้วพบว่าบ่อยครั้งแย่กว่าเข้าเลยด้วยซ้ำ
+   */
+  const waitForPullback = hasPullback && !idealIsClose && settings.entryMode === 'pullback';
 
   const held = state.hold;
   const ageMin = held ? Math.max(0, Math.round((Date.now() - held.startedAt) / 60000)) : null;
@@ -910,16 +911,18 @@ function renderPlan() {
 
       <div class="step"><span class="step-n">1</span><div>
         <b>ตั้งคำสั่งที่ราคาไหน</b>
-        ${hasPullback && !idealIsClose ? `
-          <div class="opt best"><span class="opt-tag">ดีที่สุด</span>
+        ${waitForPullback ? `
+          <div class="opt best"><span class="opt-tag">ทำแบบนี้</span>
             ตั้ง <b>${orderType} Limit</b> ที่ <b class="num">${s.entryIdeal.toFixed(2)}</b> — รอราคาย่อกลับมาที่${s.entryIdealWhy}
-            <span class="opt-why">ได้ระยะดีกว่า แต่ถ้าราคาไม่ย่อกลับมาก็อดเข้า ซึ่งไม่เสียหายอะไร</span></div>
-          <div class="opt"><span class="opt-tag alt">หรือ</span>
-            เข้าเลยที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
-            <span class="opt-why">ได้เข้าแน่นอน แต่ระยะแย่กว่าประมาณ ${gapToIdeal.toFixed(2)} ดอลลาร์</span></div>` : `
-          <div class="opt best"><span class="opt-tag">เข้าได้เลย</span>
+            <span class="opt-why">ระบบวัดข้อมูลย้อนหลังแล้วพบว่าการรอย่อได้ผลรวมดีกว่าเข้าเลยกับตลาดช่วงนี้
+              ถ้าราคาไม่ย่อกลับมาภายในไม่กี่แท่ง ก็ปล่อยไม้นี้ผ่านไป</span></div>` : `
+          <div class="opt best"><span class="opt-tag">ทำแบบนี้</span>
             ตั้ง <b>${orderType}</b> ที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
-            <span class="opt-why">${hasPullback ? 'ราคาอยู่ในโซนที่ดีอยู่แล้ว ไม่ต้องรอย่อ' : 'ไม่มีแนวใกล้ ๆ ให้รอย่อ เข้าที่ราคาตลาดได้'}</span></div>`}
+            <span class="opt-why">${!hasPullback
+              ? 'ไม่มีแนวใกล้ ๆ ให้รอย่อ'
+              : idealIsClose
+                ? 'ราคาอยู่ในโซนที่ดีอยู่แล้ว ไม่ต้องรอย่อ'
+                : `ระบบวัดแล้วว่าการรอย่อได้ผลรวมแย่กว่า เพราะไม้ที่ราคาไม่ย่อกลับมา มักเป็นไม้ที่วิ่งไกลที่สุด (รอแล้วอดเข้าไม้ดี ๆ ไป)`}</span></div>`}
         <div class="opt stop"><span class="opt-tag no">ห้ามเข้า</span>
           ถ้าราคา${s.side > 0 ? 'วิ่งขึ้นเกิน' : 'วิ่งลงต่ำกว่า'} <b class="num">${s.entryLimit.toFixed(2)}</b>
           <span class="opt-why">เลยจุดนี้ไป ได้:เสีย จะต่ำกว่า ${s.minRR} : 1 — ไม่คุ้มเสี่ยงแล้ว ปล่อยไม้นี้ผ่านไป</span></div>
@@ -1100,6 +1103,23 @@ function doBacktest() {
     state.strat = tuneStrategy(state.ctx, {
       base: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
     });
+    /*
+     * ค่าที่วัดมาได้ ถูกนำไปใช้จริงทันที ไม่ใช่แค่โชว์เป็นข้อเสนอ
+     *
+     * เมื่อก่อนระบบวัดได้ว่าเกณฑ์ 40 กับท่า trail ดีที่สุด แล้วก็โชว์ไว้เฉย ๆ
+     * ส่วนสัญญาณสดยังใช้เลขที่ผู้ใช้ตั้งไว้ กลายเป็นสองระบบซ้อนกัน
+     * ทั้งที่การวัดมีคำตอบอยู่แล้ว การให้ผู้ใช้เดาเองจึงไม่มีเหตุผลรองรับ
+     *
+     * ข้อยกเว้นเดียว: ถ้าสอบไม่ผ่าน (level = bad) ไม่เอาค่านั้นมาใช้
+     * เพราะค่าที่ได้จากการจูนเข้ากับอดีตที่พิสูจน์แล้วว่าใช้ไม่ได้ แย่กว่าค่าตั้งต้น
+     */
+    if (state.strat.ok && state.strat.level !== 'bad') {
+      settings.threshold = state.strat.strategy.threshold;
+      settings.exitStyle = state.strat.strategy.exitStyle;
+      settings.entryMode = state.strat.strategy.entryMode;
+      saveSettings();
+      $('setThreshold').textContent = settings.threshold;
+    }
     /* ตารางไม้และสถิติรวม ต้องมาจากกลยุทธ์ชุดเดียวกับที่การ์ดข้างบนตัดสิน
        ไม่งั้นก็กลับไปเป็นสองชุดตัวเลขที่ไม่ตรงกันเหมือนเดิม */
     state.bt = state.strat.ok
@@ -1163,15 +1183,14 @@ function renderStrategy() {
     </tr>`;
   }).join('');
 
-  /* ตั้งค่าที่ใช้อยู่ตรงกับกลยุทธ์ที่วัดมาไหม — ถ้าไม่ตรง ตัวเลขข้างบนก็ไม่ใช่ของพี่ */
-  const diffs = [];
-  if (settings.threshold !== S.threshold) diffs.push(`เกณฑ์คะแนน ${settings.threshold} → ${S.threshold}`);
-  if (settings.exitStyle !== S.exitStyle) diffs.push(`วิธีบริหารไม้ → ${EXIT_LABEL[S.exitStyle] || S.exitStyle}`);
-
   el.innerHTML = `
     <div class="wf-card ${cls}">
       <div class="wf-verdict">${st.verdict}</div>
-      <div class="strat-line"><b>กลยุทธ์ที่วัดมาได้:</b> ${st.describe}</div>
+      <div class="strat-line">
+        <b>${st.level === 'bad' ? 'ไม่ใช้กลยุทธ์นี้ (สอบไม่ผ่าน) — คงค่าตั้งต้นไว้:' : 'วิธีที่ระบบใช้อยู่ตอนนี้:'}</b>
+        ${st.describe}
+        ${st.level === 'bad' ? '' : '<br><span class="tiny">ระบบเลือกให้เองจากการวัด และใช้กับสัญญาณสดแล้ว ไม่ต้องไปตั้งค่าเพิ่ม</span>'}
+      </div>
       <div class="wf-compare">
         <div class="wf-side">
           <h4>ช่วงเรียนรู้ (ตัวเลขมักสวยเกินจริง)</h4>
@@ -1189,30 +1208,18 @@ function renderStrategy() {
           <div class="sub">ตกเยอะ = ระบบจำข้อมูลเก่า มากกว่าเข้าใจตลาด</div>
         </div>
       </div>
-      <table class="learn-table">
-        <thead><tr><th>วิธีเข้า + วิธีออก (ลองบนช่วงเรียน)</th><th class="num">ไม้</th><th class="num">อดเข้า</th><th class="num">R/ไม้</th><th class="num">R รวม</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <details class="adv-box">
+        <summary>ดูวิธีอื่นที่ลองแล้วแพ้ (${st.combos.length} วิธี)</summary>
+        <table class="learn-table">
+          <thead><tr><th>วิธีเข้า + วิธีออก (ลองบนช่วงเรียน)</th><th class="num">ไม้</th><th class="num">อดเข้า</th><th class="num">R/ไม้</th><th class="num">R รวม</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
       <div class="tiny" style="margin:8px 0 0">
         เลือกด้วย <b>R รวม</b> ไม่ใช่ R ต่อไม้ — เพราะการรอราคาย่อจะอดเข้าบางไม้
         ซึ่งทำให้ R ต่อไม้ดูดีขึ้นได้ทั้งที่เก็บกำไรรวมได้น้อยลง คอลัมน์ "อดเข้า" คือไม้ที่เสียไปจากการรอ
-        ${diffs.length ? `<br><span style="color:var(--gold)">⚠ ตั้งค่าที่ใช้อยู่ยังไม่ตรงกับกลยุทธ์ที่วัดมา (${diffs.join(' · ')}) —
-          ตัวเลขข้างบนจึงยังไม่ใช่ผลของค่าที่พี่ตั้งไว้</span>
-          <button id="applyStrat" class="btn" style="margin-top:8px">ใช้กลยุทธ์นี้กับการตั้งค่า</button>` : ''}
       </div>
+      </details>
     </div>`;
-
-  const btn = $('applyStrat');
-  if (btn) {
-    btn.addEventListener('click', () => {
-      settings.threshold = S.threshold;
-      settings.exitStyle = S.exitStyle;
-      saveSettings();
-      $('thresholdInput').value = S.threshold;
-      $('exitStyleSel').value = S.exitStyle;
-      doBacktest();
-    });
-  }
 }
 
 /**
@@ -1535,8 +1542,7 @@ function applyAdapt(params) {
     settings.adaptPrev = null;
   }
   // ช่องกรอกต้องขยับตาม ไม่งั้นผู้ใช้เห็นเลขเก่าแต่ระบบใช้เลขใหม่
-  $('thresholdInput').value = settings.threshold;
-  $('setThreshold').value = settings.threshold;
+  $('setThreshold').textContent = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
   saveSettings();
   analyze(false, false);
