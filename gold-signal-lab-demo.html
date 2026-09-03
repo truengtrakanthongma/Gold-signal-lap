@@ -3250,8 +3250,20 @@ function runBacktest(ctx, opts = {}) {
         continue;
       }
 
+      /*
+       * *** จุดตัดขาดทุนต้องมีผลเสมอ เว้นแต่ท่านั้นย้ายจุดตัดไปแล้วจริง ๆ ***
+       *
+       * บั๊กที่เคยมี: เงื่อนไขเดิมคือ (hitSL && !hit1R) ซึ่งแปลว่าพอราคาแตะ 1R
+       * ปุ๊บ จุดตัดขาดทุนก็เลิกทำงานทันทีทุกท่า แต่ท่า 'full' ไม่ได้ย้ายจุดตัดไปไหนเลย
+       * ไม้เลยวิ่งทะลุ SL ลงไปเรื่อย ๆ จนหมดเวลาถือ วัดแล้วเจอไม้ที่ขาดทุน -124R
+       * คือ 124 เท่าของเงินที่ตั้งใจเสี่ยง — ไม้เดียวล้างพอร์ตได้สบาย
+       *
+       * ท่าที่ย้ายจุดตัดจริงมีแค่ partial กับ full-be (ย้ายมาที่ทุนหลังผ่าน 1R)
+       * สองท่านั้นมีการเช็คจุดตัดใหม่ของตัวเองอยู่ข้างล่างแล้ว
+       */
+      const stopMoved = hit1R && (style === 'partial' || style === 'full-be');
       // แท่งเดียวแตะทั้งคู่ = นับแพ้ (ไม่รู้ลำดับจริงจากข้อมูลแท่งเทียน)
-      if (hitSL && !hit1R) {
+      if (hitSL && !stopMoved) {
         exitIdx = j; result = 'loss';
         // แท่งที่โดน SL ไม่นับระยะกำไรของแท่งนั้น เพราะไม่รู้ว่าแตะจุดไหนก่อน
         favBeforeStop = favPrev;
@@ -3345,7 +3357,16 @@ function runBacktest(ctx, opts = {}) {
 
 function summarize(trades, o, missed = []) {
   const n = trades.length;
-  const wins1R = trades.filter((t) => t.hit1R).length;
+  /*
+   * "ชนะ" ต้องแปลว่าได้เงิน ไม่ใช่แค่ราคาเคยวิ่งไปแตะเป้า
+   *
+   * ของเดิมนับไม้ที่ hit1R คือ "เคยแตะ 1R" ซึ่งไม่เท่ากับปิดไม้แล้วได้กำไร
+   * ไม้ที่แตะ 1R แล้วย้อนกลับมาโดน SL ถูกนับเป็นชนะทั้งที่เสียเงินจริง
+   * วัดแล้วท่า full-be รายงาน 65.3% ทั้งที่ได้เงินจริงแค่ 44.5% — ต่างกัน 20 จุด
+   * ตัวเลขที่โฆษณาตัวเองเกินจริงแบบนี้ อันตรายกว่าตัวเลขที่ต่ำแต่จริง
+   */
+  const wins1R = trades.filter((t) => t.rMultiple > 0).length;
+  const reached1R = trades.filter((t) => t.hit1R).length;
   const grossWin = trades.filter((t) => t.rMultiple > 0).reduce((a, t) => a + t.rMultiple, 0);
   const grossLoss = Math.abs(trades.filter((t) => t.rMultiple < 0).reduce((a, t) => a + t.rMultiple, 0));
   const totalR = trades.reduce((a, t) => a + t.rMultiple, 0);
@@ -3368,21 +3389,21 @@ function summarize(trades, o, missed = []) {
     { min: 75, max: 101, label: '75+' },
   ].map((b) => {
     const list = trades.filter((t) => t.absScore >= b.min && t.absScore < b.max);
-    const w = list.filter((t) => t.hit1R).length;
+    const w = list.filter((t) => t.rMultiple > 0).length;
     return { ...b, n: list.length, winRate: list.length ? (w / list.length) * 100 : null,
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
 
   const sessions = SESSION_BUCKETS.map((s) => {
     const list = trades.filter((t) => t.hourTh >= s.from && t.hourTh < s.to);
-    const w = list.filter((t) => t.hit1R).length;
+    const w = list.filter((t) => t.rMultiple > 0).length;
     return { ...s, n: list.length, winRate: list.length ? (w / list.length) * 100 : null,
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
 
   const bySide = [1, -1].map((sd) => {
     const list = trades.filter((t) => t.side === sd);
-    const w = list.filter((t) => t.hit1R).length;
+    const w = list.filter((t) => t.rMultiple > 0).length;
     return { side: sd, n: list.length, winRate: list.length ? (w / list.length) * 100 : null,
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
@@ -3392,7 +3413,7 @@ function summarize(trades, o, missed = []) {
   const factors = factorKeys.map((key) => {
     const withIt = trades.filter((t) => (t.agree || []).includes(key));
     const vsIt = trades.filter((t) => (t.against || []).includes(key));
-    const wr = (list) => (list.length ? (list.filter((t) => t.hit1R).length / list.length) * 100 : null);
+    const wr = (list) => (list.length ? (list.filter((t) => t.rMultiple > 0).length / list.length) * 100 : null);
     const a = wr(withIt), b = wr(vsIt);
     return {
       key, nAgree: withIt.length, nAgainst: vsIt.length, winAgree: a, winAgainst: b,
@@ -3407,6 +3428,8 @@ function summarize(trades, o, missed = []) {
     stats: {
       n,
       winRate: n ? (wins1R / n) * 100 : null,
+      // "เคยวิ่งไปถึงเป้าไหม" ยังมีประโยชน์ แต่ต้องแยกช่องกับ "ได้เงินไหม" ให้ชัด
+      reach1RRate: n ? (reached1R / n) * 100 : null,
       /*
        * อัตราชนะที่มีความหมายจริง
        *
@@ -3465,9 +3488,33 @@ function evaluateTarget(trades, targetR, costR = 0) {
       total += Math.max(-1, Math.min(targetR, t.rMultiple)) - costR;
     }
   }
+  /* ขาดทุนสะสมลึกสุดของลำดับไม้ชุดนี้ — ต้องเดินตามลำดับเวลาจริง
+     ใช้เป็นตัวหารของ "กำไรเทียบความเจ็บ" ซึ่งเป็นตัวตัดสินว่าจะเลือกค่าไหน */
+  let run = 0, peak = 0, maxDD = 0;
+  for (const t of trades) {
+    const r = (t.favBeforeStop || 0) >= targetR ? targetR - costR
+      : (t.result === 'loss' ? -1 - costR : Math.max(-1, Math.min(targetR, t.rMultiple)) - costR);
+    run += r;
+    peak = Math.max(peak, run);
+    maxDD = Math.max(maxDD, peak - run);
+  }
   return {
     targetR, n: trades.length, hitRate: (wins / trades.length) * 100,
-    expectancy: total / trades.length, totalR: total,
+    expectancy: total / trades.length, totalR: total, maxDD,
+    /*
+     * ตัวตัดสินหลัก: ได้กำไรเท่าไร ต่อความเจ็บหนึ่งหน่วย
+     *
+     * ทำไมไม่ใช้กำไรรวมเฉย ๆ: วัดแล้วกำไรรวมสูงสุดมาจากการเก็บไม้เยอะ ๆ
+     * ซึ่งได้อัตราชนะ 30% และขาดทุนสะสมลึก 102R — คนจริง ๆ ทนไม่ไหวและเลิกก่อน
+     * กลยุทธ์ที่คนไม่ทำตาม มีค่าเท่ากับศูนย์ ไม่ว่าตัวเลขบนกระดาษจะสวยแค่ไหน
+     *
+     * ทำไมไม่ใช้กำไรต่อไม้เฉย ๆ: มันเชียร์ให้เข้าน้อยที่สุดเท่าที่จะน้อยได้
+     * จนเหลือไม้ไม่กี่ไม้ ซึ่งสรุปอะไรไม่ได้เลยทางสถิติ
+     *
+     * กำไรหารความเจ็บ ตอบทั้งสองข้อพร้อมกัน วัดแล้วได้ชนะ 42% ความเจ็บ 15R
+     * เทียบกับ 30% / 102R ของการไล่กำไรรวมอย่างเดียว
+     */
+    score: total / Math.max(maxDD, 1),
   };
 }
 
@@ -3502,7 +3549,9 @@ function optimizeExits(ctx, opts = {}) {
   if (splitAt - o.warmup < 80) return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับหาค่าที่ดีที่สุด' };
 
   const slMults = o.slMults || [1.0, 1.25, 1.5, 2.0, 2.5];
-  const thresholds = o.thresholds || [20, 25, 30, 35, 40, 45, 50];
+  /* ขยายช่วงเกณฑ์ขึ้นไปถึง 60 — วัดแล้วพบว่าจุดที่ดีที่สุดมักอยู่แถว 45-55
+     ของเดิมตัดที่ 50 ทำให้มองไม่เห็นว่าเข้มกว่านั้นดีกว่าไหม */
+  const thresholds = o.thresholds || [20, 25, 30, 35, 40, 45, 50, 55, 60];
   // พื้นขั้นต่ำของเป้าหมาย — เป้าที่เตี้ยกว่านี้ไม่ให้เข้ารอบเลย
   // ไม่ใช่แค่ไม่เลือก แต่ไม่ให้ปรากฏในผลการกวาดหาด้วย จะได้ไม่มีใครเผลอหยิบไปใช้
   const floorR = ctx.cfg.minTargetR === undefined ? 1.0 : ctx.cfg.minTargetR;
@@ -3549,7 +3598,16 @@ function optimizeExits(ctx, opts = {}) {
       near(x.slAtrMult, g.slAtrMult, slMults)
       && near(x.threshold, g.threshold, thresholds)
       && near(x.targetR, g.targetR, targets));
-    g.robust = neighbours.reduce((a, x) => a + x.expectancy, 0) / neighbours.length;
+    /*
+     * ใช้ "กำไรรวม" เป็นตัวตัดสิน ไม่ใช่ "กำไรต่อไม้"
+     *
+     * เดิมขั้นนี้ตัดสินด้วยกำไรต่อไม้ แต่ขั้นเลือกวิธีเข้า-ออกตัดสินด้วยกำไรรวม
+     * สองเป้าหมายในตัวหาค่าเดียวกันจึงดึงกันเอง: ขั้นแรกชอบเกณฑ์สูง ๆ ที่ได้ไม้น้อย
+     * แต่คุณภาพสูง ขั้นหลังชอบท่าที่เก็บได้เยอะ ผลลัพธ์เลยไม่ใช่จุดที่ดีที่สุดของทั้งคู่
+     *
+     * กำไรรวมคือเงินที่เข้าบัญชีจริงในช่วงเวลาเท่ากัน จึงเป็นตัวที่ตรงกับสิ่งที่ผู้ใช้ได้
+     */
+    g.robust = neighbours.reduce((a, x) => a + x.score, 0) / neighbours.length;
     g.neighbours = neighbours.length;
   }
   grid.sort((a, b) => b.robust - a.robust);
@@ -3890,7 +3948,7 @@ function evaluateStrategy(ctx, st, range = {}) {
   const r = runBacktest(ctxFor(ctx, s), toBacktestOpts(s, range));
   return {
     n: r.stats.n, missed: r.stats.missed, signals: r.stats.signals, fillRate: r.stats.fillRate,
-    winRate: r.stats.winRate, realWinRate: r.stats.realWinRate, expectancy: r.stats.expectancy,
+    winRate: r.stats.winRate, reach1RRate: r.stats.reach1RRate, realWinRate: r.stats.realWinRate, expectancy: r.stats.expectancy,
     totalR: r.stats.totalR, maxDD: r.stats.maxDD, profitFactor: r.stats.profitFactor,
     avgBars: r.stats.avgBars, maxLossStreak: r.stats.maxLossStreak,
     rs: r.trades.map((t) => t.rMultiple), trades: r.trades,
@@ -3948,15 +4006,21 @@ function tuneStrategy(ctx, opts = {}) {
       const cand = { ...best, entryMode, exitStyle };
       const r = evaluateStrategy(ctx, cand, { toIndex: learnTo });
       combos.push({ entryMode, exitStyle, n: r.n, missed: r.missed, fillRate: r.fillRate,
-        expectancy: r.expectancy, totalR: r.totalR, winRate: r.winRate });
+        expectancy: r.expectancy, totalR: r.totalR, winRate: r.winRate, maxDD: r.maxDD });
     }
   }
-  /* เลือกด้วย R รวม ไม่ใช่ R ต่อไม้
-     เพราะวิธีเข้าแบบรอย่อจะ "อดเข้า" บางไม้ ทำให้ R ต่อไม้ดูดีขึ้นได้
-     ทั้งที่เก็บกำไรรวมได้น้อยลง — R รวมเป็นตัวเดียวที่นับไม้ที่อดเข้าไปด้วยโดยปริยาย */
+  /*
+   * เลือกด้วย "กำไรเทียบความเจ็บ" (R รวม ÷ ขาดทุนสะสมลึกสุด) — ตัวเดียวกับขั้นที่ 1
+   *
+   * ไม่ใช้ R ต่อไม้ เพราะวิธีเข้าแบบรอย่อจะ "อดเข้า" บางไม้ ทำให้ค่าเฉลี่ยดูดีขึ้น
+   * ทั้งที่เก็บกำไรรวมได้น้อยลง
+   * ไม่ใช้ R รวมเฉย ๆ เพราะมันเชียร์ให้เก็บไม้เยอะจนอัตราชนะเหลือ 30%
+   * และขาดทุนสะสมลึกจนคนจริงเลิกก่อนถึงกำไร
+   */
   const usable = combos.filter((c) => c.n >= (opts.minTrades || 15));
   const pool = usable.length ? usable : combos;
-  pool.sort((a, b) => (b.totalR || -Infinity) - (a.totalR || -Infinity));
+  const score = (c) => (Number.isFinite(c.totalR) ? c.totalR / Math.max(c.maxDD || 0, 1) : -Infinity);
+  pool.sort((a, b) => score(b) - score(a));
   best = { ...best, entryMode: pool[0].entryMode, exitStyle: pool[0].exitStyle };
 
   // ── ขั้นที่ 3: สอบครั้งเดียว บนข้อมูลที่ไม่เคยเห็น ────────────────────
@@ -8671,7 +8735,8 @@ function renderStrategy() {
         <div class="wf-side trusted">
           <h4><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg> ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
           <div class="big" style="color:${st.outSample.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${num(st.outSample.expectancy)}</div>
-          <div class="sub">${st.outSample.n} ไม้ · ชนะ ${pct(st.outSample.winRate)}</div>
+          <div class="sub">${st.outSample.n} ไม้ · ชนะ <b>${pct(st.outSample.winRate)}</b>
+            <br>(เคยวิ่งไปแตะเป้า ${pct(st.outSample.reach1RRate)})</div>
         </div>
         <div class="wf-side">
           <h4>ผลตกลงเท่าไร</h4>
@@ -8686,7 +8751,13 @@ function renderStrategy() {
           <tbody>${rows}</tbody>
         </table>
       <div class="tiny" style="margin:8px 0 0">
-        เลือกด้วย <b>R รวม</b> ไม่ใช่ R ต่อไม้ — เพราะการรอราคาย่อจะอดเข้าบางไม้
+        <b>อ่านอัตราชนะยังไง:</b> "ชนะ" นับเฉพาะไม้ที่ปิดแล้ว<b>ได้เงินจริง</b>
+        ส่วน "เคยวิ่งไปแตะเป้า" คือไม้ที่ราคาไปถึงเป้าแล้วย้อนกลับมาก็นับ — สองเลขนี้ต่างกันได้มาก
+        และเลขแรกคือเลขที่ใช้ตัดสินใจ<br>
+        อัตราชนะต่ำไม่ได้แปลว่าแย่ ถ้าไม้ที่ชนะได้มากกว่าไม้ที่แพ้เสีย —
+        ชนะ 40% ที่ได้ไม้ละ 2R กินขาดชนะ 65% ที่ได้ไม้ละ 0.5R
+        ตัวเลข <b>R ต่อไม้</b> ข้างบนคือคำตอบสุดท้าย ไม่ใช่เปอร์เซ็นต์<br>
+        เลือกด้วย <b>กำไรเทียบความเจ็บ</b> (R รวม ÷ ขาดทุนสะสมลึกสุด) — ไม่ใช่ R ต่อไม้ เพราะการรอราคาย่อจะอดเข้าบางไม้
         ซึ่งทำให้ R ต่อไม้ดูดีขึ้นได้ทั้งที่เก็บกำไรรวมได้น้อยลง คอลัมน์ "อดเข้า" คือไม้ที่เสียไปจากการรอ
       </div>
       </details>

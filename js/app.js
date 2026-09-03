@@ -1200,7 +1200,8 @@ function renderStrategy() {
         <div class="wf-side trusted">
           <h4><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg> ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
           <div class="big" style="color:${st.outSample.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${num(st.outSample.expectancy)}</div>
-          <div class="sub">${st.outSample.n} ไม้ · ชนะ ${pct(st.outSample.winRate)}</div>
+          <div class="sub">${st.outSample.n} ไม้ · ชนะ <b>${pct(st.outSample.winRate)}</b>
+            <br>(เคยวิ่งไปแตะเป้า ${pct(st.outSample.reach1RRate)})</div>
         </div>
         <div class="wf-side">
           <h4>ผลตกลงเท่าไร</h4>
@@ -1215,7 +1216,13 @@ function renderStrategy() {
           <tbody>${rows}</tbody>
         </table>
       <div class="tiny" style="margin:8px 0 0">
-        เลือกด้วย <b>R รวม</b> ไม่ใช่ R ต่อไม้ — เพราะการรอราคาย่อจะอดเข้าบางไม้
+        <b>อ่านอัตราชนะยังไง:</b> "ชนะ" นับเฉพาะไม้ที่ปิดแล้ว<b>ได้เงินจริง</b>
+        ส่วน "เคยวิ่งไปแตะเป้า" คือไม้ที่ราคาไปถึงเป้าแล้วย้อนกลับมาก็นับ — สองเลขนี้ต่างกันได้มาก
+        และเลขแรกคือเลขที่ใช้ตัดสินใจ<br>
+        อัตราชนะต่ำไม่ได้แปลว่าแย่ ถ้าไม้ที่ชนะได้มากกว่าไม้ที่แพ้เสีย —
+        ชนะ 40% ที่ได้ไม้ละ 2R กินขาดชนะ 65% ที่ได้ไม้ละ 0.5R
+        ตัวเลข <b>R ต่อไม้</b> ข้างบนคือคำตอบสุดท้าย ไม่ใช่เปอร์เซ็นต์<br>
+        เลือกด้วย <b>กำไรเทียบความเจ็บ</b> (R รวม ÷ ขาดทุนสะสมลึกสุด) — ไม่ใช่ R ต่อไม้ เพราะการรอราคาย่อจะอดเข้าบางไม้
         ซึ่งทำให้ R ต่อไม้ดูดีขึ้นได้ทั้งที่เก็บกำไรรวมได้น้อยลง คอลัมน์ "อดเข้า" คือไม้ที่เสียไปจากการรอ
       </div>
       </details>

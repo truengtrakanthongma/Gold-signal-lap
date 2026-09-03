@@ -7,7 +7,7 @@
  */
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
-import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle } from '../js/backtest.js';
+import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle, evaluateTarget } from '../js/backtest.js';
 import { tuneStrategy, evaluateStrategy, toBacktestOpts, describeStrategy, DEFAULT_STRATEGY } from '../js/strategy.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
@@ -2364,11 +2364,13 @@ section('34) รวมทุกกลยุทธ์เป็นชุดเด�
   ok('ประกาศว่าดีได้เฉพาะตอนมีตัวเลขความน่าจะเป็นรองรับ',
     res.level !== 'good' || (res.prob !== null && res.prob >= 0.9), `prob=${res.prob}`);
 
-  /* เลือกด้วย R รวม ไม่ใช่ R ต่อไม้ — ไม่งั้นโหมดรอย่อจะชนะเพราะอดเข้าไม้แย่ ๆ ไป */
+  /* เลือกด้วย "กำไรเทียบความเจ็บ" ไม่ใช่ R ต่อไม้ (โหมดรอย่อจะชนะเพราะอดเข้าไม้แย่ ๆ ไป)
+     และไม่ใช่ R รวมเฉย ๆ (จะเชียร์ให้เก็บไม้เยอะจนอัตราชนะเหลือ 30%) */
   {
     const top = res.combos[0];
-    ok('อันดับหนึ่งของตารางคือชุดที่ R รวมสูงสุด (ไม้ที่อดเข้าถูกนับด้วยโดยปริยาย)',
-      res.combos.every((c) => (c.totalR || -Infinity) <= (top.totalR || -Infinity)));
+    const objective = (c) => (Number.isFinite(c.totalR) ? c.totalR / Math.max(c.maxDD || 0, 1) : -Infinity);
+    ok('อันดับหนึ่งของตารางคือชุดที่ "กำไรเทียบความเจ็บ" สูงสุด',
+      res.combos.every((c) => objective(c) <= objective(top) + 1e-9));
     ok('กลยุทธ์ที่เลือกตรงกับอันดับหนึ่งของตาราง',
       res.strategy.entryMode === top.entryMode && res.strategy.exitStyle === top.exitStyle);
     ok('ตารางบอกด้วยว่าแต่ละชุดอดเข้าไปกี่ไม้', res.combos.every((c) => c.missed !== undefined));
@@ -2470,6 +2472,71 @@ section('35) แหล่งราคาถูกบล็อก — ต้อ�
     const { out, seen } = await withHosts([], () => feed.loadHistory('15m', 300));
     ok('เลือกโหมดจำลอง → ไม่ยิงคำขอออกเน็ตเลย', seen.length === 0);
     ok('โหมดจำลองยังคืนแท่งเทียนได้ตามปกติ', out && out.length > 100);
+  }
+}
+
+section('36) จุดตัดขาดทุนต้องมีผลเสมอ และ "ชนะ" ต้องแปลว่าได้เงิน');
+{
+  /*
+   * สองบั๊กที่เจอตอนผู้ใช้ทักว่า "อัตราการสำเร็จน้อยเกินไป"
+   *
+   * 1) เงื่อนไขเดิม (hitSL && !hit1R) ทำให้พอราคาแตะ 1R ปุ๊บ จุดตัดขาดทุน
+   *    เลิกทำงานทุกท่า แต่ท่า 'full' ไม่ได้ย้ายจุดตัดไปไหน ไม้เลยวิ่งทะลุลงไป
+   *    จนหมดเวลาถือ วัดแล้วเจอไม้ขาดทุน -124R = 124 เท่าของที่ตั้งใจเสี่ยง
+   *
+   * 2) อัตราชนะนับไม้ที่ "เคยแตะ 1R" ไม่ใช่ไม้ที่ "ปิดแล้วได้เงิน"
+   *    ท่า full-be รายงาน 65% ทั้งที่ได้เงินจริง 44% — เกินจริง 20 จุด
+   */
+  const cs = makeCandles(4000, 88);
+  const ctx = buildContext(cs);
+
+  for (const style of ['partial', 'full', 'full-be', 'trail', 'trail-1R']) {
+    const r = runBacktest(ctx, { exitStyle: style, threshold: 25 });
+    if (!r.stats.n) { ok(`${style}: มีไม้ให้ตรวจ`, false, 'ไม่มีไม้'); continue; }
+    const worst = Math.min(...r.trades.map((t) => t.rMultiple));
+    /* -1 คือระยะที่ตั้งใจเสี่ยง เผื่อสลิปเพจอีกนิด เกินกว่านี้แปลว่าจุดตัดไม่ทำงาน */
+    ok(`${style}: ไม่มีไม้ไหนขาดทุนเกินระยะที่ตั้งใจเสี่ยง (แย่สุด ${worst.toFixed(2)}R)`, worst >= -1.35);
+  }
+
+  /* ท่า full คือท่าที่พัง เพราะเป็นท่าเดียวที่ไม่ย้ายจุดตัดหลังผ่าน 1R
+     ต้องมีไม้ที่แตะ 1R แล้วกลับมาโดน SL อยู่จริง ไม่งั้นเทสต์ข้างบนผ่านฟรี */
+  {
+    const r = runBacktest(ctx, { exitStyle: 'full', threshold: 25 });
+    const trapped = r.trades.filter((t) => t.hit1R && t.rMultiple <= -0.9);
+    ok('ท่า full: ไม้ที่แตะเป้าแล้วย้อนกลับมาโดน SL ถูกปิดที่ SL จริง ไม่ใช่ปล่อยวิ่งต่อ',
+      trapped.length > 0, `พบ ${trapped.length} ไม้ (ถ้าเป็น 0 แปลว่าเทสต์ไม่ได้ทดสอบอะไร)`);
+  }
+
+  /* "ชนะ" ต้องตรงกับ "ได้เงิน" ทุกท่า ไม่ใช่แค่บางท่า */
+  for (const style of ['partial', 'full', 'full-be', 'trail', 'trail-1R']) {
+    const r = runBacktest(ctx, { exitStyle: style, threshold: 25 });
+    if (!r.stats.n) continue;
+    const paid = r.trades.filter((t) => t.rMultiple > 0).length / r.stats.n * 100;
+    ok(`${style}: อัตราชนะที่รายงาน = สัดส่วนไม้ที่ได้เงินจริง`,
+      Math.abs(r.stats.winRate - paid) < 1e-9, `รายงาน ${r.stats.winRate.toFixed(1)}% · ได้เงินจริง ${paid.toFixed(1)}%`);
+  }
+
+  {
+    /* "เคยแตะเป้า" ยังมีประโยชน์ แต่ต้องแยกช่อง และต้องไม่น้อยกว่า "ได้เงิน"
+       เพราะไม้ที่ได้เงินเกิน 1R ทุกไม้ ต้องเคยแตะ 1R มาก่อนเสมอ */
+    const r = runBacktest(ctx, { exitStyle: 'full-be', threshold: 25 });
+    ok('รายงานแยก "เคยแตะเป้า" ออกจาก "ได้เงิน" คนละช่อง',
+      Number.isFinite(r.stats.reach1RRate) && r.stats.reach1RRate !== r.stats.winRate);
+    const over1R = r.trades.filter((t) => t.rMultiple >= 1).length;
+    const reached = r.trades.filter((t) => t.hit1R).length;
+    ok('ไม้ที่ได้เกิน 1R ต้องเคยแตะ 1R มาก่อนทุกไม้ (ตัวเลขสองช่องต้องสอดคล้องกัน)', reached >= over1R);
+  }
+
+  /* ตัวตัดสินตัวใหม่: กำไรเทียบความเจ็บ ต้องคำนวณได้และไม่หารด้วยศูนย์ */
+  {
+    const r = runBacktest(ctx, { exitStyle: 'partial', threshold: 25 });
+    const ev = evaluateTarget(r.trades, 2, 0);
+    ok('ประเมินเป้าหมายแล้วได้ทั้งขาดทุนสะสมลึกสุด และคะแนนกำไรเทียบความเจ็บ',
+      Number.isFinite(ev.maxDD) && ev.maxDD >= 0 && Number.isFinite(ev.score));
+    ok('คะแนนคือกำไรรวมหารความเจ็บ (ไม่หารด้วยศูนย์)',
+      Math.abs(ev.score - ev.totalR / Math.max(ev.maxDD, 1)) < 1e-9);
+    const none = evaluateTarget([{ favBeforeStop: 5, result: 'win2R', rMultiple: 2 }], 2, 0);
+    ok('ไม้เดียวที่ไม่เคยติดลบ → ยังคำนวณคะแนนได้ ไม่ใช่ Infinity', Number.isFinite(none.score));
   }
 }
 

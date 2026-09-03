@@ -71,7 +71,7 @@ export function evaluateStrategy(ctx, st, range = {}) {
   const r = runBacktest(ctxFor(ctx, s), toBacktestOpts(s, range));
   return {
     n: r.stats.n, missed: r.stats.missed, signals: r.stats.signals, fillRate: r.stats.fillRate,
-    winRate: r.stats.winRate, realWinRate: r.stats.realWinRate, expectancy: r.stats.expectancy,
+    winRate: r.stats.winRate, reach1RRate: r.stats.reach1RRate, realWinRate: r.stats.realWinRate, expectancy: r.stats.expectancy,
     totalR: r.stats.totalR, maxDD: r.stats.maxDD, profitFactor: r.stats.profitFactor,
     avgBars: r.stats.avgBars, maxLossStreak: r.stats.maxLossStreak,
     rs: r.trades.map((t) => t.rMultiple), trades: r.trades,
@@ -129,15 +129,21 @@ export function tuneStrategy(ctx, opts = {}) {
       const cand = { ...best, entryMode, exitStyle };
       const r = evaluateStrategy(ctx, cand, { toIndex: learnTo });
       combos.push({ entryMode, exitStyle, n: r.n, missed: r.missed, fillRate: r.fillRate,
-        expectancy: r.expectancy, totalR: r.totalR, winRate: r.winRate });
+        expectancy: r.expectancy, totalR: r.totalR, winRate: r.winRate, maxDD: r.maxDD });
     }
   }
-  /* เลือกด้วย R รวม ไม่ใช่ R ต่อไม้
-     เพราะวิธีเข้าแบบรอย่อจะ "อดเข้า" บางไม้ ทำให้ R ต่อไม้ดูดีขึ้นได้
-     ทั้งที่เก็บกำไรรวมได้น้อยลง — R รวมเป็นตัวเดียวที่นับไม้ที่อดเข้าไปด้วยโดยปริยาย */
+  /*
+   * เลือกด้วย "กำไรเทียบความเจ็บ" (R รวม ÷ ขาดทุนสะสมลึกสุด) — ตัวเดียวกับขั้นที่ 1
+   *
+   * ไม่ใช้ R ต่อไม้ เพราะวิธีเข้าแบบรอย่อจะ "อดเข้า" บางไม้ ทำให้ค่าเฉลี่ยดูดีขึ้น
+   * ทั้งที่เก็บกำไรรวมได้น้อยลง
+   * ไม่ใช้ R รวมเฉย ๆ เพราะมันเชียร์ให้เก็บไม้เยอะจนอัตราชนะเหลือ 30%
+   * และขาดทุนสะสมลึกจนคนจริงเลิกก่อนถึงกำไร
+   */
   const usable = combos.filter((c) => c.n >= (opts.minTrades || 15));
   const pool = usable.length ? usable : combos;
-  pool.sort((a, b) => (b.totalR || -Infinity) - (a.totalR || -Infinity));
+  const score = (c) => (Number.isFinite(c.totalR) ? c.totalR / Math.max(c.maxDD || 0, 1) : -Infinity);
+  pool.sort((a, b) => score(b) - score(a));
   best = { ...best, entryMode: pool[0].entryMode, exitStyle: pool[0].exitStyle };
 
   // ── ขั้นที่ 3: สอบครั้งเดียว บนข้อมูลที่ไม่เคยเห็น ────────────────────
