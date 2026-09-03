@@ -509,6 +509,9 @@ body.simple .narr p { font-size: var(--fs-sm); }
 .learn-table th, .learn-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 .learn-table th { color: var(--muted); font-weight: 500; font-size: var(--fs-micro); }
 .learn-table .num { text-align: right; font-family: 'JetBrains Mono', monospace; }
+/* แถวของท่าที่ระบบเลือกไว้จากช่วงเรียน — ต้องหาเจอทันทีโดยไม่ต้องไล่อ่านทั้งตาราง */
+.learn-table tr.row-pick td { background: rgba(240,180,41,.08); }
+.learn-table tr.row-pick td:first-child { box-shadow: inset 2px 0 0 var(--gold); }
 
 .adapt-story { margin-top: 12px; display: grid; gap: 9px; }
 .adapt-sec { background: rgba(2,6,23,.4); border-radius: 7px; padding: 10px 12px; border-left: 3px solid var(--line); }

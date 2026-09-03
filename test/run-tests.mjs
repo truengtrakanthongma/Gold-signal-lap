@@ -7,7 +7,7 @@
  */
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
-import { runBacktest, optimizeExits, embargoIndex } from '../js/backtest.js';
+import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle } from '../js/backtest.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
@@ -2137,6 +2137,133 @@ section('30) เทคนิคจากตำรา — ต้องจับ�
     }
     ok('เปิดปัจจัยจากตำราแล้วคะแนนรวมยังอยู่ในช่วง -100..100 เสมอ', bad === 0, `เพี้ยน ${bad} แท่ง`);
     ok('ปัจจัยจากตำราโผล่ในรายการเหตุผลจริง ไม่ใช่ต่อไว้เฉย ๆ', seen > 0, `พบ ${seen} แท่ง`);
+  }
+}
+
+section('31) ลากจุดตัดขาดทุนตามราคา (Chandelier Exit — LeBeau)');
+{
+  /*
+   * ท่านี้อันตรายกว่าเป้าตายตัวตรงที่มัน "ขยับ" ได้ระหว่างไม้ยังเปิดอยู่
+   * ถ้าเผลอเอายอดของแท่งปัจจุบันไปเลื่อนจุดตัดแล้วเช็คแท่งเดียวกัน
+   * = รู้ล่วงหน้าว่าแท่งนี้จะขึ้นไปถึงไหน ซึ่งตอนเทรดจริงไม่มีทางรู้
+   * ผลลัพธ์จะสวยเกินจริงแบบที่จับไม่ได้ด้วยตาเปล่า จึงต้องมีเทสต์ตรงนี้
+   */
+  const cs = makeCandles(2500, 77);
+  const ctx = buildContext(cs);
+
+  for (const style of ['trail', 'trail-1R']) {
+    const r = runBacktest(ctx, { exitStyle: style, threshold: 30 });
+    ok(`${style}: มีไม้ให้ตรวจ`, r.stats.n > 20, `${r.stats.n} ไม้`);
+
+    // ขาดทุนต่อไม้ต้องไม่เกินระยะ SL เดิม — การลากทำได้แต่ทางที่ปลอดภัยขึ้น
+    const worst = Math.min(...r.trades.map((t) => t.rMultiple));
+    ok(`${style}: ไม่มีไม้ไหนขาดทุนเกินระยะ SL ที่ตั้งไว้แต่แรก (แย่สุด ${worst.toFixed(2)}R)`, worst >= -1.5);
+
+    // ออกได้ดีกว่าจุดที่ราคาเคยไปถึงไม่ได้ — เป็นไปไม่ได้ในโลกจริง
+    const impossible = r.trades.filter((t) => t.rMultiple > (t.maxFav || 0) + 1e-9);
+    ok(`${style}: ไม่มีไม้ไหนออกได้กำไรเกินจุดที่ราคาเคยวิ่งไปถึง`, impossible.length === 0, `ผิด ${impossible.length} ไม้`);
+
+    // เคยพลาดมาแล้ว: ลืมบันทึกว่าเคยผ่าน 1R ทำให้รายงานขึ้นอัตราชนะ 0%
+    ok(`${style}: รายงานอัตราชนะเป็นตัวเลขจริง ไม่ใช่ 0% เพราะลืมนับ`, r.stats.winRate > 5 && r.stats.winRate < 95, `${r.stats.winRate.toFixed(1)}%`);
+  }
+
+  /*
+   * พิสูจน์ตรง ๆ ว่าไม่มีการมองอนาคต: ตัดข้อมูลท้ายทิ้งแล้วจำลองใหม่
+   * ไม้ที่ปิดไปก่อนจุดตัดต้องออกมาเหมือนเดิมเป๊ะ ถ้าต่างแปลว่าข้อมูลอนาคตรั่วเข้ามา
+   */
+  {
+    const cut = 1600;
+    const prefixCtx = buildContext(cs.slice(0, cut));
+    let mismatch = 0, compared = 0;
+    for (const style of ['trail', 'trail-1R']) {
+      const full = runBacktest(ctx, { exitStyle: style, threshold: 30 });
+      const part = runBacktest(prefixCtx, { exitStyle: style, threshold: 30 });
+      const byIdx = new Map(part.trades.map((t) => [t.index, t]));
+      for (const t of full.trades) {
+        if (t.exitIndex >= cut - 2) continue;      // ไม้ที่ยังไม่ปิดก่อนจุดตัด ไม่ต้องเทียบ
+        const p = byIdx.get(t.index);
+        compared++;
+        if (!p || p.exitIndex !== t.exitIndex || Math.abs(p.rMultiple - t.rMultiple) > 1e-9) mismatch++;
+      }
+    }
+    ok(`ตัดข้อมูลท้ายทิ้งแล้วไม้ที่ปิดไปแล้วเหมือนเดิมทุกไม้ (เทียบ ${compared} ไม้)`, compared > 30 && mismatch === 0, `ต่าง ${mismatch} ไม้`);
+  }
+
+  /* การลากต้องขยับทางเดียว: ยิ่งถือนาน จุดตัดยิ่งปลอดภัยขึ้นหรือเท่าเดิม
+     เช็คด้วยผลรวม — ไม้ที่ราคาวิ่งไปไกลแล้วย้อนกลับ ต้องไม่กลายเป็นขาดทุนเต็ม */
+  {
+    const r = runBacktest(ctx, { exitStyle: 'trail', threshold: 30 });
+    const ranAndLost = r.trades.filter((t) => (t.maxFav || 0) >= 2 && t.rMultiple <= -0.99);
+    ok('ไม้ที่เคยกำไรถึง 2R แล้วจบด้วยขาดทุนเต็มตัว ต้องไม่มี (แปลว่าจุดตัดไม่ได้ลากตาม)', ranAndLost.length === 0, `พบ ${ranAndLost.length} ไม้`);
+  }
+
+  /* เครื่องมือที่อ่าน favBeforeStop ใช้กับสไตล์ลากไม่ได้ ต้องกันไว้ ไม่ใช่คืนเลขผิดเงียบ ๆ */
+  {
+    const viaTrail = optimizeExits(ctx, { exitStyle: 'trail', threshold: 30 });
+    const viaFixed = optimizeExits(ctx, { exitStyle: 'partial', threshold: 30 });
+    ok('กวาดหาเป้าหมายด้วยสไตล์ลาก → ได้ผลเท่ากับใช้เป้าตายตัว (ถูกบังคับกลับ ไม่ใช่คืนตัวเลขที่ต่ำกว่าจริง)',
+      viaTrail.ok === viaFixed.ok && JSON.stringify(viaTrail.best) === JSON.stringify(viaFixed.best));
+    ok('isTrailStyle บอกได้ว่าท่าไหนเป็นการลาก',
+      isTrailStyle('trail') && isTrailStyle('trail-1R') && !isTrailStyle('partial') && !isTrailStyle('full'));
+    const forced = runBacktest(ctx, { exitStyle: 'trail', threshold: 30 });
+    ok('สไตล์ลากถูกบันทึกลงในไม้แต่ละไม้ ตรวจย้อนได้ว่าใช้ท่าไหน', forced.trades.every((t) => t.exitStyle === 'trail'));
+  }
+}
+
+section('32) เลือกวิธีบริหารไม้จากข้อมูลจริง ไม่ใช่จากที่ตำราเชียร์');
+{
+  /*
+   * วัดบนข้อมูลจำลองแล้วพบว่า "ท่าที่ดีที่สุด" พลิกไปมาตามลักษณะตลาด
+   * ไม่มีท่าไหนชนะทุกสภาพ การเลือกจึงต้องมาจากข้อมูลของผู้ใช้เอง
+   * และต้องเลือกจากช่วงเรียนแล้วพิสูจน์บนช่วงสอบ ไม่ใช่เลือกจากทั้งชุด
+   */
+  const ctx = buildContext(makeCandles(3000, 91));
+  const res = compareExitStyles(ctx, { threshold: 30 });
+  ok('เทียบวิธีบริหารไม้ได้ผลออกมา', res.ok === true, res.reason || '');
+  ok('เทียบครบทุกท่าทั้งช่วงเรียนและช่วงสอบ', res.learn.length === 5 && res.test.length === 5);
+
+  /* หัวใจ: ท่าที่เลือก ต้องเลือกจากช่วงเรียนเท่านั้น
+     ทดสอบโดยแก้ข้อมูลเฉพาะช่วงสอบ แล้วดูว่าท่าที่เลือกเปลี่ยนไหม — ต้องไม่เปลี่ยน */
+  {
+    const base = makeCandles(3000, 91);
+    const tampered = base.map((c, k) => (k > Math.floor(3000 * 0.6) ? { ...c, h: c.h + 30, c: c.c + 30, l: c.l + 30, o: c.o + 30 } : c));
+    const r2 = compareExitStyles(buildContext(tampered), { threshold: 30 });
+    ok('แก้เฉพาะข้อมูลช่วงสอบ → ท่าที่เลือกจากช่วงเรียนยังเหมือนเดิม (ไม่ได้แอบดูช่วงสอบ)', r2.ok && r2.pick === res.pick, `${res.pick} → ${r2.pick}`);
+  }
+
+  ok('มีคำตัดสินเป็นภาษาคน ไม่ใช่ตัวเลขลอย ๆ', typeof res.verdict === 'string' && res.verdict.length > 30);
+  ok('ระดับความน่าเชื่อถือเป็นค่าที่รู้จัก', ['confirmed', 'weak', 'failed', 'unknown'].includes(res.level));
+
+  /* ถ้าสอบไม่ผ่าน ต้องไม่แนะนำให้เปลี่ยนท่า — ค่าตั้งต้นคือทางที่ปลอดภัยกว่า */
+  ok('แนะนำให้เปลี่ยนท่าเฉพาะตอนที่พิสูจน์ผ่านช่วงสอบแล้วเท่านั้น',
+    res.level === 'confirmed' ? res.recommend === res.pick : res.recommend === 'partial',
+    `level=${res.level} recommend=${res.recommend}`);
+
+  /*
+   * เคยพลาดมาแล้ว: ถ้าช่วงเรียนเลือกค่าตั้งต้นเอง โค้ดเดิมจะเอาค่าตั้งต้น
+   * ไปเทียบกับตัวเอง แล้วสรุปว่า "แพ้ค่าตั้งต้น" ทั้งที่เป็นเลขเดียวกันเป๊ะ
+   * แถมบรรทัดสรุปข้างล่างยังบอกว่า "ตรงกับที่แนะนำ" ขัดกันเองต่อหน้าผู้ใช้
+   */
+  ok('ถ้าเลือกค่าตั้งต้นเอง ต้องไม่สรุปว่า "แพ้ค่าตั้งต้น" (เทียบกับตัวเอง)',
+    !(res.pick === 'partial' && res.level === 'failed'), `pick=${res.pick} level=${res.level}`);
+  {
+    const p = res.test.find((x) => x.style === res.pick);
+    const b = res.test.find((x) => x.style === 'partial');
+    ok('คำตัดสินสอดคล้องกับตัวเลขที่โชว์ (แพ้ = ตัวเลขแย่กว่าจริง ๆ)',
+      res.level !== 'failed' || (p && b && p.expectancy <= b.expectancy));
+  }
+  ok('ไม่ส่งข้อมูลดิบของทุกไม้ออกมาพร้อมผล (ตารางไม่ต้องใช้ และหนักเปล่า ๆ)',
+    res.test.every((x) => x.rs === undefined) && res.learn.every((x) => x.rs === undefined));
+
+  /* ต่างกันนิดเดียวบนไม้ไม่กี่สิบไม้ ต้องไม่ถูกประกาศว่าชนะ */
+  ok('ถ้าประกาศว่าใช้ได้ ต้องมีตัวเลขความน่าจะเป็นรองรับ ไม่ใช่แค่ค่าเฉลี่ยสูงกว่า',
+    res.level !== 'confirmed' || res.pick === 'partial' || (res.prob !== null && res.prob >= 0.9),
+    `prob=${res.prob}`);
+
+  /* ข้อมูลน้อยต้องบอกว่าน้อย ไม่ใช่เดา */
+  {
+    const tiny = compareExitStyles(buildContext(makeCandles(300, 5)), { threshold: 30 });
+    ok('ข้อมูลน้อยเกินไป → บอกตรง ๆ ว่าสรุปไม่ได้ ไม่ใช่เดาท่าให้', tiny.ok === false || tiny.level === 'unknown');
   }
 }
 

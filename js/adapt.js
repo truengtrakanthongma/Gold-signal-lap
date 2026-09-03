@@ -95,7 +95,9 @@ function runWith(ctx, params, from, to, o) {
   return { run: r, ev, trades: r.trades };
 }
 
-/** ผลของไม้ชุดหนึ่งเมื่อคิดที่เป้าหมาย targetR (หน่วย R ต่อไม้) */
+/** ผลของไม้ชุดหนึ่งเมื่อคิดที่เป้าหมาย targetR (หน่วย R ต่อไม้)
+ *  ใช้ได้เฉพาะไม้ที่จำลองแบบเป้าตายตัว — ไม้จากสไตล์ลากจุดตัดขาดทุนมี
+ *  favBeforeStop ที่ถูกตัดสั้นตามจุดลาก เอามาคิดเป้าตายตัวจะได้ตัวเลขต่ำกว่าจริง */
 function rSeries(trades, targetR) {
   return trades.map((t) => {
     if ((t.favBeforeStop || 0) >= targetR) return targetR;

@@ -185,6 +185,8 @@
           <option value="full">ถือเต็มไม้ถึงเป้า — ชนะทีได้เต็ม</option>
           <option value="partial">ปิดครึ่งที่ 1R — ผลนุ่มกว่า แต่กำไรต่อไม้น้อย</option>
           <option value="full-be">ถือเต็มไม้ + เลื่อน SL กันทุน</option>
+          <option value="trail">ลากจุดตัดตามราคา ไม่มีเป้าตายตัว (Chandelier)</option>
+          <option value="trail-1R">ปิดครึ่งที่ 1R แล้วลากที่เหลือ</option>
         </select>
       </label>
       <button id="runBt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
@@ -194,6 +196,7 @@
       <span id="btStatus" class="tiny"></span>
     </div>
     <div id="wfBox" class="wf-box"></div>
+    <div id="exitBox" class="wf-box"></div>
     <div id="btSummary" class="bt-summary"></div>
     <div class="bt-grid">
       <div><h3>ความน่าจะเป็นตามระดับคะแนน</h3><div id="btBands"></div></div>

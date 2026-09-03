@@ -46,9 +46,32 @@ export const DEFAULT_BT = {
    *             → ชนะทีได้เต็มเป้า แพ้ทีเสีย 1R เต็ม ไม่มีไม้กำไรจิ๊บจ๊อย
    *  'full-be'  ถือเต็มไม้ แต่เลื่อน SL มาที่ทุนเมื่อผ่าน 1R
    *             → ชนะได้เต็มเป้า ไม้ที่ย้อนกลับมาได้ 0R (เสมอตัว) แทนที่จะขาดทุน
+   *  'trail'    ไม่มีเป้าตายตัว ลากจุดตัดขาดทุนตามยอดที่ทำได้ (Chandelier Exit)
+   *             → ไม้ที่วิ่งยาวได้เต็มระยะ แต่ทุกไม้ต้องคืนกำไรส่วนหนึ่งตอนออก
+   *  'trail-1R' ปิดครึ่งที่ 1R แล้วลากที่เหลือ — ท่าผสมที่ตำราส่วนใหญ่แนะนำ
+   *
+   * วัดบนข้อมูลจำลองสองระบอบแล้วได้ผลตรงกับที่ตำราบอกเป๊ะ ๆ:
+   *   ตลาดมีเทรนด์ยาว  → ลากชนะขาด (5.20R ต่อไม้ เทียบกับเป้าตายตัว 0.97R)
+   *   ตลาดออกข้าง      → ลากแย่เกือบที่สุด (-0.66R เทียบกับเป้าตายตัว -0.49R)
+   * เพราะการลากคือการยอมคืนกำไรส่วนปลายทุกไม้ เพื่อแลกกับการเก็บไม้ที่วิ่งยาว
+   * ถ้าไม่มีไม้วิ่งยาวให้เก็บ ก็เหลือแต่ส่วนที่คืนไป
    */
   exitStyle: 'partial',
+  /*
+   * Chandelier Exit — Chuck LeBeau
+   *
+   * จุดตัดขาดทุนอยู่ใต้ "ยอดสูงสุดนับจากเข้าไม้" ลงมา k เท่าของ ATR
+   * ขยับได้ทางเดียวคือตามราคาไป ไม่มีถอยหลัง ต้นฉบับใช้ k = 3
+   *
+   * เหตุผลที่ตำราให้ไว้: เป้าตายตัวตัดไม้ที่กำลังวิ่งยาวทิ้งไปด้วย
+   * ส่วนการลากตามจะเก็บไม้ยาว ๆ ไว้ได้ แลกกับการคืนกำไรส่วนปลายทุกไม้
+   * อันไหนคุ้มกว่าสำหรับทองกรอบ 15 นาที ต้องวัด ไม่ใช่เชื่อตาม
+   */
+  trailAtrMult: 3,
 };
+
+/** สไตล์ที่ลากจุดตัดขาดทุนตามราคา (ไม่มีเป้าตายตัว) */
+export const isTrailStyle = (style) => style === 'trail' || style === 'trail-1R';
 
 /**
  * ดัชนีสุดท้ายที่ยังรับไม้ใหม่ได้ โดยรับประกันว่าไม้จะปิดก่อนเส้นแบ่ง
@@ -86,8 +109,15 @@ export function runBacktest(ctx, opts = {}) {
     if (!setup || setup.slDist <= 0) { i++; continue; }
 
     const { sl, tp1, tp2, slDist } = setup;
+
+    const style = o.exitStyle;
     let exitIdx = null, result = null, rMultiple = 0, hit1R = false;
     let maxFav = 0, maxAdv = 0;
+    const trailing = isTrailStyle(style);
+    /* จุดตัดขาดทุนที่ลากตามได้ เริ่มที่ SL เดิมเสมอ การลากจึงทำได้แต่ทาง
+       "ปลอดภัยขึ้น" ไม่มีทางที่การลากจะทำให้ความเสี่ยงเริ่มต้นบานปลาย */
+    let trailStop = sl;
+    let runHigh = -Infinity, runLow = Infinity;
 
     // ไปได้ไกลสุดกี่ R "ก่อน" จะโดน SL — ตัวเลขนี้ทำให้ประเมินเป้าหมายทุกระดับได้
     // โดยไม่ต้องจำลองใหม่: เป้า T จะถึงก็ต่อเมื่อ favBeforeStop >= T
@@ -104,6 +134,44 @@ export function runBacktest(ctx, opts = {}) {
       const hitTP1 = side > 0 ? b.h >= tp1 : b.l <= tp1;
       const hitTP2 = side > 0 ? b.h >= tp2 : b.l <= tp2;
 
+      if (trailing) {
+        /*
+         * *** ลำดับสำคัญมาก ***
+         * ต้องเช็คว่าโดนจุดตัดขาดทุน "ที่คำนวณไว้จากข้อมูลถึงแท่งก่อนหน้า" ก่อน
+         * แล้วค่อยเอายอด/ก้นของแท่งนี้ไปขยับจุดตัดสำหรับแท่งถัดไป
+         *
+         * ถ้าสลับลำดับ = เอายอดของแท่งนี้ไปเลื่อนจุดตัดแล้วค่อยเช็คแท่งเดียวกัน
+         * เท่ากับรู้ล่วงหน้าว่าแท่งนี้จะขึ้นไปถึงไหน ซึ่งตอนเทรดจริงไม่มีทางรู้
+         */
+        const hitTrail = side > 0 ? b.l <= trailStop : b.h >= trailStop;
+        if (hitTrail) {
+          exitIdx = j;
+          favBeforeStop = trailStop === sl ? favPrev : maxFav;
+          const stopR = (side > 0 ? trailStop - entry : entry - trailStop) / slDist;
+          rMultiple = stopR - o.slippage / slDist;
+          if (style === 'trail-1R' && hit1R) rMultiple = 0.5 + 0.5 * rMultiple;
+          result = rMultiple > 0.05 ? 'trail-win' : (rMultiple < -0.05 ? 'loss' : 'be');
+          break;
+        }
+        favBeforeStop = maxFav;
+        /* ต้องบันทึกว่าเคยผ่าน 1R ทุกสไตล์ที่ลาก ไม่ใช่เฉพาะแบบผสม
+           เพราะ hit1R เป็นตัวนับ "อัตราชนะ" ของรายงาน ไม่ได้ใช้แค่ตัดสินใจออก
+           ถ้าไม่เซ็ต รายงานจะขึ้นอัตราชนะ 0% ทั้งที่ไม้กำไรมีอยู่จริง */
+        if (!hit1R && hitTP1) hit1R = true;
+
+        runHigh = Math.max(runHigh, b.h);
+        runLow = Math.min(runLow, b.l);
+        const aj = ctx.atr[j];
+        // แบบผสมจะเริ่มลากหลังปิดครึ่งแรกแล้วเท่านั้น ก่อนหน้านั้นใช้ SL เดิม
+        const mayTrail = style !== 'trail-1R' || hit1R;
+        if (mayTrail && Number.isFinite(aj) && aj > 0) {
+          const k = o.trailAtrMult;
+          trailStop = side > 0 ? Math.max(trailStop, runHigh - k * aj)
+                               : Math.min(trailStop, runLow + k * aj);
+        }
+        continue;
+      }
+
       // แท่งเดียวแตะทั้งคู่ = นับแพ้ (ไม่รู้ลำดับจริงจากข้อมูลแท่งเทียน)
       if (hitSL && !hit1R) {
         exitIdx = j; result = 'loss';
@@ -116,7 +184,7 @@ export function runBacktest(ctx, opts = {}) {
       // ต้องบันทึกก่อนเส้นทาง break อื่น ๆ ไม่งั้นไม้ที่ปิดกำไรจะถูกบันทึกค่าต่ำกว่าจริง
       // (บั๊กนี้ทำให้ตารางบอกว่าเป้าไกล ๆ ไปไม่ถึงเลยสักไม้)
       favBeforeStop = maxFav;
-      if (o.exitStyle === 'full' || o.exitStyle === 'full-be') {
+      if (style === 'full' || style === 'full-be') {
         /*
          * ถือเต็มไม้ถึงเป้าเดียว — ไม่ปิดบางส่วน
          *
@@ -126,7 +194,7 @@ export function runBacktest(ctx, opts = {}) {
          */
         if (hitTP1) hit1R = true;
         if (hitTP2) { exitIdx = j; result = 'win2R'; rMultiple = 2; break; }
-        if (o.exitStyle === 'full-be' && hit1R) {
+        if (style === 'full-be' && hit1R) {
           const hitBE = side > 0 ? b.l <= entry : b.h >= entry;
           if (hitBE) { exitIdx = j; result = 'be'; rMultiple = 0; break; }
         }
@@ -150,9 +218,14 @@ export function runBacktest(ctx, opts = {}) {
       const last = candles[exitIdx].c;
       const openR = side > 0 ? (last - entry) / slDist : (entry - last) / slDist;
       result = 'timeout';
-      rMultiple = (o.exitStyle === 'full' || o.exitStyle === 'full-be')
-        ? openR                                     // ถือเต็มไม้: ปิดที่ราคาตลาดตรง ๆ
-        : (hit1R ? 0.5 + Math.max(0, openR) * 0.5 : openR);
+      if (trailing) {
+        // ลากอยู่แล้วหมดเวลาถือ = ปิดที่ราคาตลาด ครึ่งแรกที่ปิดไปแล้วยังนับให้
+        rMultiple = (style === 'trail-1R' && hit1R) ? 0.5 + 0.5 * openR : openR;
+      } else {
+        rMultiple = (style === 'full' || style === 'full-be')
+          ? openR                                   // ถือเต็มไม้: ปิดที่ราคาตลาดตรง ๆ
+          : (hit1R ? 0.5 + Math.max(0, openR) * 0.5 : openR);
+      }
     }
 
     const d = new Date(candles[i + 1].t);
@@ -184,6 +257,7 @@ export function runBacktest(ctx, opts = {}) {
       side, score: s.score, absScore: Math.abs(s.score), regime: s.regime,
       entry, sl, tp1, tp2, slDist, result, rMultiple, hit1R, maxFav, maxAdv, favBeforeStop,
       bars: exitIdx - i, hourTh: (d.getUTCHours() + 7) % 24,
+      exitStyle: style,
     });
     i = exitIdx + 1; // ไม้เดียวต่อครั้ง (ไม่ซ้อนไม้ = ใกล้เคียงการเทรดจริง)
   }
@@ -329,6 +403,13 @@ function pct(values, p) {
  */
 export function optimizeExits(ctx, opts = {}) {
   const o = { ...DEFAULT_BT, ...opts };
+  /*
+   * การกวาดหาเป้าหมายอ่านค่า favBeforeStop ("ไปได้ไกลสุดกี่ R ก่อนโดน SL")
+   * แต่สไตล์ลากจุดตัดขาดทุนจะตัดไม้ออกกลางทาง ค่านั้นจึงถูกตัดสั้นไปด้วย
+   * ถ้าปล่อยให้ผ่าน จะได้ตารางเป้าหมายที่ตัวเลขต่ำกว่าความจริงโดยไม่มีใครรู้
+   * บังคับกลับเป็นเป้าตายตัวและบอกให้รู้ ดีกว่าคืนตัวเลขผิดเงียบ ๆ
+   */
+  if (isTrailStyle(o.exitStyle)) o.exitStyle = 'partial';
   const n = ctx.candles.length;
   const splitAt = Math.floor(n * (o.splitRatio || 0.6));
   if (splitAt - o.warmup < 80) return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับหาค่าที่ดีที่สุด' };
@@ -524,4 +605,122 @@ export function wilsonInterval(wins, n, z = 1.96) {
   const centre = p + (z * z) / (2 * n);
   const margin = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n);
   return { low: ((centre - margin) / denom) * 100, high: ((centre + margin) / denom) * 100 };
+}
+
+/**
+ * เทียบวิธีบริหารไม้บนข้อมูลของผู้ใช้เอง — แล้วให้ข้อมูลเป็นคนเลือก
+ *
+ * ทำไมต้องมี: ตำราแต่ละเล่มเชียร์คนละท่า และวัดบนข้อมูลจำลองแล้วพบว่า
+ * "ท่าไหนดีที่สุด" พลิกไปมาตามลักษณะตลาดจริง ๆ ไม่ใช่มีคำตอบเดียว
+ *   ตลาดมีเทรนด์ยาว → ลากจุดตัดขาดทุนชนะขาด
+ *   ตลาดออกข้าง     → ลากแย่เกือบที่สุด เป้าตายตัวดีกว่า
+ * เคยลองให้ ADX เป็นคนเลือกอัตโนมัติแล้ววัดดู ปรากฏว่าไม่ช่วยเลย
+ * (ทุกเส้นแบ่งที่ลอง ได้ผลอยู่ระหว่างสองท่าปลาย ไม่ชนะท่าไหนสักท่า)
+ * จึงไม่ใส่ไว้ ให้ตัดสินจากข้อมูลจริงของผู้ใช้แทน
+ *
+ * วิธี: เลือกท่าจาก "ช่วงเรียน" แล้วพิสูจน์บน "ช่วงสอบ" ที่ไม่เคยเห็น
+ * ถ้าท่าที่เลือกไว้ไม่ชนะตอนสอบ = การเลือกนั้นคือการจูนเข้ากับอดีต ต้องบอกตรง ๆ
+ */
+const BASE_STYLE = 'partial';
+
+/*
+ * โอกาสที่ชุด a ดีกว่าชุด b จริง ไม่ใช่บังเอิญ — สุ่มเลือกไม้ซ้ำแบบคืนที่ (bootstrap)
+ *
+ * เขียนไว้ในไฟล์นี้เองแทนที่จะยืม probBetter จาก learn.js
+ * เพราะ learn.js เรียกใช้ backtest.js อยู่แล้ว ถ้าเรียกกลับจะกลายเป็นวงกลม
+ * ซึ่งตัวรวมไฟล์เป็นหน้าเดียวรับไม่ได้ (โมดูลถูกต่อกันตามลำดับ ไม่มีการวนกลับ)
+ */
+function probBetterR(a, b, { samples = 2000, seed = 424242 } = {}) {
+  if (!a.length || !b.length) return null;
+  let st = seed >>> 0;
+  const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  let winsA = 0;
+  for (let s = 0; s < samples; s++) {
+    let sa = 0, sb = 0;
+    for (let k = 0; k < a.length; k++) sa += a[(rnd() * a.length) | 0];
+    for (let k = 0; k < b.length; k++) sb += b[(rnd() * b.length) | 0];
+    if (sa / a.length > sb / b.length) winsA++;
+  }
+  return winsA / samples;
+}
+
+export function compareExitStyles(ctx, opts = {}) {
+  const o = { ...DEFAULT_BT, ...opts };
+  const styles = o.styles || ['partial', 'full', 'full-be', 'trail', 'trail-1R'];
+  const n = ctx.candles.length;
+  const splitAt = Math.floor(n * (o.splitRatio || 0.6));
+  if (splitAt - o.warmup < 80) return { ok: false, reason: 'ข้อมูลน้อยเกินไปสำหรับเทียบวิธีบริหารไม้' };
+
+  const rowFor = (style, runOpts) => {
+    const r = runBacktest(ctx, { ...o, exitStyle: style, ...runOpts });
+    const rs = r.trades.map((t) => t.rMultiple);
+    return {
+      style, n: r.stats.n, winRate: r.stats.winRate, expectancy: r.stats.expectancy,
+      totalR: r.stats.totalR, maxDD: r.stats.maxDD, avgBars: r.stats.avgBars, rs,
+    };
+  };
+
+  // เลือกจากช่วงเรียน — ต้องมีระยะกันชนไม่ให้ไม้ถือข้ามเส้นแบ่งไปอ่านช่วงสอบ
+  const learn = styles.map((st) => rowFor(st, { toIndex: embargoIndex(splitAt, o) }));
+  const ranked = [...learn].sort((a, b) => (b.expectancy || -Infinity) - (a.expectancy || -Infinity));
+  const pick = ranked[0];
+  const test = styles.map((st) => rowFor(st, { fromIndex: splitAt }));
+  const testBy = new Map(test.map((r) => [r.style, r]));
+
+  const picked = testBy.get(pick.style);
+  const base = testBy.get(BASE_STYLE);
+  const enough = picked && base && picked.n >= 20 && base.n >= 20;
+  const testWinner = [...test].sort((a, b) => (b.expectancy || -Infinity) - (a.expectancy || -Infinity))[0];
+  const name = (st) => `"${st}"`;
+
+  let verdict, level, prob = null;
+  if (!enough) {
+    verdict = 'ไม้ในช่วงสอบยังน้อยเกินกว่าจะสรุปว่าท่าไหนดีกว่า — ใช้ค่าตั้งต้นไปก่อน';
+    level = 'unknown';
+  } else if (pick.style === BASE_STYLE) {
+    /*
+     * ช่วงเรียนเลือกค่าตั้งต้นเอง — ไม่มีอะไรให้เปลี่ยน
+     * เคสนี้ต้องแยกออกมา ไม่งั้นจะกลายเป็นเอาค่าตั้งต้นไปเทียบกับตัวเอง
+     * แล้วสรุปว่า "แพ้ค่าตั้งต้น" ทั้งที่เป็นตัวเลขเดียวกันเป๊ะ
+     */
+    if (testWinner.style === BASE_STYLE) {
+      verdict = `ช่วงเรียนเลือกค่าตั้งต้น (${name(BASE_STYLE)}) และตอนสอบก็ยังดีที่สุดอยู่ — ไม่ต้องเปลี่ยนอะไร`;
+      level = 'confirmed';
+    } else {
+      verdict = `ช่วงเรียนเลือกค่าตั้งต้น (${name(BASE_STYLE)}) แต่ตอนสอบ ${name(testWinner.style)} ทำได้ดีกว่า `
+        + `(${testWinner.expectancy.toFixed(3)}R เทียบกับ ${base.expectancy.toFixed(3)}R) — `
+        + 'ยังไม่คงเส้นคงวาพอจะเปลี่ยนตาม ถ้าอยากลองให้เก็บข้อมูลเพิ่มแล้วทดสอบใหม่';
+      level = 'weak';
+    }
+  } else {
+    /*
+     * ต่างกันนิดเดียวบนไม้ไม่กี่สิบไม้ = บังเอิญได้ ไม่ใช่หลักฐาน
+     * สุ่มเลือกไม้ซ้ำ ๆ (bootstrap) เพื่อดูว่า "ดีกว่า" ทนต่อการสลับไม้แค่ไหน
+     */
+    prob = probBetterR(picked.rs, base.rs);
+    const better = picked.expectancy > base.expectancy;
+    if (better && testWinner.style === pick.style && prob >= 0.9) {
+      verdict = `เลือก ${name(pick.style)} จากช่วงเรียน แล้วชนะจริงตอนสอบด้วย `
+        + `(${picked.expectancy.toFixed(3)}R ต่อไม้ เทียบกับค่าตั้งต้น ${base.expectancy.toFixed(3)}R `
+        + `· โอกาสที่ดีกว่าจริงไม่ใช่บังเอิญ ${(prob * 100).toFixed(0)}%) — ใช้ได้`;
+      level = 'confirmed';
+    } else if (better) {
+      verdict = `${name(pick.style)} ดีกว่าค่าตั้งต้นตอนสอบ แต่ยังไม่พอสรุป `
+        + `(${testWinner.style === pick.style ? `โอกาสที่ดีกว่าจริงแค่ ${(prob * 100).toFixed(0)}%`
+          : `ท่าที่ดีที่สุดตอนสอบคือ ${name(testWinner.style)}`}) — ความต่างระหว่างท่ายังไม่คงเส้นคงวา`;
+      level = 'weak';
+    } else {
+      verdict = `เลือก ${name(pick.style)} จากช่วงเรียน แต่ตอนสอบแพ้ค่าตั้งต้น `
+        + `(${picked.expectancy.toFixed(3)}R เทียบกับ ${base.expectancy.toFixed(3)}R) — `
+        + 'แปลว่าการเลือกท่าจากอดีตคือการจูนเข้ากับอดีต ไม่ควรเปลี่ยนตาม';
+      level = 'failed';
+    }
+  }
+
+  const strip = (r) => { const { rs, ...rest } = r; return rest; };
+  return {
+    ok: true, splitAt, learn: learn.map(strip), test: test.map(strip),
+    pick: pick.style, verdict, level, prob,
+    recommend: level === 'confirmed' ? pick.style : BASE_STYLE,
+  };
 }

@@ -4,7 +4,7 @@
 
 import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal } from './signals.js';
-import { runBacktest, walkForward, optimizeExits, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
+import { runBacktest, walkForward, optimizeExits, compareExitStyles, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
 import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
 import { SOURCES, testAllSources } from './sources.js';
@@ -1069,9 +1069,16 @@ function doBacktest() {
       threshold: settings.threshold, maxHold: settings.maxHold,
       spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
     });
+    /* เทียบวิธีบริหารไม้ทุกท่าบนข้อมูลชุดนี้ — ตอบคำถาม "ควรใช้ท่าไหน"
+       ด้วยตัวเลขของผู้ใช้เอง แทนที่จะให้เลือกจากชื่อท่าที่อ่านไม่ออกว่าต่างกันยังไง */
+    state.exitCmp = compareExitStyles(state.ctx, {
+      threshold: settings.threshold, maxHold: settings.maxHold,
+      spread: settings.spread, useFilters: settings.volFilter,
+    });
     $('btStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที · ข้อมูล ${state.candles.length} แท่ง (${TF[state.tf].label})`;
     renderBacktest();
     renderWalkForward();
+    renderExitCompare();
     renderSignal();
     /* ต้องคิดแผนใหม่ ไม่ใช่แค่วาดใหม่: ผลทดสอบที่เพิ่งได้คือหลักฐานที่ใช้ตัดสิน
        ว่าจะเพิ่มขนาดไม้ไหม ถ้าวาดเฉย ๆ จะยังเห็น "ยังไม่มีผลทดสอบย้อนหลัง" ค้างอยู่ */
@@ -1082,6 +1089,58 @@ function doBacktest() {
       chart.render();
     }
   }, 20);
+}
+
+const EXIT_LABEL = {
+  partial: 'ปิดครึ่งที่ 1R', full: 'ถือเต็มไม้ถึงเป้า', 'full-be': 'ถือเต็มไม้ + กันทุน',
+  trail: 'ลากจุดตัดตามราคา', 'trail-1R': 'ปิดครึ่งแล้วลากที่เหลือ',
+};
+
+/**
+ * เทียบวิธีบริหารไม้ — ตำราแต่ละเล่มเชียร์คนละท่า ให้ข้อมูลเป็นคนตัดสิน
+ *
+ * เลือกท่าจากช่วงเรียน แล้วพิสูจน์บนช่วงสอบที่ไม่เคยเห็น
+ * ถ้าท่าที่เลือกไว้แพ้ตอนสอบ ต้องขึ้นว่าแพ้ ไม่ใช่ซ่อนแล้วแนะนำต่อ
+ */
+function renderExitCompare() {
+  const el = $('exitBox');
+  const c = state.exitCmp;
+  if (!c) { el.innerHTML = ''; return; }
+  if (!c.ok) {
+    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังเทียบวิธีบริหารไม้ไม่ได้</div>
+      <div class="tiny" style="margin:0">${c.reason}</div></div>`;
+    return;
+  }
+  const num = (v, d = 3, suf = 'R') => (Number.isFinite(v) ? v.toFixed(d) + suf : '—');
+  const testBy = new Map(c.test.map((r) => [r.style, r]));
+  const rows = [...c.test].sort((a, b) => (b.expectancy || -Infinity) - (a.expectancy || -Infinity)).map((t) => {
+    const l = c.learn.find((x) => x.style === t.style);
+    const isPick = t.style === c.pick;
+    const isNow = t.style === settings.exitStyle;
+    return `<tr class="${isPick ? 'row-pick' : ''}">
+      <td>${EXIT_LABEL[t.style] || t.style}${isPick ? ' <span class="tiny">← เลือกจากช่วงเรียน</span>' : ''}${isNow ? ' <span class="tiny">← ที่ใช้อยู่</span>' : ''}</td>
+      <td class="num">${num(l && l.expectancy)}</td>
+      <td class="num"><b>${num(t.expectancy)}</b></td>
+      <td class="num">${Number.isFinite(t.winRate) ? t.winRate.toFixed(0) + '%' : '—'}</td>
+      <td class="num">${t.n}</td>
+      <td class="num">${num(t.maxDD, 1)}</td>
+    </tr>`;
+  }).join('');
+  const same = c.recommend === settings.exitStyle;
+  el.innerHTML = `
+    <div class="wf-card ${c.level === 'confirmed' ? 'good' : c.level === 'failed' ? 'bad' : 'weak'}">
+      <div class="wf-verdict">วิธีบริหารไม้: ${c.verdict}</div>
+      <table class="learn-table">
+        <thead><tr><th>วิธี</th><th class="num">ช่วงเรียน</th><th class="num">ช่วงสอบ</th><th class="num">ชนะ</th><th class="num">ไม้</th><th class="num">DD</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="tiny" style="margin:8px 0 0">
+        ${same ? `ตอนนี้ใช้ "${EXIT_LABEL[settings.exitStyle] || settings.exitStyle}" อยู่แล้ว ซึ่งตรงกับที่ข้อมูลชุดนี้แนะนำ`
+          : `ข้อมูลชุดนี้แนะนำ "${EXIT_LABEL[c.recommend] || c.recommend}" — ตอนนี้ตั้งไว้เป็น "${EXIT_LABEL[settings.exitStyle] || settings.exitStyle}"`}
+        · คอลัมน์ "ช่วงสอบ" คือตัวเลขที่ควรเชื่อ เพราะระบบไม่เคยเห็นข้อมูลส่วนนั้นตอนเลือก
+        · ผลนี้ผูกกับตลาดช่วงที่โหลดมาเท่านั้น ตลาดเปลี่ยนลักษณะเมื่อไร ต้องกดทดสอบใหม่
+      </div>
+    </div>`;
 }
 
 /**
@@ -1755,7 +1814,7 @@ function renderBacktest() {
       <td class="num">${t.score.toFixed(0)}</td>
       <td class="num">${t.entry.toFixed(2)}</td>
       <td class="num">${t.sl.toFixed(2)}</td>
-      <td>${t.result === 'loss' ? 'โดน SL' : t.result === 'timeout' ? 'หมดเวลาถือ' : t.result === 'win2R' ? 'ถึง 2R' : 'ถึง 1R แล้วกลับมาทุน'}</td>
+      <td>${t.result === 'loss' ? 'โดน SL' : t.result === 'timeout' ? 'หมดเวลาถือ' : t.result === 'win2R' ? 'ถึง 2R' : t.result === 'trail-win' ? 'ลากจุดตัดจนออก (กำไร)' : t.result === 'be' ? 'ออกที่ทุน' : 'ถึง 1R แล้วกลับมาทุน'}</td>
       <td class="num" style="color:${t.rMultiple > 0 ? 'var(--up)' : 'var(--down)'}">${t.rMultiple.toFixed(2)}</td>
     </tr>`).join('')}</tbody></table>`;
   renderFactorTable();
