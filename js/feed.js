@@ -64,9 +64,18 @@ async function fetchJson(url, timeoutMs = 12000) {
 
 import { SOURCES } from './sources.js';
 
+/*
+ * ลำดับแหล่งสำรองของเว็บ — ชุดเดียวกับที่บอทใช้เป็นค่าตั้งต้น
+ * เรียงตามความใกล้เคียงราคาทองจริง ไม่ใช่ตามความเร็ว
+ * ไม่ใส่ twelvedata เพราะต้องมีคีย์ส่วนตัว จะลองก็ต่อเมื่อผู้ใช้เลือกเอง
+ */
+const FALLBACK_ORDER = ['kraken_paxg', 'bitfinex_xaut', 'binance_paxg', 'okx_paxg', 'binance'];
+
 export class MarketFeed {
   constructor() {
     this.source = 'binance';
+    this.activeSource = null;    // แหล่งที่โหลดสำเร็จจริงในรอบล่าสุด (อาจไม่ใช่แหล่งที่เลือก)
+    this.fellBackFrom = null;   // ถ้าไม่ null = ต้องบอกผู้ใช้ว่าเปลี่ยนแหล่งให้แล้ว
     this.symbol = 'PAXGUSDT';
     this.interval = '15m';
     this.apiKey = '';
@@ -116,14 +125,55 @@ export class MarketFeed {
     return this.source === 'twelvedata' ? TD_LIMITS.htfRefreshMs : 60000;
   }
 
-  configure(opts) { Object.assign(this, opts); }
+  configure(opts) {
+    /* เปลี่ยนแหล่งที่เลือก = ลืมแหล่งสำรองที่เคยใช้ ไม่งั้นราคาสดจะยังดูดจากเจ้าเดิม
+       ทั้งที่ผู้ใช้เพิ่งเปลี่ยนไปเจ้าใหม่ */
+    if (opts.source !== undefined && opts.source !== this.source) {
+      this.activeSource = null; this.fellBackFrom = null;
+    }
+    Object.assign(this, opts);
+  }
 
   // ── โหลดประวัติราคา ───────────────────────────────────────────────────
+  /**
+   * โหลดจากแหล่งที่เลือก ถ้าไม่ได้ก็ไล่ลองแหล่งอื่นก่อนจะยอมแพ้
+   *
+   * ทำไมต้องมี: แหล่งตั้งต้นคือ Binance ซึ่งถูกบล็อกในหลายประเทศ ไทยรวมอยู่ด้วย
+   * ของเดิมเว็บลองแหล่งเดียว พอไม่ได้ก็ตกไปโหมดจำลองทันที ผู้ใช้จึงเห็นแต่ราคาสมมติ
+   * ทั้งที่ Kraken หรือ OKX อาจเข้าได้สบาย — บอทมีการไล่ลองแบบนี้อยู่แล้ว
+   * แต่เว็บไม่มี กลายเป็นสองมาตรฐานในระบบเดียวกัน
+   *
+   * แหล่งที่ผู้ใช้เลือกได้ลองก่อนเสมอ ที่เหลือเรียงตามความใกล้เคียงราคาทองจริง
+   */
   async loadHistory(interval = this.interval, limit = 700) {
     if (this.source === 'demo') return this._demoHistory(interval, limit);
-    if (this.source === 'twelvedata') return this._tdHistory(interval, limit);
-    if (SOURCES[this.source]) return this._genericHistory(interval, limit);
-    return this._binanceHistory(interval, limit);
+    const order = [this.source, ...FALLBACK_ORDER.filter((k) => k !== this.source)];
+    const tried = [];
+    for (const key of order) {
+      try {
+        const bars = key === 'twelvedata'
+          ? await this._tdHistory(interval, limit, key)
+          : (SOURCES[key] ? await this._genericHistory(interval, limit, key) : await this._binanceHistory(interval, limit));
+        if (bars && bars.length) {
+          if (key !== this.source) {
+            /* เปลี่ยนแหล่งที่ใช้จริงเฉพาะรอบนี้ ไม่บันทึกทับค่าที่ผู้ใช้เลือก
+               ครั้งหน้าจะกลับไปลองของเดิมก่อนเสมอ เผื่อเน็ตกลับมาปกติแล้ว */
+            this.activeSource = key;
+            this.fellBackFrom = this.source;
+          } else {
+            this.activeSource = key;
+            this.fellBackFrom = null;
+          }
+          return bars;
+        }
+        tried.push(`${key}: ไม่มีข้อมูลกลับมา`);
+      } catch (e) {
+        tried.push(`${key}: ${e.message}`);
+        /* คีย์ผิด/โควตาหมด เป็นเรื่องของบัญชีผู้ใช้ ไม่ใช่แหล่งล่ม
+           ลองแหล่งอื่นต่อได้ แต่ต้องไม่กลืนสาเหตุจริงหายไป */
+      }
+    }
+    throw new Error(`ลองครบทุกแหล่งแล้วยังโหลดไม่ได้ —\n${tried.join('\n')}`);
   }
 
   /** ยิงคำขอไป Binance โดยสลับโฮสต์อัตโนมัติถ้าโฮสต์แรกใช้ไม่ได้ */
@@ -178,7 +228,7 @@ export class MarketFeed {
       .map((k) => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5], closed: true }));
   }
 
-  async _tdHistory(interval, limit) {
+  async _tdHistory(interval, limit) {   // eslint-disable-line no-unused-vars
     if (!this.apiKey) throw new Error('โหมด Twelve Data ต้องใส่ API key ก่อน (สมัครฟรีที่ twelvedata.com)');
     const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${TF[interval].td}&outputsize=${Math.min(limit, 5000)}&order=ASC&apikey=${encodeURIComponent(this.apiKey)}`;
     this.requestCount++;
@@ -202,9 +252,10 @@ export class MarketFeed {
     this.onCandle = onCandle || this.onCandle;
     this.onStatus = onStatus || this.onStatus;
     this.stopped = false;
-    if (this.source === 'demo') return this._startDemo();
-    if (this.source === 'twelvedata') return this._startPolling();
-    if (SOURCES[this.source]) return this._startGenericPoll();
+    const live = this.activeSource || this.source;
+    if (live === 'demo') return this._startDemo();
+    if (live === 'twelvedata') return this._startPolling();
+    if (SOURCES[live]) return this._startGenericPoll();
     return this._startBinanceWs();
   }
 
@@ -315,8 +366,8 @@ export class MarketFeed {
    * ใช้ตัวแปลงข้อมูลชุดเดียวกับที่ปุ่มทดสอบใช้ ถ้าปุ่มทดสอบบอกว่าแหล่งนี้ผ่าน
    * ก็แปลว่าเส้นทางนี้ใช้ได้จริง ไม่ใช่โค้ดคนละชุดที่ต้องมาลุ้นใหม่
    */
-  async _genericHistory(interval, limit) {
-    const src = SOURCES[this.source];
+  async _genericHistory(interval, limit, key = this.activeSource || this.source) {
+    const src = SOURCES[key];
     const tf = src.tf[interval];
     if (tf === undefined) {
       throw new Error(`${src.label} ไม่มีกรอบเวลา ${TF[interval] ? TF[interval].label : interval} — เลือกกรอบเวลาอื่นหรือเปลี่ยนแหล่งข้อมูล`);
@@ -330,7 +381,9 @@ export class MarketFeed {
 
   /** ดึงราคาสดเป็นรอบ สำหรับแหล่งที่ไม่มี WebSocket */
   _startGenericPoll() {
-    const src = SOURCES[this.source];
+    /* ต้องใช้แหล่งที่ประวัติโหลดสำเร็จจริง ไม่ใช่แหล่งที่ผู้ใช้เลือกไว้
+       ไม่งั้นกราฟจะเอาประวัติจากเจ้าหนึ่ง มาต่อกับราคาสดของอีกเจ้า */
+    const src = SOURCES[this.activeSource || this.source];
     const tick = async () => {
       try {
         const rows = await this._genericHistory(this.interval, 3);

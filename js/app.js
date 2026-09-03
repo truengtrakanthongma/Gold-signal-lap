@@ -49,7 +49,10 @@ const state = {
 };
 
 const settings = {
-  source: 'binance', symbol: 'PAXGUSDT', tf: '15m', htf1: '1h', htf2: '4h',
+  /* ค่าตั้งต้นเป็น Kraken ไม่ใช่ Binance — Binance ถูกบล็อกในไทยและอีกหลายประเทศ
+     ผู้ใช้ที่เปิดครั้งแรกจึงเจอ "โหลดข้อมูลไม่ได้" ทั้งที่เจ้าอื่นเข้าได้สบาย
+     (ยังมีการไล่ลองแหล่งสำรองอยู่ แต่ค่าตั้งต้นที่ใช้ได้เลยดีกว่าค่าที่ต้องรอ fallback) */
+  source: 'kraken_paxg', symbol: 'PAXGUSDT', tf: '15m', htf1: '1h', htf2: '4h',
   threshold: 35, slAtr: 1.5, adxMin: 22,
   account: 1000, riskPct: 1,
   newsFilter: true, volFilter: true, sessionFilter: false,
@@ -370,6 +373,19 @@ async function reload() {
     doBacktest();
     renderContextTab();
     feed.start(onLiveCandle, (s) => setStatus(s.state, s.message));
+    /* ถ้าแหล่งที่เลือกใช้ไม่ได้แล้วระบบไปหยิบแหล่งสำรองมาแทน ต้องบอกให้รู้
+       ไม่ใช่เปลี่ยนเงียบ ๆ — ราคาแต่ละเจ้าต่างกันได้ไม่กี่ดอลลาร์ และผู้ใช้ควรรู้ว่ากำลังดูของใคร */
+    if (feed.fellBackFrom) {
+      /* คีย์ 'binance' รุ่นเก่าไม่มีใน SOURCES จึงต้องมีชื่อไทยสำรองไว้
+         ไม่งั้นข้อความจะขึ้นว่า "ต่อ binance ไม่ได้" ซึ่งดูเหมือนโค้ดหลุด */
+      const NAME = { binance: 'Binance (ค่าตั้งต้น)', demo: 'โหมดจำลอง', twelvedata: 'Twelve Data' };
+      const nameOf = (k) => (SOURCES[k] ? SOURCES[k].label : (NAME[k] || k));
+      const from = nameOf(feed.fellBackFrom);
+      const to = nameOf(feed.activeSource);
+      toast({ kind: 'info', title: `เปลี่ยนแหล่งราคาให้อัตโนมัติ — ใช้ ${to} แทน`,
+        body: `ต่อ ${from} ไม่ได้ (มักเป็นเพราะประเทศไทยบล็อก Binance หรือตัวบล็อกโฆษณาในเบราว์เซอร์)\n\n`
+          + `นี่คือราคาจริงจาก ${to} ไม่ใช่ข้อมูลจำลอง ถ้าอยากใช้เจ้าอื่นเลือกได้ที่ช่อง "แหล่งข้อมูล"` });
+    }
     clearInterval(state.htfTimer);   // ไม่งั้นโหลดใหม่ทุกครั้งจะเพิ่มตัวจับเวลาซ้อนกันเรื่อย ๆ
     state.htfTimer = setInterval(refreshHtf, feed.htfRefreshMs);
   } catch (e) {
@@ -834,7 +850,20 @@ function renderPlan() {
      ไม่ใช่ตามขนาดไม้ที่เทรดได้จริง ตัวเลขบนหน้าจอกับที่เด้งเข้า Discord จึงไม่ตรงกัน */
   const riskMoney = s.riskActual;
   const lots = s.lots;
-  const opt = state.strat && state.strat.ok ? state.strat.stage1 : null;
+  /*
+   * ตัวเลขประกอบแผง "ที่มาของตัวเลข" — ประกอบจากผลชุดเดียว
+   * ต้องมี best/outOfSample ให้ครบตามที่แผงข้างล่างอ่าน ไม่งั้นหน้าแผนพังทั้งหน้า
+   * (เคยพลาดมาแล้วตอนย้ายมาใช้ผลชุดเดียว — โหมดจำลองไม่เจอเพราะมักไม่มีสัญญาณให้วาดแผน)
+   */
+  const opt = state.strat && state.strat.ok ? {
+    ...state.strat.stage1,
+    best: {
+      slAtrMult: state.strat.strategy.slAtrMult,
+      targetR: state.strat.strategy.targetR,
+      expectancy: state.strat.inSample.expectancy,
+    },
+    outOfSample: { expectancy: state.strat.outSample.expectancy },
+  } : null;
   const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
   const sign = s.side > 0 ? '+' : '-';
   const rr = Math.abs(s.tpMain - s.entry) / s.slDist;
@@ -943,8 +972,9 @@ function renderPlan() {
       <div class="why-body">
         ${opt ? `
         <h4>ทำไมตัดขาดทุนตรงนี้</h4>
-        <p>ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b>
-          ให้ผลดีที่สุดในบรรดาค่าที่ลอง</p>
+        <p>${Number.isFinite(opt.best.slAtrMult)
+          ? `ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b> ให้ผลดีที่สุดในบรรดาค่าที่ลอง`
+          : 'ยังหาความกว้างที่ดีที่สุดไม่ได้ จึงใช้ค่าตั้งต้น'}</p>
         ${opt.slAdvice && opt.slAdvice.level !== 'unknown'
           ? `<p class="why-hint"><b>หมายเหตุจากข้อมูลทั้งหมด:</b> ${opt.slAdvice.text}</p>` : ''}
         ${opt.maeWinners.n >= 10 ? `<p class="why-stat">ไม้ที่สุดท้ายชนะ เคยติดลบลึกสุดเท่าไร (เทียบกับระยะ SL):

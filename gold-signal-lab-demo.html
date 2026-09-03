@@ -913,8 +913,8 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
   <div class="controls">
     <label data-adv>แหล่งข้อมูล
       <select id="sourceSel">
-        <option value="binance">Binance PAXG/USDT (ฟรี · เร็วที่สุด)</option>
-        <option value="kraken_paxg">Kraken PAXG/USD (ฟรี · ใกล้ทองจริงกว่า)</option>
+        <option value="kraken_paxg">Kraken PAXG/USD (ฟรี · แนะนำ · ใช้ได้ในไทย)</option>
+        <option value="binance">Binance PAXG/USDT (เร็วที่สุด · มักถูกบล็อกในไทย)</option>
         <option value="bitfinex_xaut">Bitfinex XAUT/USD (ฟรี · ใกล้ทองจริงกว่า)</option>
         <option value="okx_paxg">OKX PAXG/USDT (ฟรี · สำรอง)</option>
         <option value="twelvedata">Twelve Data XAU/USD (ทองจริง · ต้องมี API key)</option>
@@ -5237,9 +5237,18 @@ async function fetchJson(url, timeoutMs = 12000) {
 
 
 
+/*
+ * ลำดับแหล่งสำรองของเว็บ — ชุดเดียวกับที่บอทใช้เป็นค่าตั้งต้น
+ * เรียงตามความใกล้เคียงราคาทองจริง ไม่ใช่ตามความเร็ว
+ * ไม่ใส่ twelvedata เพราะต้องมีคีย์ส่วนตัว จะลองก็ต่อเมื่อผู้ใช้เลือกเอง
+ */
+const FALLBACK_ORDER = ['kraken_paxg', 'bitfinex_xaut', 'binance_paxg', 'okx_paxg', 'binance'];
+
 class MarketFeed {
   constructor() {
     this.source = 'binance';
+    this.activeSource = null;    // แหล่งที่โหลดสำเร็จจริงในรอบล่าสุด (อาจไม่ใช่แหล่งที่เลือก)
+    this.fellBackFrom = null;   // ถ้าไม่ null = ต้องบอกผู้ใช้ว่าเปลี่ยนแหล่งให้แล้ว
     this.symbol = 'PAXGUSDT';
     this.interval = '15m';
     this.apiKey = '';
@@ -5289,14 +5298,55 @@ class MarketFeed {
     return this.source === 'twelvedata' ? TD_LIMITS.htfRefreshMs : 60000;
   }
 
-  configure(opts) { Object.assign(this, opts); }
+  configure(opts) {
+    /* เปลี่ยนแหล่งที่เลือก = ลืมแหล่งสำรองที่เคยใช้ ไม่งั้นราคาสดจะยังดูดจากเจ้าเดิม
+       ทั้งที่ผู้ใช้เพิ่งเปลี่ยนไปเจ้าใหม่ */
+    if (opts.source !== undefined && opts.source !== this.source) {
+      this.activeSource = null; this.fellBackFrom = null;
+    }
+    Object.assign(this, opts);
+  }
 
   // ── โหลดประวัติราคา ───────────────────────────────────────────────────
+  /**
+   * โหลดจากแหล่งที่เลือก ถ้าไม่ได้ก็ไล่ลองแหล่งอื่นก่อนจะยอมแพ้
+   *
+   * ทำไมต้องมี: แหล่งตั้งต้นคือ Binance ซึ่งถูกบล็อกในหลายประเทศ ไทยรวมอยู่ด้วย
+   * ของเดิมเว็บลองแหล่งเดียว พอไม่ได้ก็ตกไปโหมดจำลองทันที ผู้ใช้จึงเห็นแต่ราคาสมมติ
+   * ทั้งที่ Kraken หรือ OKX อาจเข้าได้สบาย — บอทมีการไล่ลองแบบนี้อยู่แล้ว
+   * แต่เว็บไม่มี กลายเป็นสองมาตรฐานในระบบเดียวกัน
+   *
+   * แหล่งที่ผู้ใช้เลือกได้ลองก่อนเสมอ ที่เหลือเรียงตามความใกล้เคียงราคาทองจริง
+   */
   async loadHistory(interval = this.interval, limit = 700) {
     if (this.source === 'demo') return this._demoHistory(interval, limit);
-    if (this.source === 'twelvedata') return this._tdHistory(interval, limit);
-    if (SOURCES[this.source]) return this._genericHistory(interval, limit);
-    return this._binanceHistory(interval, limit);
+    const order = [this.source, ...FALLBACK_ORDER.filter((k) => k !== this.source)];
+    const tried = [];
+    for (const key of order) {
+      try {
+        const bars = key === 'twelvedata'
+          ? await this._tdHistory(interval, limit, key)
+          : (SOURCES[key] ? await this._genericHistory(interval, limit, key) : await this._binanceHistory(interval, limit));
+        if (bars && bars.length) {
+          if (key !== this.source) {
+            /* เปลี่ยนแหล่งที่ใช้จริงเฉพาะรอบนี้ ไม่บันทึกทับค่าที่ผู้ใช้เลือก
+               ครั้งหน้าจะกลับไปลองของเดิมก่อนเสมอ เผื่อเน็ตกลับมาปกติแล้ว */
+            this.activeSource = key;
+            this.fellBackFrom = this.source;
+          } else {
+            this.activeSource = key;
+            this.fellBackFrom = null;
+          }
+          return bars;
+        }
+        tried.push(`${key}: ไม่มีข้อมูลกลับมา`);
+      } catch (e) {
+        tried.push(`${key}: ${e.message}`);
+        /* คีย์ผิด/โควตาหมด เป็นเรื่องของบัญชีผู้ใช้ ไม่ใช่แหล่งล่ม
+           ลองแหล่งอื่นต่อได้ แต่ต้องไม่กลืนสาเหตุจริงหายไป */
+      }
+    }
+    throw new Error(`ลองครบทุกแหล่งแล้วยังโหลดไม่ได้ —\n${tried.join('\n')}`);
   }
 
   /** ยิงคำขอไป Binance โดยสลับโฮสต์อัตโนมัติถ้าโฮสต์แรกใช้ไม่ได้ */
@@ -5351,7 +5401,7 @@ class MarketFeed {
       .map((k) => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5], closed: true }));
   }
 
-  async _tdHistory(interval, limit) {
+  async _tdHistory(interval, limit) {   // eslint-disable-line no-unused-vars
     if (!this.apiKey) throw new Error('โหมด Twelve Data ต้องใส่ API key ก่อน (สมัครฟรีที่ twelvedata.com)');
     const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${TF[interval].td}&outputsize=${Math.min(limit, 5000)}&order=ASC&apikey=${encodeURIComponent(this.apiKey)}`;
     this.requestCount++;
@@ -5375,9 +5425,10 @@ class MarketFeed {
     this.onCandle = onCandle || this.onCandle;
     this.onStatus = onStatus || this.onStatus;
     this.stopped = false;
-    if (this.source === 'demo') return this._startDemo();
-    if (this.source === 'twelvedata') return this._startPolling();
-    if (SOURCES[this.source]) return this._startGenericPoll();
+    const live = this.activeSource || this.source;
+    if (live === 'demo') return this._startDemo();
+    if (live === 'twelvedata') return this._startPolling();
+    if (SOURCES[live]) return this._startGenericPoll();
     return this._startBinanceWs();
   }
 
@@ -5488,8 +5539,8 @@ class MarketFeed {
    * ใช้ตัวแปลงข้อมูลชุดเดียวกับที่ปุ่มทดสอบใช้ ถ้าปุ่มทดสอบบอกว่าแหล่งนี้ผ่าน
    * ก็แปลว่าเส้นทางนี้ใช้ได้จริง ไม่ใช่โค้ดคนละชุดที่ต้องมาลุ้นใหม่
    */
-  async _genericHistory(interval, limit) {
-    const src = SOURCES[this.source];
+  async _genericHistory(interval, limit, key = this.activeSource || this.source) {
+    const src = SOURCES[key];
     const tf = src.tf[interval];
     if (tf === undefined) {
       throw new Error(`${src.label} ไม่มีกรอบเวลา ${TF[interval] ? TF[interval].label : interval} — เลือกกรอบเวลาอื่นหรือเปลี่ยนแหล่งข้อมูล`);
@@ -5503,7 +5554,9 @@ class MarketFeed {
 
   /** ดึงราคาสดเป็นรอบ สำหรับแหล่งที่ไม่มี WebSocket */
   _startGenericPoll() {
-    const src = SOURCES[this.source];
+    /* ต้องใช้แหล่งที่ประวัติโหลดสำเร็จจริง ไม่ใช่แหล่งที่ผู้ใช้เลือกไว้
+       ไม่งั้นกราฟจะเอาประวัติจากเจ้าหนึ่ง มาต่อกับราคาสดของอีกเจ้า */
+    const src = SOURCES[this.activeSource || this.source];
     const tick = async () => {
       try {
         const rows = await this._genericHistory(this.interval, 3);
@@ -7461,7 +7514,10 @@ const state = {
 };
 
 const settings = {
-  source: 'binance', symbol: 'PAXGUSDT', tf: '15m', htf1: '1h', htf2: '4h',
+  /* ค่าตั้งต้นเป็น Kraken ไม่ใช่ Binance — Binance ถูกบล็อกในไทยและอีกหลายประเทศ
+     ผู้ใช้ที่เปิดครั้งแรกจึงเจอ "โหลดข้อมูลไม่ได้" ทั้งที่เจ้าอื่นเข้าได้สบาย
+     (ยังมีการไล่ลองแหล่งสำรองอยู่ แต่ค่าตั้งต้นที่ใช้ได้เลยดีกว่าค่าที่ต้องรอ fallback) */
+  source: 'kraken_paxg', symbol: 'PAXGUSDT', tf: '15m', htf1: '1h', htf2: '4h',
   threshold: 35, slAtr: 1.5, adxMin: 22,
   account: 1000, riskPct: 1,
   newsFilter: true, volFilter: true, sessionFilter: false,
@@ -7782,6 +7838,19 @@ async function reload() {
     doBacktest();
     renderContextTab();
     feed.start(onLiveCandle, (s) => setStatus(s.state, s.message));
+    /* ถ้าแหล่งที่เลือกใช้ไม่ได้แล้วระบบไปหยิบแหล่งสำรองมาแทน ต้องบอกให้รู้
+       ไม่ใช่เปลี่ยนเงียบ ๆ — ราคาแต่ละเจ้าต่างกันได้ไม่กี่ดอลลาร์ และผู้ใช้ควรรู้ว่ากำลังดูของใคร */
+    if (feed.fellBackFrom) {
+      /* คีย์ 'binance' รุ่นเก่าไม่มีใน SOURCES จึงต้องมีชื่อไทยสำรองไว้
+         ไม่งั้นข้อความจะขึ้นว่า "ต่อ binance ไม่ได้" ซึ่งดูเหมือนโค้ดหลุด */
+      const NAME = { binance: 'Binance (ค่าตั้งต้น)', demo: 'โหมดจำลอง', twelvedata: 'Twelve Data' };
+      const nameOf = (k) => (SOURCES[k] ? SOURCES[k].label : (NAME[k] || k));
+      const from = nameOf(feed.fellBackFrom);
+      const to = nameOf(feed.activeSource);
+      toast({ kind: 'info', title: `เปลี่ยนแหล่งราคาให้อัตโนมัติ — ใช้ ${to} แทน`,
+        body: `ต่อ ${from} ไม่ได้ (มักเป็นเพราะประเทศไทยบล็อก Binance หรือตัวบล็อกโฆษณาในเบราว์เซอร์)\n\n`
+          + `นี่คือราคาจริงจาก ${to} ไม่ใช่ข้อมูลจำลอง ถ้าอยากใช้เจ้าอื่นเลือกได้ที่ช่อง "แหล่งข้อมูล"` });
+    }
     clearInterval(state.htfTimer);   // ไม่งั้นโหลดใหม่ทุกครั้งจะเพิ่มตัวจับเวลาซ้อนกันเรื่อย ๆ
     state.htfTimer = setInterval(refreshHtf, feed.htfRefreshMs);
   } catch (e) {
@@ -8246,7 +8315,20 @@ function renderPlan() {
      ไม่ใช่ตามขนาดไม้ที่เทรดได้จริง ตัวเลขบนหน้าจอกับที่เด้งเข้า Discord จึงไม่ตรงกัน */
   const riskMoney = s.riskActual;
   const lots = s.lots;
-  const opt = state.strat && state.strat.ok ? state.strat.stage1 : null;
+  /*
+   * ตัวเลขประกอบแผง "ที่มาของตัวเลข" — ประกอบจากผลชุดเดียว
+   * ต้องมี best/outOfSample ให้ครบตามที่แผงข้างล่างอ่าน ไม่งั้นหน้าแผนพังทั้งหน้า
+   * (เคยพลาดมาแล้วตอนย้ายมาใช้ผลชุดเดียว — โหมดจำลองไม่เจอเพราะมักไม่มีสัญญาณให้วาดแผน)
+   */
+  const opt = state.strat && state.strat.ok ? {
+    ...state.strat.stage1,
+    best: {
+      slAtrMult: state.strat.strategy.slAtrMult,
+      targetR: state.strat.strategy.targetR,
+      expectancy: state.strat.inSample.expectancy,
+    },
+    outOfSample: { expectancy: state.strat.outSample.expectancy },
+  } : null;
   const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
   const sign = s.side > 0 ? '+' : '-';
   const rr = Math.abs(s.tpMain - s.entry) / s.slDist;
@@ -8355,8 +8437,9 @@ function renderPlan() {
       <div class="why-body">
         ${opt ? `
         <h4>ทำไมตัดขาดทุนตรงนี้</h4>
-        <p>ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b>
-          ให้ผลดีที่สุดในบรรดาค่าที่ลอง</p>
+        <p>${Number.isFinite(opt.best.slAtrMult)
+          ? `ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b> ให้ผลดีที่สุดในบรรดาค่าที่ลอง`
+          : 'ยังหาความกว้างที่ดีที่สุดไม่ได้ จึงใช้ค่าตั้งต้น'}</p>
         ${opt.slAdvice && opt.slAdvice.level !== 'unknown'
           ? `<p class="why-hint"><b>หมายเหตุจากข้อมูลทั้งหมด:</b> ${opt.slAdvice.text}</p>` : ''}
         ${opt.maeWinners.n >= 10 ? `<p class="why-stat">ไม้ที่สุดท้ายชนะ เคยติดลบลึกสุดเท่าไร (เทียบกับระยะ SL):

@@ -2391,6 +2391,88 @@ section('34) รวมทุกกลยุทธ์เป็นชุดเด�
   }
 }
 
+section('35) แหล่งราคาถูกบล็อก — ต้องลองเจ้าอื่นก่อนจะยอมใช้ข้อมูลจำลอง');
+{
+  /*
+   * ผู้ใช้รายงานว่า "เข้าถึงข้อมูลอะไรไม่ได้เลย"
+   * ต้นเหตุ: แหล่งตั้งต้นคือ Binance ซึ่งถูกบล็อกในไทย
+   * บอทไล่ลองหลายแหล่งอยู่แล้ว แต่เว็บลองแหล่งเดียวแล้วตกไปโหมดจำลองทันที
+   * ทั้งที่ Kraken/OKX อาจเข้าได้สบาย — กลายเป็นสองมาตรฐานในระบบเดียวกัน
+   */
+  const realFetch = globalThis.fetch;
+  const krakenBody = () => {
+    const rows = [];
+    let t = Math.floor(Date.now() / 1000) - 400 * 900, px = 3300;
+    for (let k = 0; k < 400; k++) {
+      const o = px, c = px + Math.sin(k / 7) * 3;
+      rows.push([t, String(o), String(Math.max(o, c) + 1), String(Math.min(o, c) - 1), String(c), String(c), '10', 5]);
+      t += 900; px = c;
+    }
+    return { error: [], result: { PAXGUSD: rows, last: t } };
+  };
+
+  /** แทน fetch ชั่วคราว: อนุญาตเฉพาะโฮสต์ที่ระบุ ที่เหลือโยน error เหมือนโดนบล็อก */
+  const withHosts = async (allowed, fn) => {
+    const seen = [];
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      seen.push(u);
+      if (!allowed.some((h) => u.includes(h))) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, json: async () => krakenBody() };
+    };
+    try { return { out: await fn(), seen }; }
+    catch (e) { return { err: e, seen }; }
+    finally { globalThis.fetch = realFetch; }
+  };
+
+  {
+    const feed = new MarketFeed();
+    feed.configure({ source: 'binance', interval: '15m' });
+    const { out, err, seen } = await withHosts(['api.kraken.com'], () => feed.loadHistory('15m', 400));
+    ok('Binance โดนบล็อก แต่ Kraken เข้าได้ → ยังได้ข้อมูลจริง ไม่ตกไปโหมดจำลอง', !err && out && out.length > 100, err ? err.message.slice(0, 80) : `${out && out.length} แท่ง`);
+    ok('บันทึกว่าแหล่งที่ใช้จริงคือ Kraken ไม่ใช่แหล่งที่ผู้ใช้เลือก', feed.activeSource === 'kraken_paxg', String(feed.activeSource));
+    ok('จำไว้ว่าเปลี่ยนมาจากแหล่งไหน เพื่อบอกผู้ใช้ได้ว่าทำไมราคาเปลี่ยนเจ้า', feed.fellBackFrom === 'binance');
+    ok('ลองแหล่งที่ผู้ใช้เลือกก่อนเสมอ ไม่ข้ามไปเจ้าอื่นตั้งแต่แรก', seen.length > 1 && /binance/.test(seen[0]));
+  }
+
+  {
+    const feed = new MarketFeed();
+    feed.configure({ source: 'kraken_paxg', interval: '15m' });
+    const { out, err } = await withHosts(['api.kraken.com'], () => feed.loadHistory('15m', 400));
+    ok('แหล่งที่เลือกใช้ได้อยู่แล้ว → ไม่ต้องเปลี่ยนอะไร', !err && out.length > 100 && feed.fellBackFrom === null);
+  }
+
+  {
+    const feed = new MarketFeed();
+    feed.configure({ source: 'binance', interval: '15m' });
+    const { err } = await withHosts([], () => feed.loadHistory('15m', 400));
+    ok('ทุกแหล่งโดนบล็อก → โยน error ไม่ใช่คืนข้อมูลว่าง ๆ ให้เข้าใจผิดว่าตลาดเงียบ', !!err);
+    ok('บอกด้วยว่าลองเจ้าไหนไปบ้าง และแต่ละเจ้าพังเพราะอะไร',
+      err && /ลองครบทุกแหล่ง/.test(err.message) && /kraken/.test(err.message) && /okx|bitfinex/.test(err.message),
+      err ? err.message.replace(/\n/g, ' ').slice(0, 110) : '');
+  }
+
+  {
+    /* เปลี่ยนแหล่งเองแล้วต้องลืมเจ้าสำรองเดิม ไม่งั้นราคาสดจะยังดูดจากเจ้าเก่า
+       ทั้งที่ผู้ใช้เพิ่งเลือกเจ้าใหม่ — กราฟจะกลายเป็นสองเจ้าปนกัน */
+    const feed = new MarketFeed();
+    feed.configure({ source: 'binance', interval: '15m' });
+    await withHosts(['api.kraken.com'], () => feed.loadHistory('15m', 400));
+    ok('ก่อนเปลี่ยน: จำแหล่งสำรองไว้', feed.activeSource === 'kraken_paxg');
+    feed.configure({ source: 'okx_paxg' });
+    ok('ผู้ใช้เปลี่ยนแหล่งเอง → ลืมแหล่งสำรองเดิม', feed.activeSource === null && feed.fellBackFrom === null);
+  }
+
+  {
+    /* โหมดจำลองต้องไม่ไปยิงเน็ตเลยแม้แต่ครั้งเดียว — คนเลือกโหมดนี้เพราะไม่มีเน็ต */
+    const feed = new MarketFeed();
+    feed.configure({ source: 'demo', interval: '15m' });
+    const { out, seen } = await withHosts([], () => feed.loadHistory('15m', 300));
+    ok('เลือกโหมดจำลอง → ไม่ยิงคำขอออกเน็ตเลย', seen.length === 0);
+    ok('โหมดจำลองยังคืนแท่งเทียนได้ตามปกติ', out && out.length > 100);
+  }
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);
