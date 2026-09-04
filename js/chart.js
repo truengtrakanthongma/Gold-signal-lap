@@ -14,6 +14,9 @@ const COL = {
   cross: 'rgba(226,232,240,0.45)',
 };
 
+/** ความกว้างแถบราคาด้านขวา — ใช้ร่วมกันระหว่างการวาดกับการตรวจโซนที่นิ้วแตะ */
+const PRICE_AXIS_W = 62;
+
 /** สี่เหลี่ยมมุมมน — เขียนเองแทน ctx.roundRect เพื่อให้เบราว์เซอร์รุ่นเก่ายังวาดได้ */
 function roundRect(g, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
@@ -35,8 +38,11 @@ export class Chart {
     this.setup = null;
     this.position = null;   // ไม้ที่ถืออยู่จริง (คนละเรื่องกับแผนที่ยังไม่ได้เข้า)
     this.posHit = null;     // กรอบปุ่มปิดบนป้าย ใช้ตรวจว่าแตะโดนไหม
+    this.axisDrag = null;   // กำลังลากที่แถบราคาเพื่อยืด/บีบสเกลอยู่หรือเปล่า
     this.markers = [];
-    this.view = { count: 140, offset: 0 }; // offset = จำนวนแท่งที่เลื่อนถอยจากขวาสุด
+    /* count = เห็นกี่แท่ง · offset = เลื่อนถอยจากขวาสุดกี่แท่ง
+       priceZoom = ยืด/บีบแกนราคา (>1 = แท่งสูงขึ้น) ผู้ใช้ลากที่แถบราคาเพื่อปรับ */
+    this.view = { count: 140, offset: 0, priceZoom: 1 };
     this.panels = { volume: true, rsi: true, macd: true };
     this.mouse = null;
     this.drag = null;
@@ -93,7 +99,26 @@ export class Chart {
     if (this.position) [this.position.entry, this.position.sl, this.position.tp].forEach((v) => { if (v > 0) add(v); });
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
     const pad = (max - min) * 0.08 || 1;
-    return { min: min - pad, max: max + pad, start, end };
+    let lo = min - pad, hi = max + pad;
+
+    /*
+     * ยืด/บีบแกนราคา — ผู้ใช้ลากนิ้วที่แถบราคาด้านขวาเพื่อปรับ
+     *
+     * ทำไมต้องมี: บนมือถือ กรอบราคาถูกกำหนดโดยจุดสูงสุด-ต่ำสุดของช่วงที่เห็น
+     * ถ้ามีแท่งที่แหลมออกไปแท่งเดียว หรือมีเส้นเป้าที่อยู่ไกล กรอบจะกว้างขึ้นทันที
+     * แท่งเทียนที่เหลือเลยถูกบีบจนแบนติดกัน ดูรูปแบบไม่ออกเลย
+     *
+     * ยืดรอบ "ราคาล่าสุด" ไม่ใช่รอบกึ่งกลางกรอบ เพราะราคาปัจจุบันคือจุดที่คนจ้องอยู่
+     * ถ้ายืดรอบกึ่งกลาง ราคาปัจจุบันจะไถลขึ้นลงระหว่างที่ลาก ซึ่งสับสน
+     */
+    const z = this.view.priceZoom || 1;
+    if (z !== 1) {
+      const last = this.candles.length ? this.candles[Math.min(end, this.candles.length) - 1].c : (lo + hi) / 2;
+      const anchor = Math.min(hi, Math.max(lo, last));
+      lo = anchor - (anchor - lo) / z;
+      hi = anchor + (hi - anchor) / z;
+    }
+    return { min: lo, max: hi, start, end };
   }
 
   /** ค่อย ๆ เลื่อนค่าที่แสดงเข้าหาเป้าหมาย คืน true ถ้ายังเคลื่อนอยู่ */
@@ -131,10 +156,17 @@ export class Chart {
       this.invalidate();
     }, { passive: false });
 
-    cv.addEventListener('mousedown', (e) => { this.drag = { x: e.offsetX, offset: this.view.offset }; });
-    window.addEventListener('mouseup', () => { this.drag = null; });
+    /* แถบราคาอยู่ขวาสุด กว้างเท่า padR — ลากในโซนนี้คือปรับสเกล ไม่ใช่เลื่อนกราฟ */
+    const onPriceAxis = (x) => x > (this.W || cv.clientWidth) - PRICE_AXIS_W;
+
+    cv.addEventListener('mousedown', (e) => {
+      if (onPriceAxis(e.offsetX)) { this.axisDrag = { y: e.offsetY, zoom: this.view.priceZoom }; return; }
+      this.drag = { x: e.offsetX, offset: this.view.offset };
+    });
+    window.addEventListener('mouseup', () => { this.drag = null; this.axisDrag = null; });
     cv.addEventListener('mousemove', (e) => {
       this.mouse = { x: e.offsetX, y: e.offsetY };
+      if (this.axisDrag) { this._zoomPrice(this.axisDrag.y - e.offsetY, this.axisDrag.zoom); return; }
       if (this.drag) {
         const bw = this.plot ? this.plot.barW : 6;
         const shift = Math.round((e.offsetX - this.drag.x) / bw);
@@ -193,11 +225,20 @@ export class Chart {
       if (e.touches.length !== 1) return;
       const p = rel(e.touches[0]);
       moved = 0;
+
+      /* ลากที่แถบราคา = ยืด/บีบแกนราคา ต้องเช็คก่อนเรื่องอื่นทั้งหมด
+         ไม่งั้นนิ้วที่วางบนแถบราคาจะไปเข้าโหมดเลื่อนกราฟหรือเส้นเล็งแทน */
+      if (onPriceAxis(p.x)) {
+        endHold();
+        this.drag = null;
+        this.axisDrag = { y: p.y, zoom: this.view.priceZoom };
+        return;
+      }
       this.drag = { x: p.x, offset: this.view.offset };
 
       const now = Date.now();
       if (now - lastTap < 300) {          // แตะสองครั้ง = รีเซ็ต
-        this.view.count = 140; this.view.offset = 0; this.mouse = null;
+        this.view.count = 140; this.view.offset = 0; this.view.priceZoom = 1; this.mouse = null;
         this.drag = null; lastTap = 0; this.invalidate();
         return;
       }
@@ -219,6 +260,7 @@ export class Chart {
       }
       if (e.touches.length !== 1) return;
       const p = rel(e.touches[0]);
+      if (this.axisDrag) { this._zoomPrice(this.axisDrag.y - p.y, this.axisDrag.zoom); return; }
       if (this.mouse) { this.mouse = p; this.invalidate(); return; }   // อยู่ในโหมดอ่านค่า
       if (!this.drag) return;
       moved = Math.max(moved, Math.abs(p.x - this.drag.x));
@@ -231,13 +273,14 @@ export class Chart {
     cv.addEventListener('touchend', (e) => {
       endHold();
       this.drag = null;
+      if (e.touches.length === 0) this.axisDrag = null;
       if (e.touches.length < 2) pinch = null;
       /* ยกนิ้วแล้วเก็บเส้นเล็ง ไม่งั้นค้างบังกราฟจนกว่าจะแตะที่อื่น */
       if (this.mouse && e.touches.length === 0) {
         setTimeout(() => { this.mouse = null; this.invalidate(); }, 2200);
       }
     }, { passive: true });
-    cv.addEventListener('touchcancel', () => { endHold(); this.drag = null; pinch = null; });
+    cv.addEventListener('touchcancel', () => { endHold(); this.drag = null; pinch = null; this.axisDrag = null; });
   }
 
   setData({ candles, ind, setup, position, markers, levels }) {
@@ -283,7 +326,7 @@ export class Chart {
       return;
     }
 
-    const padR = 62, padL = 6, padT = 8, padB = 22;
+    const padR = PRICE_AXIS_W, padL = 6, padT = 8, padB = 22;
     const sub = [];
     if (this.panels.volume) sub.push({ key: 'volume', h: 0.10 });
     if (this.panels.rsi) sub.push({ key: 'rsi', h: 0.15 });
@@ -519,6 +562,35 @@ export class Chart {
       }
     }
 
+    /*
+     * ── ที่จับสำหรับยืดแกนราคา ────────────────────────────────────────
+     *
+     * ท่าที่ไม่มีอะไรบอกว่ามีอยู่ ก็เท่ากับไม่มี — ไม่มีใครลองลากบนแถบตัวเลข
+     * ขีดสามขีดเล็ก ๆ เป็นภาษาที่คนอ่านออกว่า "ตรงนี้ลากได้"
+     */
+    {
+      const gy = padT + priceH / 2;
+      g.strokeStyle = this.axisDrag ? 'rgba(226,232,240,.75)' : 'rgba(148,163,184,.4)';
+      g.lineWidth = this.axisDrag ? 1.6 : 1.2;
+      for (let k = -1; k <= 1; k++) {
+        g.beginPath();
+        g.moveTo(W - padR + 8, gy + k * 5);
+        g.lineTo(W - 6, gy + k * 5);
+        g.stroke();
+      }
+      /* ถ้าสเกลถูกปรับเอง ต้องบอกให้รู้ ไม่งั้นคนจะงงว่าทำไมกราฟไม่พอดีจออีกแล้ว
+         และต้องบอกวิธีกลับไปอัตโนมัติด้วย */
+      if (Math.abs((this.view.priceZoom || 1) - 1) > 0.02) {
+        const txt = `สเกล ${(this.view.priceZoom).toFixed(1)}× · แตะสองครั้งเพื่อรีเซ็ต`;
+        g.font = '10px system-ui';
+        const tw = g.measureText(txt).width;
+        g.fillStyle = 'rgba(11,16,32,.85)';
+        roundRect(g, padL + 4, padT + 4, tw + 12, 17, 4); g.fill();
+        g.fillStyle = 'rgba(226,232,240,.8)'; g.textAlign = 'left';
+        g.fillText(txt, padL + 10, padT + 16);
+      }
+    }
+
     // ── จุดสัญญาณย้อนหลัง ───────────────────────────────────────────────
     for (const m of this.markers) {
       if (m.index < start || m.index >= end) continue;
@@ -737,6 +809,22 @@ export class Chart {
     g.beginPath(); g.roundRect(bx, by, w, txt.length * 15 + 10, 6); g.fill(); g.stroke();
     g.fillStyle = COL.textStrong;
     txt.forEach((t, k) => g.fillText(t, bx + 7, by + 18 + k * 15));
+  }
+
+  /**
+   * ยืด/บีบแกนราคาจากระยะที่นิ้วลาก
+   *
+   * ลากขึ้น = ดึงกราฟให้สูงขึ้น (แท่งยาวขึ้น) ลากลง = บีบกลับ
+   * ใช้ยกกำลังแทนการบวกลบ เพื่อให้ "ลากเท่ากันรู้สึกเปลี่ยนเท่ากัน" ทุกระดับการซูม
+   * ถ้าบวกลบตรง ๆ ตอนซูมมาก ๆ จะขยับทีละนิดจนรู้สึกเหมือนค้าง
+   *
+   * @param {number} dy   ระยะที่ลากขึ้น (บวก = ขึ้น)
+   * @param {number} base ค่าซูมตอนเริ่มลาก
+   */
+  _zoomPrice(dy, base) {
+    const next = base * Math.pow(2, dy / 160);
+    this.view.priceZoom = Math.max(0.4, Math.min(8, next));
+    this.invalidate();
   }
 
   /** กรอบปุ่มปิดไม้บนกราฟ (พิกัด CSS pixel เทียบมุมบนซ้ายของ canvas) — null = ไม่มีไม้เปิดอยู่ */

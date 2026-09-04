@@ -209,6 +209,8 @@ main { display: grid; grid-template-columns: minmax(0,1fr) 380px; gap: 12px; pad
 .canvas-wrap { height: 540px; }
 /* เบราว์เซอร์ต้องไม่แย่งท่าสัมผัสไปเลื่อนหน้า/ซูมหน้า ไม่งั้นซูมกราฟกับลากกราฟจะไม่ทำงานบนมือถือ */
 .canvas-wrap canvas { touch-action: none; }
+/* เคอร์เซอร์บอกว่าแถบราคาลากขึ้นลงได้ (เมาส์เท่านั้น — นิ้วใช้ขีดสามขีดบนกราฟแทน) */
+.canvas-wrap { cursor: crosshair; }
 /* คำใบ้วิธีใช้ต้องตรงกับอุปกรณ์ที่ถืออยู่ — บอกให้ "เลื่อนล้อ" บนมือถือคือบอกสิ่งที่ทำไม่ได้ */
 .hint-touch { display: none; }
 @media (pointer: coarse) { .hint-desk { display: none; } .hint-touch { display: inline; } }
