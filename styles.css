@@ -512,6 +512,15 @@ body.simple .narr p { font-size: var(--fs-sm); }
 /* แถวของท่าที่ระบบเลือกไว้จากช่วงเรียน — ต้องหาเจอทันทีโดยไม่ต้องไล่อ่านทั้งตาราง */
 .learn-table tr.row-pick td { background: rgba(240,180,41,.08); }
 /* บรรทัดสรุปกลยุทธ์ทั้งชุด — ต้องอ่านได้จบในบรรทัดเดียวว่าระบบจะทำอะไรบ้าง */
+/* หน้าจอ "ห้ามเทรดไม้นี้" — ต้องดูเป็นการหยุด ไม่ใช่ป้ายเตือนเล็ก ๆ ใต้แผน */
+.plan-blocked { border: 1px solid rgba(239,68,68,.5); background: rgba(239,68,68,.07);
+  border-radius: 10px; padding: 15px 17px; }
+.plan-blocked .blk-head { font-size: var(--fs-md); font-weight: 700; color: var(--down); margin-bottom: 9px; }
+.plan-blocked p { margin: 0 0 9px; font-size: var(--fs-xs); line-height: 1.7; }
+.plan-blocked .blk-math { margin: 0 0 9px; padding-left: 18px; font-size: var(--fs-xs); line-height: 1.9; }
+.plan-blocked .blk-why { color: var(--muted); }
+.plan-blocked .blk-fix { margin-bottom: 0; padding-top: 9px; border-top: 1px solid var(--line); }
+
 /* กล่องตั้งค่าขั้นสูง — มีไว้ให้ตรวจสอบได้ ไม่ใช่ให้ต้องตั้ง */
 .adv-box { margin: 10px 0 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(2,6,23,.25); }
 .adv-box > summary { cursor: pointer; padding: 8px 12px; font-size: var(--fs-xs); color: var(--muted); }

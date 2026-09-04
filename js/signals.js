@@ -540,6 +540,19 @@ export function buildSetup(ctx, i, scored, opts = {}) {
 
   const riskActual = lots * slDist * contractSize;
   const riskActualPct = account > 0 ? (riskActual / account) * 100 : null;
+  /*
+   * เพดานที่ "ห้ามเทรด" ไม่ใช่แค่ "เตือนแล้วปล่อยผ่าน"
+   *
+   * มาจากไม้จริงที่ผู้ใช้ส่งมาให้ดู: ทุน 59 ดอลลาร์ เข้าไม้ละ 1 ทรอยออนซ์
+   * ระยะ SL ราว 10 ดอลลาร์ = เสี่ยง 17% ของทุนต่อไม้ แพ้ติดกันสามไม้ใน 50 นาที
+   * เหลือทุนครึ่งเดียว แอปเตือนถูกทุกข้อ แต่ยังโชว์แผนพร้อมตัวเลขให้กดตามอยู่ดี
+   *
+   * คำเตือนที่วางไว้ใต้แผนที่ดูน่าเชื่อถือ ไม่มีน้ำหนักพอ
+   * ที่ระดับความเสี่ยงนี้ ต่อให้สัญญาณแม่นแค่ไหน คณิตศาสตร์ก็บอกว่าพอร์ตไปไม่รอด
+   * จึงต้องไม่มีแผนให้กดตาม ไม่ใช่มีแผนพร้อมป้ายเตือน
+   */
+  const RISK_CEILING = cfg.maxRiskPct === undefined ? 10 : cfg.maxRiskPct;
+  const tooRisky = riskActualPct !== null && riskActualPct > RISK_CEILING;
   const sizeForced = lotsRaw < minLot;   // ทุนน้อยเกินกว่าจะเสี่ยงตามที่ตั้งไว้
 
   // เป้าหมายหลัก: ใช้ค่าที่หามาจากสถิติถ้ามี แต่ห้ามต่ำกว่าพื้นที่ตั้งไว้
@@ -629,6 +642,14 @@ export function buildSetup(ctx, i, scored, opts = {}) {
     rr3: Math.abs(tp3 - entryPrice) / slDist,
     riskMoney, lots, lotsRaw, lotStep: step, minLot, oz: lots * contractSize,
     riskActual, riskActualPct, rewardActual, sizeForced,
+    /* ไม้นี้ส่งคำสั่งได้จริงโดยไม่พังพอร์ตไหม — หน้าจอต้องเช็คค่านี้ก่อนวาดแผน */
+    tradeable: !tooRisky, riskCeiling: RISK_CEILING,
+    /* ตัวเลขที่ทำให้เห็นภาพว่าทำไมถึงห้าม ไม่ใช่แค่บอกว่าห้าม */
+    ruin: tooRisky && riskActual > 0 ? {
+      lossesToHalf: Math.ceil(account * 0.5 / riskActual),
+      lossesToZero: Math.ceil(account / riskActual),
+      capitalNeeded: Math.ceil(riskActual / 0.02),
+    } : null,
     notes,
     plan: `${side > 0 ? 'เข้าซื้อ (Buy)' : 'เข้าขาย (Sell)'} ที่ ${entryPrice.toFixed(2)} · ตัดขาดทุน ${sl.toFixed(2)} `
       + `(${side > 0 ? '-' : '+'}${slDist.toFixed(2)}) · เป้าทำกำไร ${tpMain.toFixed(2)} (${mainR}R)`

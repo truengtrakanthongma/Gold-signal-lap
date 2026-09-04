@@ -2540,6 +2540,73 @@ section('36) จุดตัดขาดทุนต้องมีผลเส�
   }
 }
 
+section('37) ทุนไม่พอ = ต้องไม่มีแผนให้กด ไม่ใช่แผนพร้อมป้ายเตือน');
+{
+  /*
+   * มาจากประวัติเทรดจริงที่ผู้ใช้ส่งมา:
+   * ทุน $59 · เข้าไม้ละ 1 ทรอยออนซ์ · ระยะ SL ~$10 = เสี่ยง 17% ของทุนต่อไม้
+   * แพ้ติดกันสามไม้ใน 50 นาที เหลือทุนครึ่งเดียว
+   *
+   * แอปเตือนถูกทุกข้อ แต่วางคำเตือนไว้ "ใต้" แผนที่มีราคาเข้า/SL/TP ครบพร้อมกด
+   * คนเห็นแผนก่อน เห็นคำเตือนทีหลัง ซึ่งสายไปแล้ว
+   */
+  const cs = makeCandles(400, 12);
+  const ctx = buildContext(cs);
+  const i = 399;
+  const scored = { side: 1, atr: 7, score: 45, factors: [], ready: true };
+  const entry = cs[i].c;
+
+  // ทุนน้อยจนไม้เล็กสุดเสี่ยงเกินเพดาน — สถานการณ์เดียวกับของผู้ใช้
+  const poor = buildSetup(ctx, i, scored, {
+    account: 59.3, riskPct: 1, contractSize: 1, lotStep: 1, minLot: 1,
+    entryPrice: entry, slPrice: entry - 10,
+  });
+  ok('ทุนไม่พอ → ทำเครื่องหมายว่าเทรดไม่ได้', poor.tradeable === false);
+  ok('บอกด้วยว่าเพดานที่ใช้ตัดสินคือกี่ %', poor.riskCeiling > 0);
+  ok('คำนวณให้เห็นว่าแพ้กี่ไม้ทุนหมด', poor.ruin && poor.ruin.lossesToZero >= 1 && poor.ruin.lossesToZero <= 10,
+    poor.ruin ? `${poor.ruin.lossesToZero} ไม้` : 'ไม่มีข้อมูล');
+  ok('บอกทุนที่ควรมีสำหรับขนาดไม้นี้', poor.ruin && poor.ruin.capitalNeeded > 59.3 * 5,
+    poor.ruin ? `$${poor.ruin.capitalNeeded}` : '');
+  ok('เสี่ยงจริงเกิน 10% จริงตามที่อ้าง', poor.riskActualPct > 10, `${poor.riskActualPct.toFixed(1)}%`);
+
+  // ทุนพอ — ต้องไม่ถูกบล็อกโดยไม่จำเป็น
+  const rich = buildSetup(ctx, i, scored, {
+    account: 20000, riskPct: 1, contractSize: 1, lotStep: 1, minLot: 1,
+    entryPrice: entry, slPrice: entry - 10,
+  });
+  ok('ทุนพอ → เทรดได้ตามปกติ ไม่บล็อกมั่ว', rich.tradeable !== false, `เสี่ยง ${rich.riskActualPct.toFixed(2)}%`);
+  ok('ทุนพอ → ไม่ต้องคำนวณตัวเลขล้างพอร์ต', rich.ruin === null);
+
+  /* เส้นแบ่งต้องอยู่ตรงเพดานพอดี ไม่ใช่ใกล้ ๆ */
+  {
+    const edge = buildSetup(ctx, i, scored, {
+      account: 100, riskPct: 1, contractSize: 1, lotStep: 1, minLot: 1,
+      entryPrice: entry, slPrice: entry - 10,   // เสี่ยง 10 = 10% พอดี
+    });
+    ok('เสี่ยง 10% พอดี (เท่าเพดาน) → ยังเทรดได้', edge.tradeable !== false, `${edge.riskActualPct.toFixed(1)}%`);
+    const over = buildSetup(ctx, i, scored, {
+      account: 95, riskPct: 1, contractSize: 1, lotStep: 1, minLot: 1,
+      entryPrice: entry, slPrice: entry - 10,   // เสี่ยง 10 = 10.5%
+    });
+    ok('เสี่ยงเกินเพดานนิดเดียว → บล็อก', over.tradeable === false, `${over.riskActualPct.toFixed(1)}%`);
+  }
+
+  /* ปรับเพดานได้ผ่าน cfg สำหรับคนที่รับความเสี่ยงต่างกัน แต่ค่าตั้งต้นต้องปลอดภัย */
+  {
+    const loose = buildSetup({ ...ctx, cfg: { ...ctx.cfg, maxRiskPct: 25 } }, i, scored, {
+      account: 59.3, riskPct: 1, contractSize: 1, lotStep: 1, minLot: 1,
+      entryPrice: entry, slPrice: entry - 10,
+    });
+    ok('ตั้งเพดานเองได้ (25%) → ไม้เดิมผ่าน', loose.tradeable !== false);
+    ok('ค่าตั้งต้นของเพดานคือ 10% ไม่ใช่ปล่อยผ่านทุกอย่าง', poor.riskCeiling === 10);
+  }
+
+  /* คำเตือนเดิมต้องยังอยู่ ไม่ใช่หายไปเพราะมีการบล็อกแล้ว
+     เพราะคนที่ตั้งเพดานหลวมเอง ยังต้องเห็นว่ากำลังเสี่ยงเท่าไร */
+  ok('ยังมีคำเตือนเรื่องขนาดไม้ที่ถูกบังคับให้ใหญ่เกินตัว',
+    poor.sizeForced === true && poor.notes.some((t) => /ทุนไม่พอ|เสี่ยง/.test(t)));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

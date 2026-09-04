@@ -141,6 +141,22 @@ function signalMessage(ctx, i, scored, side, last, extra) {
     account: CFG.account, riskPct: CFG.riskPct, entryPrice: last.c, side,
   });
   if (!setup) return null;
+  /*
+   * ไม้ที่เสี่ยงเกินเพดาน ต้องไม่ถูกส่งเป็นแผนพร้อมขนาดไม้เข้า Discord
+   *
+   * ข้อความแจ้งเตือนที่มีราคาเข้า/SL/TP/จำนวนล็อตครบ อ่านแล้วเหมือนไฟเขียว
+   * ถ้าทุนไม่พอจนไม้เล็กสุดยังเสี่ยงเกิน 10% ของพอร์ต การส่งแผนไปคือการชวนให้เจ๊ง
+   * ส่งไปว่า "มีสัญญาณแต่ทุนไม่พอ" แทน จะได้รู้ว่าพลาดอะไรไปโดยไม่ถูกชวนให้กด
+   */
+  if (setup.tradeable === false) {
+    const r = setup.ruin;
+    return `⛔ **มีสัญญาณ${side > 0 ? 'ซื้อ' : 'ขาย'} แต่ทุนไม่พอจะเทรดไม้นี้**\n`
+      + `${extra.inst.name} · ${extra.label} · ราคา ${last.c.toFixed(2)} · คะแนน ${scored.score.toFixed(1)}\n\n`
+      + `ไม้เล็กที่สุดที่ส่งคำสั่งได้เสี่ยง $${setup.riskActual.toFixed(2)} `
+      + `= **${setup.riskActualPct.toFixed(0)}%** ของทุน $${CFG.account} (เพดานปลอดภัย ${setup.riskCeiling}%)\n`
+      + (r ? `แพ้ติดกัน ${r.lossesToZero} ไม้ = ทุนหมด · ทุนที่ควรมีสำหรับขนาดนี้คือ $${r.capitalNeeded}\n` : '')
+      + `\n_ไม่ส่งราคาเข้า/SL/TP มาให้ เพราะที่ความเสี่ยงระดับนี้ ตัวเลขที่แม่นแค่ไหนก็ช่วยไม่ได้_`;
+  }
   return buildSignalMessage({
     action: side > 0 ? 'buy' : 'sell',
     score: scored.score, price: last.c, tf: CFG.interval,
