@@ -127,7 +127,9 @@ async function init() {
   buildStaticUI();
   bindEvents();
   bindPosition();
-  window.addEventListener('resize', () => { chart.resize(); drawEquity(); });
+  window.addEventListener('resize', () => { fitChart(); chart.resize(); drawEquity(); });
+  window.addEventListener('orientationchange', () => setTimeout(() => { fitChart(); chart.resize(); }, 250));
+  fitChart();
   chart.resize();
   alerts.onUpdate = (entry) => { renderLog(); toast(entry); };
   renderAlertUI();
@@ -2304,4 +2306,28 @@ function bindPosition() {
       renderPosition();
     }));
   renderPosition();
+}
+
+/**
+ * ปรับความสูงกราฟให้พอดีกับที่ว่างจริงบนจอ
+ *
+ * ทำไมค่าตายตัวไม่พอ: หัวจอสูงไม่เท่ากันในแต่ละสถานการณ์ — คำเตือนโหมดจำลอง
+ * ขึ้นสองบรรทัดบ้างบรรทัดเดียวบ้าง ปุ่ม "ล่าสุด" โผล่มาเพิ่มอีกแถวเมื่อเลื่อนกราฟ
+ * ผู้ใช้บนไอแพดจึงเจอขอบล่างของกราฟ (แผง MACD กับแกนเวลา) ถูกตัดหายไปกับขอบจอ
+ *
+ * บนจอกว้าง กราฟอยู่ใต้หัวจอพอดี จึงคิดจาก "ที่เหลือใต้หัวจอ" เพื่อให้เห็นครบ
+ * โดยไม่ต้องเลื่อน ส่วนบนมือถือกราฟถูกจัดลำดับให้อยู่ใต้การ์ดสัญญาณอยู่แล้ว
+ * ต้องเลื่อนมาดูอยู่ดี จึงใช้ความสูงคงที่ที่อ่านสบายแทน
+ */
+function fitChart() {
+  const wrap = document.querySelector('.canvas-wrap');
+  if (!wrap) return;
+  if (window.innerWidth <= 720) { wrap.style.height = ''; return; }   // มือถือใช้ค่าจาก CSS
+
+  const headerH = (document.querySelector('header.topbar') || {}).offsetHeight || 0;
+  const toolbarH = (document.querySelector('.chart-toolbar') || {}).offsetHeight || 0;
+  /* เผื่อขอบล่างไว้หน่อย ให้เห็นว่ายังมีเนื้อหาต่อข้างล่าง
+     กราฟที่กินเต็มพอดีเป๊ะทำให้คนไม่รู้ว่าต้องเลื่อนต่อ */
+  const room = window.innerHeight - headerH - toolbarH - 24;
+  wrap.style.height = `${Math.round(Math.max(300, Math.min(460, room)))}px`;
 }

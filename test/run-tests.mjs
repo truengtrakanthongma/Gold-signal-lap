@@ -2803,6 +2803,48 @@ section('41) เส้นไม้ที่หลุดนอกจอ ต้อ
   ok('เส้นในกรอบยังวาดเหมือนเดิม', /for \(const r of vis\) \{/.test(src));
 }
 
+section('42) กราฟห้ามวาดทะลุออกนอกแผงราคา');
+{
+  /*
+   * ผู้ใช้ส่งภาพจากไอแพดมา: ยืดแกนราคาไป 4.1× แล้วแท่งเทียนกับเส้นค่าเฉลี่ย
+   * ทะลุลงไปวาดทับแผง Volume/RSI/MACD และเลยแกนเวลาออกไปนอกกราฟ
+   *
+   * ต้นเหตุ: ก่อนมีการยืดแกนราคา กรอบ min/max ครอบทุกแท่งที่เห็นอยู่แล้ว
+   * จึงไม่เคยมีอะไรล้น พอผู้ใช้ยืดสเกลเองได้ ราคานอกกรอบถูกแปลงเป็นตำแหน่ง
+   * ที่เลยแผงราคาลงไป แล้ววาดตรงนั้นโดยไม่มีอะไรกั้น
+   */
+  const fs = await import('node:fs');
+  const src = fs.readFileSync('js/chart.js', 'utf8');
+
+  const clipAt = src.indexOf('ตัดขอบแผงราคา');
+  ok('มีการตัดขอบแผงราคา', clipAt > 0);
+  ok('ตัดด้วย clip ไม่ใช่ไล่ใส่เงื่อนไขทีละจุดที่วาด', /g\.rect\(padL, padT, W - padR - padL, priceH\);\s*\n\s*g\.clip\(\)/.test(src));
+
+  /* ทุกอย่างที่แปลงราคาเป็นตำแหน่งแนวตั้ง ต้องอยู่ในกรอบที่ตัด */
+  const restoreAt = src.indexOf('g.restore();', clipAt);
+  const inside = src.slice(clipAt, restoreAt);
+  for (const [name, mark] of [['Bollinger', '── Bollinger'], ['แนวรับ/แนวต้าน', '── แนวรับ/แนวต้าน'],
+    ['แท่งเทียน', '── แท่งเทียน'], ['เส้นค่าเฉลี่ย', '── เส้นค่าเฉลี่ย']]) {
+    ok(`${name} อยู่ในกรอบที่ตัด`, inside.includes(mark));
+  }
+
+  /* ป้ายของแผน/ไม้ ต้องอยู่นอกกรอบที่ตัด เพราะต้องวาดล้ำไปบนแถบราคาด้านขวาได้ */
+  const after = src.slice(restoreAt);
+  ok('ป้ายแผนเทรดอยู่นอกกรอบที่ตัด (ต้องวาดบนแถบราคาได้)', after.includes('── แผนเทรดปัจจุบัน'));
+  ok('แผงย่อยอยู่นอกกรอบที่ตัด', after.includes('── แผงย่อย'));
+  ok('แกนเวลาอยู่นอกกรอบที่ตัด', after.includes('── แกนเวลา'));
+
+  /* ความสูงกราฟต้องคิดจากที่ว่างจริง ไม่ใช่ค่าตายตัวค่าเดียว */
+  const app = fs.readFileSync('js/app.js', 'utf8');
+  ok('มีการปรับความสูงกราฟตามที่ว่างบนจอ', /function fitChart\(\)/.test(app));
+  const fit = app.slice(app.indexOf('function fitChart()'), app.indexOf('function fitChart()') + 900);
+  ok('คิดจากความสูงหัวจอจริง ไม่ใช่เดา', /header\.topbar[\s\S]{0,120}offsetHeight/.test(fit));
+  ok('มีทั้งเพดานและพื้น ไม่ให้สูงเกินหรือเตี้ยจนใช้ไม่ได้', /Math\.max\(300, Math\.min\(460/.test(fit));
+  ok('มือถือใช้ค่าจาก CSS ไม่ต้องคำนวณ (กราฟอยู่ใต้การ์ดสัญญาณ ต้องเลื่อนอยู่แล้ว)',
+    /innerWidth <= 720[\s\S]{0,80}wrap\.style\.height = ''/.test(fit));
+  ok('คำนวณใหม่เมื่อหมุนจอด้วย ไม่ใช่แค่ตอนเปลี่ยนขนาดหน้าต่าง', /orientationchange[\s\S]{0,120}fitChart/.test(app));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

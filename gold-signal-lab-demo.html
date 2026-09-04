@@ -4976,6 +4976,24 @@ class Chart {
       g.fillText(p.toFixed(2), W - padR + 6, y + 3.5);
     }
 
+    /*
+     * ── ตัดขอบแผงราคา ───────────────────────────────────────────────────
+     *
+     * ทุกอย่างที่แปลงราคาเป็นตำแหน่งแนวตั้ง ต้องถูกตัดให้อยู่ในแผงราคาเท่านั้น
+     *
+     * ก่อนมีการยืดแกนราคา กรอบ min/max ครอบทุกแท่งที่มองเห็นอยู่แล้ว
+     * จึงไม่มีอะไรล้นออกไป พอผู้ใช้ยืดสเกลได้เอง ราคาที่อยู่นอกกรอบ
+     * จะถูกแปลงเป็นตำแหน่งที่เลยแผงราคาลงไป แล้ววาดทับแผง Volume/RSI/MACD
+     * และทะลุออกนอกกราฟไปเลย (ผู้ใช้เจอตอนยืด 4.1× บนไอแพด)
+     *
+     * กันด้วย clip ที่เดียว ดีกว่าไปใส่เงื่อนไข "ถ้าเกินกรอบให้ข้าม"
+     * ในทุกจุดที่วาด ซึ่งจะลืมจุดใดจุดหนึ่งเสมอเมื่อเพิ่มของใหม่
+     */
+    g.save();
+    g.beginPath();
+    g.rect(padL, padT, W - padR - padL, priceH);
+    g.clip();
+
     // ── Bollinger ───────────────────────────────────────────────────────
     if (this.ind && this.showBB) {
       this._line(this.ind.bb.upper, start, end, COL.bb, 1);
@@ -5032,6 +5050,10 @@ class Chart {
       this._line(this.ind.ema200, start, end, COL.ema200, 1.6);
       if (this.panels.vwap !== false) this._line(this.ind.vwap, start, end, COL.vwap, 1, [3, 3], (i) => this._newDay(i));
     }
+
+    /* เลิกตัดขอบตรงนี้ — ป้ายของแผน/ไม้ ต้องวาดล้ำไปบนแถบราคาด้านขวาได้
+       ส่วนเส้นของมันมีการเช็คกรอบราคาอยู่แล้วในโค้ดข้างล่าง */
+    g.restore();
 
     // ── แผนเทรดปัจจุบัน ────────────────────────────────────────────────
     /* มีไม้เปิดอยู่แล้ว ก็ไม่ต้องวาดแผน "ถ้าจะเข้า" ทับเข้ามาอีก
@@ -8320,7 +8342,9 @@ async function init() {
   buildStaticUI();
   bindEvents();
   bindPosition();
-  window.addEventListener('resize', () => { chart.resize(); drawEquity(); });
+  window.addEventListener('resize', () => { fitChart(); chart.resize(); drawEquity(); });
+  window.addEventListener('orientationchange', () => setTimeout(() => { fitChart(); chart.resize(); }, 250));
+  fitChart();
   chart.resize();
   alerts.onUpdate = (entry) => { renderLog(); toast(entry); };
   renderAlertUI();
@@ -10497,6 +10521,30 @@ function bindPosition() {
       renderPosition();
     }));
   renderPosition();
+}
+
+/**
+ * ปรับความสูงกราฟให้พอดีกับที่ว่างจริงบนจอ
+ *
+ * ทำไมค่าตายตัวไม่พอ: หัวจอสูงไม่เท่ากันในแต่ละสถานการณ์ — คำเตือนโหมดจำลอง
+ * ขึ้นสองบรรทัดบ้างบรรทัดเดียวบ้าง ปุ่ม "ล่าสุด" โผล่มาเพิ่มอีกแถวเมื่อเลื่อนกราฟ
+ * ผู้ใช้บนไอแพดจึงเจอขอบล่างของกราฟ (แผง MACD กับแกนเวลา) ถูกตัดหายไปกับขอบจอ
+ *
+ * บนจอกว้าง กราฟอยู่ใต้หัวจอพอดี จึงคิดจาก "ที่เหลือใต้หัวจอ" เพื่อให้เห็นครบ
+ * โดยไม่ต้องเลื่อน ส่วนบนมือถือกราฟถูกจัดลำดับให้อยู่ใต้การ์ดสัญญาณอยู่แล้ว
+ * ต้องเลื่อนมาดูอยู่ดี จึงใช้ความสูงคงที่ที่อ่านสบายแทน
+ */
+function fitChart() {
+  const wrap = document.querySelector('.canvas-wrap');
+  if (!wrap) return;
+  if (window.innerWidth <= 720) { wrap.style.height = ''; return; }   // มือถือใช้ค่าจาก CSS
+
+  const headerH = (document.querySelector('header.topbar') || {}).offsetHeight || 0;
+  const toolbarH = (document.querySelector('.chart-toolbar') || {}).offsetHeight || 0;
+  /* เผื่อขอบล่างไว้หน่อย ให้เห็นว่ายังมีเนื้อหาต่อข้างล่าง
+     กราฟที่กินเต็มพอดีเป๊ะทำให้คนไม่รู้ว่าต้องเลื่อนต่อ */
+  const room = window.innerHeight - headerH - toolbarH - 24;
+  wrap.style.height = `${Math.round(Math.max(300, Math.min(460, room)))}px`;
 }
 
   return {};
