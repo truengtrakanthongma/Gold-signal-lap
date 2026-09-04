@@ -5113,6 +5113,34 @@ class Chart {
       const over = vis.length ? vis[vis.length - 1].ly - (padT + priceH - 12) : 0;
       if (over > 0) vis.forEach((v) => { v.ly -= over; });
 
+      /*
+       * เส้นที่หลุดออกนอกจอ ต้องบอกว่าอยู่ทางไหนและไกลแค่ไหน
+       *
+       * ช่องโหว่ที่เกิดขึ้นตอนใส่การยืดแกนราคา: พอยืดแรง ๆ เส้น SL กับเป้าหลุดจอ
+       * เหลือแต่เส้นราคาเข้า คนถือไม้อยู่จึงมองไม่เห็นว่าอีกกี่ดอลลาร์ถึงจะโดน SL
+       * ซึ่งเป็นตัวเลขที่สำคัญที่สุดตอนมีเงินอยู่ในตลาด
+       */
+      for (const r of rows) {
+        if (r.p >= min && r.p <= max) continue;
+        const above = r.p > max;
+        /* ป้ายบนต้องหลบป้ายบอกสเกล ซึ่งอยู่มุมบนซ้ายและวาดทีหลัง
+           ไม่งั้นสองอันทับกันจนอ่านไม่ออกทั้งคู่ (เจอตอนทดสอบ: "+ 90.00" เหลือ "0.00") */
+        const zoomed = Math.abs((this.view.priceZoom || 1) - 1) > 0.02;
+        const y = above ? padT + (zoomed ? 32 : 10) : padT + priceH - 8;
+        const gap = Math.abs(r.p - px);
+        const txt = `${above ? '▲' : '▼'} ${r.txt}  (ห่าง ${gap.toFixed(2)})`;
+        g.font = '10px ui-monospace, monospace';
+        const tw = g.measureText(txt).width;
+        const bx = W - padR - 8 - tw - 10;
+        g.fillStyle = 'rgba(11,16,32,.9)';
+        g.strokeStyle = r.col; g.lineWidth = 1;
+        g.setLineDash([3, 2]);
+        roundRect(g, bx, y - 8, tw + 10, 16, 4); g.fill(); g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = r.col; g.textAlign = 'left';
+        g.fillText(txt, bx + 5, y + 3.5);
+      }
+
       for (const r of vis) {
         const y = r.y;
         g.strokeStyle = r.col; g.lineWidth = r.now ? 1.6 : 1.2; g.setLineDash([]);
