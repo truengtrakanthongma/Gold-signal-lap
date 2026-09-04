@@ -2186,6 +2186,7 @@ function renderPosition() {
   const card = $('posCard');
   if (!box) return;
   const p = state.position;
+  if (chart && (!p || checkPosition(p).length)) { chart.setData({ position: null }); chart.invalidate(); }
   if (!p) {
     card.classList.add('idle');
     box.innerHTML = '<p class="tiny" style="margin:0">ยังไม่ได้บันทึกไม้ไหนไว้ — เปิดหัวข้อข้างล่างเพื่อกรอกไม้ที่เปิดอยู่ '
@@ -2206,6 +2207,9 @@ function renderPosition() {
     return;
   }
   card.classList.remove('idle');
+  /* กราฟต้องเห็นไม้ด้วย ไม่ใช่แค่การ์ด — เส้นบนกราฟคือที่ที่คนมองอยู่แล้ว
+     ต้องส่งทุกครั้งที่วาดใหม่ ไม่งั้นเส้นจะค้างที่ราคาเก่าเมื่อผู้ใช้แก้ตัวเลข */
+  if (chart) { chart.setData({ position: p }); chart.invalidate(); }
   const ad = positionAdvice(st);
   const mins = st.heldMs === null ? null : Math.round(st.heldMs / 60000);
   const num = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '—');
@@ -2264,12 +2268,15 @@ function bindPosition() {
     savePosition(state.position);
     renderPosition();
   });
-  $('posClear').addEventListener('click', () => {
+  /* กากบาทบนกราฟกับปุ่มในการ์ด ต้องทำสิ่งเดียวกัน ไม่ใช่คนละเส้นทางที่หลุดกันได้ */
+  const clearPos = () => {
     state.position = null;
     savePosition(null);
     ['posEntry', 'posSl', 'posTp'].forEach((id) => { $(id).value = ''; });
     renderPosition();
-  });
+  };
+  if (chart) chart.onClosePosition = clearPos;
+  $('posClear').addEventListener('click', clearPos);
   /* ดึงจากแผนที่ระบบเพิ่งคำนวณ — คนส่วนใหญ่เข้าตามแผนอยู่แล้ว
      พิมพ์เลขสี่ตัวใหม่ด้วยมือบนมือถือคือที่ที่พิมพ์ผิดได้ง่ายที่สุด */
   $('posFromPlan').addEventListener('click', () => {

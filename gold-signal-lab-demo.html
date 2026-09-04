@@ -4625,6 +4625,18 @@ const COL = {
   cross: 'rgba(226,232,240,0.45)',
 };
 
+/** สี่เหลี่ยมมุมมน — เขียนเองแทน ctx.roundRect เพื่อให้เบราว์เซอร์รุ่นเก่ายังวาดได้ */
+function roundRect(g, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  g.beginPath();
+  g.moveTo(x + rr, y);
+  g.arcTo(x + w, y, x + w, y + h, rr);
+  g.arcTo(x + w, y + h, x, y + h, rr);
+  g.arcTo(x, y + h, x, y, rr);
+  g.arcTo(x, y, x + w, y, rr);
+  g.closePath();
+}
+
 class Chart {
   constructor(canvas) {
     this.cv = canvas;
@@ -4632,6 +4644,8 @@ class Chart {
     this.candles = [];
     this.ind = null;
     this.setup = null;
+    this.position = null;   // ไม้ที่ถืออยู่จริง (คนละเรื่องกับแผนที่ยังไม่ได้เข้า)
+    this.posHit = null;     // กรอบปุ่มปิดบนป้าย ใช้ตรวจว่าแตะโดนไหม
     this.markers = [];
     this.view = { count: 140, offset: 0 }; // offset = จำนวนแท่งที่เลื่อนถอยจากขวาสุด
     this.panels = { volume: true, rsi: true, macd: true };
@@ -4685,6 +4699,9 @@ class Chart {
     const add = (v) => { if (v === null || v === undefined || Number.isNaN(v)) return; if (v < min) min = v; if (v > max) max = v; };
     if (this.ind && this.showBB) for (let i = start; i < end; i++) { add(this.ind.bb.upper[i]); add(this.ind.bb.lower[i]); }
     if (this.setup) [this.setup.entry, this.setup.sl, this.setup.tp1, this.setup.tp2, this.setup.tp3].forEach(add);
+    /* ไม้ที่ถืออยู่ต้องอยู่ในกรอบราคาที่มองเห็นเสมอ ไม่งั้นเส้นจะหลุดออกนอกจอ
+       แล้วคนถือไม้อยู่จะมองไม่เห็นว่า SL ตัวเองอยู่ตรงไหนเทียบกับราคา */
+    if (this.position) [this.position.entry, this.position.sl, this.position.tp].forEach((v) => { if (v > 0) add(v); });
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
     const pad = (max - min) * 0.08 || 1;
     return { min: min - pad, max: max + pad, start, end };
@@ -4737,6 +4754,22 @@ class Chart {
       this.invalidate();
     });
     cv.addEventListener('mouseleave', () => { this.mouse = null; this.invalidate(); });
+
+    /* กากบาทบนป้ายไม้ที่ถืออยู่ — วาดแล้วต้องกดได้จริง
+       ปุ่มที่วาดไว้เฉย ๆ แต่กดไม่ได้ แย่กว่าไม่วาด เพราะทำให้เข้าใจผิด */
+    const hitClose = (x, y) => {
+      const h = this.posHit;
+      return h && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h;
+    };
+    cv.addEventListener('click', (e) => {
+      if (hitClose(e.offsetX, e.offsetY) && this.onClosePosition) this.onClosePosition();
+    });
+    cv.addEventListener('touchend', (e) => {
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      const r = cv.getBoundingClientRect();
+      if (hitClose(t.clientX - r.left, t.clientY - r.top) && this.onClosePosition) this.onClosePosition();
+    }, { passive: true });
 
     /*
      * สัมผัสบนมือถือ — เดิมทำได้อย่างเดียวคือลากเลื่อน
@@ -4818,7 +4851,7 @@ class Chart {
     cv.addEventListener('touchcancel', () => { endHold(); this.drag = null; pinch = null; });
   }
 
-  setData({ candles, ind, setup, markers, levels }) {
+  setData({ candles, ind, setup, position, markers, levels }) {
     // เปลี่ยนชุดข้อมูล (สลับกรอบเวลา/สัญลักษณ์) = ช่วงราคาคนละเรื่องกัน
     // ต้องรีเซ็ตค่าที่หน่วงไว้ ไม่งั้นกราฟจะไหลจากสเกลเก่าไปสเกลใหม่ให้เห็นเป็นการกวาดยาว ๆ
     if (candles && candles !== this.candles) {
@@ -4829,6 +4862,7 @@ class Chart {
     if (candles) this.candles = candles;
     if (ind !== undefined) this.ind = ind;
     if (setup !== undefined) this.setup = setup;
+    if (position !== undefined) this.position = position;
     if (markers !== undefined) this.markers = markers || [];
     if (levels !== undefined) this.levels = levels || [];
     this.invalidate();
@@ -4911,6 +4945,9 @@ class Chart {
         if (lv.price < min || lv.price > max) continue;
         const y = yP(lv.price);
         g.strokeStyle = lv.type === 'support' ? COL.sup : COL.res;
+        /* ถ้ามีไม้เปิดอยู่ ให้แนวรับ/ต้านจางลงเป็นพื้นหลัง
+           เส้นที่มีเงินของจริงผูกอยู่ ต้องเด่นกว่าเส้นอ้างอิงเสมอ */
+        g.globalAlpha = (this.position && this.position.entry > 0) ? 0.4 : 1;
         g.lineWidth = Math.min(2.5, 0.6 + lv.touches * 0.35);
         g.setLineDash([6, 5]);
         g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
@@ -4923,6 +4960,7 @@ class Chart {
         g.font = '10px system-ui';
         g.fillText(`${lv.type === 'support' ? 'รับ' : 'ต้าน'} ${lv.price.toFixed(2)} · แตะ ${lv.touches} ครั้ง`, padL + 5, y - 3);
       }
+      g.globalAlpha = 1;
     }
 
     // ── แท่งเทียน ───────────────────────────────────────────────────────
@@ -4951,7 +4989,10 @@ class Chart {
     }
 
     // ── แผนเทรดปัจจุบัน ────────────────────────────────────────────────
-    if (this.setup) {
+    /* มีไม้เปิดอยู่แล้ว ก็ไม่ต้องวาดแผน "ถ้าจะเข้า" ทับเข้ามาอีก
+       สองชุดเส้นที่หมายถึงคนละเรื่องแต่หน้าตาคล้ายกัน ทำให้อ่านผิดได้ง่ายมาก
+       และแผนก็ไม่มีประโยชน์แล้วสำหรับคนที่เข้าไปแล้ว */
+    if (this.setup && !(this.position && this.position.entry > 0)) {
       const rows = [
         { p: this.setup.tp3, c: COL.tp, label: `TP3 ${this.setup.tp3.toFixed(2)}` },
         { p: this.setup.tp2, c: COL.tp, label: `TP2 ${this.setup.tp2.toFixed(2)}` },
@@ -4974,6 +5015,117 @@ class Chart {
         g.fillStyle = r.c; g.font = '10px ui-monospace, monospace';
         g.textAlign = 'right';
         g.fillText(r.label, W - padR - 4, y - 3);
+        g.textAlign = 'left';
+      }
+    }
+
+    /*
+     * ── ไม้ที่ถืออยู่จริง ────────────────────────────────────────────────
+     *
+     * วาดทับแผนเสมอ และเด่นกว่าแผนชัดเจน เพราะแผนคือ "ถ้าเข้า" ส่วนอันนี้
+     * คือเงินที่อยู่ในตลาดแล้ว สองอย่างนี้ต้องแยกออกจากกันด้วยตาในแวบเดียว
+     *
+     * รูปแบบป้ายทำตามที่ผู้ใช้ยกตัวอย่างมา: [ขนาด] [กำไร/ขาดทุนที่เส้นนั้น] [×]
+     * ตัวเลขบนป้าย SL/TP คือ "จะได้/เสียเท่าไรถ้าราคามาถึงเส้นนี้"
+     * ส่วนป้ายที่เส้นเข้าคือกำไรขาดทุน ณ ราคาปัจจุบัน
+     */
+    this.posHit = null;
+    if (this.position && this.position.entry > 0) {
+      const P = this.position;
+      const unit = (P.size || 0) * (P.contractSize || 0);
+      const px = this.candles.length ? this.candles[this.candles.length - 1].c : P.entry;
+      const plAt = (price) => (price - P.entry) * P.side * unit;
+      const fmt = (v) => `${v >= 0 ? '+' : '−'} ${Math.abs(v).toFixed(2)} USD`;
+      const size = P.size % 1 === 0 ? String(P.size) : String(P.size);
+
+      const rows = [];
+      if (P.tp > 0) rows.push({ p: P.tp, col: COL.tp, txt: fmt(plAt(P.tp)) });
+      rows.push({ p: P.entry, col: '#4a8fd4', txt: fmt(plAt(px)), now: true });
+      if (P.sl > 0) rows.push({ p: P.sl, col: '#e0913d', txt: fmt(plAt(P.sl)) });
+
+      // เส้นตั้งเชื่อม SL → เข้า → เป้า ให้เห็นว่าไม้นี้กินช่วงราคาแค่ไหน
+      const ys = rows.filter((r) => r.p >= min && r.p <= max).map((r) => yP(r.p));
+      if (ys.length > 1) {
+        const xv = W - padR - 10;
+        g.strokeStyle = 'rgba(74,143,212,.55)'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(xv, Math.min(...ys)); g.lineTo(xv, Math.max(...ys)); g.stroke();
+      }
+
+      /*
+       * ป้ายห้ามทับกัน
+       *
+       * ตอนราคาเข้ากับ SL ห่างกันไม่กี่ดอลลาร์ (ซึ่งเป็นเรื่องปกติของกรอบ 15 นาที)
+       * เส้นสองเส้นจะห่างกันไม่ถึงความสูงป้าย ป้ายเลยซ้อนกันจนอ่านไม่ออกทั้งคู่
+       * ดันป้ายออกจากกันตามแนวตั้ง โดยที่ "เส้น" ยังอยู่ที่ราคาจริงเสมอ
+       */
+      const LH = 22;
+      const vis = rows.filter((r) => r.p >= min && r.p <= max).map((r) => ({ ...r, y: yP(r.p), ly: yP(r.p) }));
+      vis.sort((a, b) => a.y - b.y);
+      for (let k = 1; k < vis.length; k++) {
+        if (vis[k].ly - vis[k - 1].ly < LH) vis[k].ly = vis[k - 1].ly + LH;
+      }
+      // ถ้าดันแล้วล้นขอบล่าง ให้ยกกลับขึ้นมาทั้งชุด
+      const over = vis.length ? vis[vis.length - 1].ly - (padT + priceH - 12) : 0;
+      if (over > 0) vis.forEach((v) => { v.ly -= over; });
+
+      for (const r of vis) {
+        const y = r.y;
+        g.strokeStyle = r.col; g.lineWidth = r.now ? 1.6 : 1.2; g.setLineDash([]);
+        g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR - 10, y); g.stroke();
+
+        // จุดกลมตรงปลายเส้น เหมือนหมุดหมายบนกราฟของโบรกเกอร์
+        g.fillStyle = r.now ? r.col : '#0b1020';
+        g.beginPath(); g.arc(W - padR - 10, y, 3.5, 0, Math.PI * 2);
+        g.fill(); g.strokeStyle = r.col; g.stroke();
+
+        /* ป้าย: กล่องขนาด + ข้อความ + ปุ่มกากบาท
+           วางชิดขวาแต่ไม่ทับแกนราคา เพื่อให้ยังอ่านราคาที่แกนได้ */
+        g.font = '11px ui-monospace, monospace';
+        const tw = g.measureText(r.txt).width;
+        const sw = g.measureText(size).width + 12;
+        const boxW = sw + tw + 12 + 18;
+        const boxH = 19;
+        const bx = W - padR - 16 - boxW;
+        const by = r.ly - boxH / 2;
+
+        g.fillStyle = 'rgba(11,16,32,.92)';
+        g.strokeStyle = r.col; g.lineWidth = 1.2;
+        roundRect(g, bx, by, boxW, boxH, 4); g.fill(); g.stroke();
+
+        // ช่องขนาดไม้ (พื้นทึบ) แยกจากตัวเลขเงินให้อ่านง่าย
+        g.fillStyle = r.col;
+        roundRect(g, bx, by, sw, boxH, 4); g.fill();
+        g.fillStyle = '#0b1020'; g.textAlign = 'center';
+        g.fillText(size, bx + sw / 2, r.ly + 3.5);
+
+        g.fillStyle = r.col; g.textAlign = 'left';
+        g.fillText(r.txt, bx + sw + 6, r.ly + 3.5);
+
+        // ปุ่มปิด — เก็บกรอบไว้ให้แตะได้จริง ไม่ใช่วาดไว้เฉย ๆ ให้เข้าใจผิด
+        const cx = bx + boxW - 11, cyy = r.ly;
+        g.strokeStyle = r.col; g.lineWidth = 1.3;
+        g.beginPath(); g.moveTo(cx - 3.5, cyy - 3.5); g.lineTo(cx + 3.5, cyy + 3.5);
+        g.moveTo(cx + 3.5, cyy - 3.5); g.lineTo(cx - 3.5, cyy + 3.5); g.stroke();
+        if (r.now) this.posHit = { x: cx - 11, y: cyy - 11, w: 22, h: 22 };
+
+        /* ถ้าป้ายถูกดันออกจากเส้น ลากเส้นบาง ๆ โยงไว้ ไม่งั้นไม่รู้ว่าป้ายไหนของเส้นไหน */
+        if (Math.abs(r.ly - y) > 2) {
+          g.strokeStyle = r.col; g.lineWidth = 0.8; g.setLineDash([2, 2]);
+          g.beginPath(); g.moveTo(bx + boxW, r.ly); g.lineTo(W - padR - 10, y); g.stroke();
+          g.setLineDash([]);
+        }
+
+        /* ป้ายราคาที่แกนขวา — ข้ามถ้าจะไปทับป้ายราคาปัจจุบัน
+           ราคาปัจจุบันสำคัญกว่า และตัวเลขของเส้นนี้ก็อ่านได้จากป้ายทางซ้ายอยู่แล้ว
+           คิดตำแหน่งตรงนี้เอง ไม่รอค่าจากบล็อกราคาปัจจุบันซึ่งวาดทีหลัง
+           (ถ้าไปอ่านค่าที่นั่น จะได้ตำแหน่งของเฟรมก่อน และเฟรมแรกจะไม่มีค่าเลย) */
+        const yNow = yP(px);
+        if (Math.abs(yNow - y) >= 15) {
+          g.fillStyle = r.col;
+          roundRect(g, W - padR + 1, y - 8, padR - 3, 16, 3); g.fill();
+          g.fillStyle = '#0b1020'; g.textAlign = 'left';
+          g.fillText(r.p.toFixed(2), W - padR + 4, y + 3.5);
+        }
         g.textAlign = 'left';
       }
     }
@@ -5197,6 +5349,9 @@ class Chart {
     g.fillStyle = COL.textStrong;
     txt.forEach((t, k) => g.fillText(t, bx + 7, by + 18 + k * 15));
   }
+
+  /** กรอบปุ่มปิดไม้บนกราฟ (พิกัด CSS pixel เทียบมุมบนซ้ายของ canvas) — null = ไม่มีไม้เปิดอยู่ */
+  closeButtonBox() { return this.posHit ? { ...this.posHit } : null; }
 
   scrollToEnd() { this.view.offset = 0; this.invalidate(); }
 }
@@ -10106,6 +10261,7 @@ function renderPosition() {
   const card = $('posCard');
   if (!box) return;
   const p = state.position;
+  if (chart && (!p || checkPosition(p).length)) { chart.setData({ position: null }); chart.invalidate(); }
   if (!p) {
     card.classList.add('idle');
     box.innerHTML = '<p class="tiny" style="margin:0">ยังไม่ได้บันทึกไม้ไหนไว้ — เปิดหัวข้อข้างล่างเพื่อกรอกไม้ที่เปิดอยู่ '
@@ -10126,6 +10282,9 @@ function renderPosition() {
     return;
   }
   card.classList.remove('idle');
+  /* กราฟต้องเห็นไม้ด้วย ไม่ใช่แค่การ์ด — เส้นบนกราฟคือที่ที่คนมองอยู่แล้ว
+     ต้องส่งทุกครั้งที่วาดใหม่ ไม่งั้นเส้นจะค้างที่ราคาเก่าเมื่อผู้ใช้แก้ตัวเลข */
+  if (chart) { chart.setData({ position: p }); chart.invalidate(); }
   const ad = positionAdvice(st);
   const mins = st.heldMs === null ? null : Math.round(st.heldMs / 60000);
   const num = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '—');
@@ -10184,12 +10343,15 @@ function bindPosition() {
     savePosition(state.position);
     renderPosition();
   });
-  $('posClear').addEventListener('click', () => {
+  /* กากบาทบนกราฟกับปุ่มในการ์ด ต้องทำสิ่งเดียวกัน ไม่ใช่คนละเส้นทางที่หลุดกันได้ */
+  const clearPos = () => {
     state.position = null;
     savePosition(null);
     ['posEntry', 'posSl', 'posTp'].forEach((id) => { $(id).value = ''; });
     renderPosition();
-  });
+  };
+  if (chart) chart.onClosePosition = clearPos;
+  $('posClear').addEventListener('click', clearPos);
   /* ดึงจากแผนที่ระบบเพิ่งคำนวณ — คนส่วนใหญ่เข้าตามแผนอยู่แล้ว
      พิมพ์เลขสี่ตัวใหม่ด้วยมือบนมือถือคือที่ที่พิมพ์ผิดได้ง่ายที่สุด */
   $('posFromPlan').addEventListener('click', () => {
