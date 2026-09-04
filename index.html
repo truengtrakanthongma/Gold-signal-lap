@@ -82,7 +82,7 @@
       <span><i style="background:#38bdf8"></i>EMA50</span>
       <span><i style="background:#f472b6"></i>EMA200</span>
       <span><i style="background:#a78bfa"></i>VWAP</span>
-      <span class="hint">เลื่อนล้อ = ซูม · ลาก = เลื่อนกราฟ</span>
+      <span class="hint hint-desk">เลื่อนล้อ = ซูม · ลาก = เลื่อนกราฟ</span><span class="hint hint-touch">สองนิ้วหุบ/กาง = ซูม · ลาก = เลื่อน · แตะค้าง = ดูค่าแท่งนั้น · แตะสองครั้ง = รีเซ็ต</span>
     </div>
   </section>
 
@@ -109,6 +109,35 @@
     </div>
 
     <!-- แผนเทรด -->
+    <!-- ไม้ที่เปิดอยู่จริง — วางไว้เหนือแผน เพราะไม้ที่ลงเงินไปแล้วสำคัญกว่าไม้ที่ยังไม่ได้ลง -->
+    <div class="card pos-card" id="posCard">
+      <h2>ไม้ที่ถืออยู่ตอนนี้</h2>
+      <div id="posLive"></div>
+      <details id="posForm" class="pos-form">
+        <summary>บันทึก / แก้ไขไม้ที่เปิดอยู่</summary>
+        <div class="pos-grid">
+          <label>ทิศทาง
+            <select id="posSide">
+              <option value="1">ซื้อ (Buy)</option>
+              <option value="-1">ขาย (Sell)</option>
+            </select>
+          </label>
+          <label>ราคาที่เข้า<input type="number" id="posEntry" step="0.01" placeholder="เช่น 4472.54"></label>
+          <label>จุดตัดขาดทุน (SL)<input type="number" id="posSl" step="0.01" placeholder="เช่น 4463.23"></label>
+          <label>เป้าทำกำไร (TP)<input type="number" id="posTp" step="0.01" placeholder="เช่น 4493.23"></label>
+          <label>ขนาดไม้<input type="number" id="posSize" step="0.01" value="1" min="0"></label>
+          <label>ขนาดสัญญา (ออนซ์ต่อ 1 หน่วย)<input type="number" id="posContract" step="1" value="1" min="0"></label>
+        </div>
+        <div class="pos-btns">
+          <button id="posFromPlan" class="btn">ดึงตัวเลขจากแผนด้านล่าง</button>
+          <button id="posSave" class="btn primary">บันทึกไม้นี้</button>
+          <button id="posClear" class="btn">ปิดไม้ / ล้าง</button>
+        </div>
+        <p class="tiny" style="margin:9px 0 0">ระบบไม่ได้ต่อกับโบรกเกอร์ — กรอกเองครั้งเดียวแล้วมันจะคิดกำไรขาดทุนให้ตามราคาสด
+          ใช้ได้กับทุกโบรกเกอร์ และไม่ต้องให้สิทธิ์เข้าบัญชีใคร</p>
+      </details>
+    </div>
+
     <div class="card" id="planCard">
       <h2>แผนเข้า–ออก</h2>
       <div id="planBox" class="plan-empty">ยังไม่มีแผน — รอคะแนนถึงเกณฑ์</div>

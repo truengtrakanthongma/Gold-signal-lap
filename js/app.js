@@ -6,6 +6,7 @@ import { MarketFeed, TF, mergeCandle } from './feed.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal } from './signals.js';
 import { runBacktest, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
 import { tuneStrategy, toBacktestOpts } from './strategy.js';
+import { positionStatus, positionAdvice, checkPosition } from './position.js';
 import { learnAndValidate } from './learn.js';
 import { autoTune, explainAdaptation } from './adapt.js';
 import { SOURCES, testAllSources } from './sources.js';
@@ -22,6 +23,7 @@ import { toThai } from './glossary.js';
 import { instrumentOf, dataHealth } from './instrument.js';
 
 const $ = (id) => document.getElementById(id);
+const LS_POS = 'goldtrader.position.v1';
 const LS_SETTINGS = 'goldtrader.settings.v1';
 
 const state = {
@@ -124,6 +126,7 @@ async function init() {
   equityCtx = $('equityCanvas').getContext('2d');
   buildStaticUI();
   bindEvents();
+  bindPosition();
   window.addEventListener('resize', () => { chart.resize(); drawEquity(); });
   chart.resize();
   alerts.onUpdate = (entry) => { renderLog(); toast(entry); };
@@ -449,6 +452,9 @@ function onLiveCandle(k) {
   if (res.stale) return;
   if (res.appended && state.candles.length > 1) state.prevClose = state.candles[state.candles.length - 2].c;
   updatePriceHeader();
+  /* ไม้ที่ถืออยู่ต้องอัปเดตทุกติ๊ก ไม่ใช่รอรอบวิเคราะห์หรือรอแท่งปิด
+     คนที่มีเงินอยู่ในตลาดอยากรู้ "ตอนนี้" ไม่ใช่อีก 12 นาทีข้างหน้า */
+  renderPosition();
   if (chart) chart.invalidate();   // ให้กราฟไหลตามราคาทุกครั้ง ไม่ต้องรอรอบวิเคราะห์
   alerts.checkRules({ price: k.c, rsi: state.ctx && state.scored ? state.scored.rsi : null, score: state.combined ? state.combined.score : 0 });
 
@@ -707,6 +713,7 @@ function renderAll() {
   updatePriceHeader();
   renderSignal();
   renderPlan();
+  renderPosition();
   renderReasons();
   renderMTF();
 }
@@ -2144,3 +2151,150 @@ function setStatus(stateName, msg) {
 }
 
 init();
+
+/* ══════════════════════════════════════════════════════════════════════
+   ไม้ที่ถืออยู่จริง — คิดกำไรขาดทุนสดจากราคาล่าสุด
+   ══════════════════════════════════════════════════════════════════════ */
+/*
+ * อ่าน/เขียนไม้ที่บันทึกไว้
+ *
+ * เคยพลาดมาแล้ว: ประกาศ LS_POS ไว้ท้ายไฟล์ แต่ bindPosition() ทำงานตอนเปิดแอป
+ * const ที่ยังไม่ถึงบรรทัดประกาศจะโยน ReferenceError ซึ่ง try/catch ก้อนนี้กลืนไป
+ * ผลคือ "ไม้ที่บันทึกไว้หายทุกครั้งที่รีเฟรช" โดยไม่มี error ให้เห็นสักตัว
+ * จึงต้องดักเฉพาะความผิดพลาดของที่เก็บข้อมูลจริง ๆ ไม่ใช่ดักทุกอย่าง
+ */
+function loadPosition() {
+  let raw;
+  try { raw = localStorage.getItem(LS_POS); } catch (e) { return null; }   // โหมดส่วนตัว/ปิดคุกกี้
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }               // ข้อมูลเสีย
+}
+function savePosition(p) {
+  try { p ? localStorage.setItem(LS_POS, JSON.stringify(p)) : localStorage.removeItem(LS_POS); } catch (e) { /* เขียนไม่ได้ */ }
+}
+
+const money = (v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`;
+
+/**
+ * วาดสถานะไม้ที่เปิดอยู่
+ *
+ * เรียกทุกครั้งที่ราคาขยับ ไม่ใช่เฉพาะตอนแท่งปิด — คนที่ถือไม้อยู่
+ * อยากรู้ตอนนี้ ไม่ใช่ตอนอีก 12 นาทีข้างหน้าเมื่อแท่งปิด
+ */
+function renderPosition() {
+  const box = $('posLive');
+  const card = $('posCard');
+  if (!box) return;
+  const p = state.position;
+  if (!p) {
+    card.classList.add('idle');
+    box.innerHTML = '<p class="tiny" style="margin:0">ยังไม่ได้บันทึกไม้ไหนไว้ — เปิดหัวข้อข้างล่างเพื่อกรอกไม้ที่เปิดอยู่ '
+      + 'แล้วระบบจะบอกกำไรขาดทุนให้ตลอดเวลา โดยไม่ต้องสลับไปแอปโบรกเกอร์</p>';
+    return;
+  }
+  const problems = checkPosition(p);
+  if (problems.length) {
+    card.classList.remove('idle');
+    box.innerHTML = `<div class="pos-warn">ตัวเลขที่กรอกยังใช้คำนวณไม่ได้:<br>• ${problems.join('<br>• ')}</div>`;
+    return;
+  }
+  const px = state.candles && state.candles.length ? state.candles[state.candles.length - 1].c : NaN;
+  const st = positionStatus(p, px, settings.account || 0);
+  if (!st.ok) {
+    card.classList.remove('idle');
+    box.innerHTML = '<p class="tiny" style="margin:0">รอราคาสด…</p>';
+    return;
+  }
+  card.classList.remove('idle');
+  const ad = positionAdvice(st);
+  const mins = st.heldMs === null ? null : Math.round(st.heldMs / 60000);
+  const num = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '—');
+
+  box.innerHTML = `
+    <div class="pos-live">
+      <div class="pos-head">
+        <span class="pos-side ${st.side > 0 ? 'buy' : 'sell'}">${st.side > 0 ? 'ซื้อ' : 'ขาย'} @ ${st.entry.toFixed(2)}</span>
+        ${mins === null ? '' : `<span class="tiny">ถือมา ${mins < 60 ? `${mins} นาที` : `${Math.floor(mins / 60)} ชม. ${mins % 60} นาที`}</span>`}
+      </div>
+      <div class="pos-head">
+        <span class="pos-pl ${st.state}">${money(st.pl)}</span>
+        ${st.r === null ? '' : `<span class="pos-r">${st.r >= 0 ? '+' : '−'}${Math.abs(st.r).toFixed(2)}R</span>`}
+        ${st.plPct === null ? '' : `<span class="tiny">${st.plPct >= 0 ? '+' : '−'}${Math.abs(st.plPct).toFixed(1)}% ของทุน</span>`}
+      </div>
+      ${st.progress === null ? '' : `
+        <div>
+          <div class="pos-track"><i style="left:calc(${(st.progress * 100).toFixed(1)}% - 1.5px)"></i></div>
+          <div class="pos-ends"><span>ตัดขาดทุน ${p.sl.toFixed(2)}</span><span>ราคาตอนนี้ ${px.toFixed(2)}</span><span>เป้า ${p.tp.toFixed(2)}</span></div>
+        </div>`}
+      <div class="pos-rows">
+        ${st.toSL === null ? '' : `<div class="pos-row"><span>เหลือถึง SL</span><b>${num(st.toSL)}</b></div>`}
+        ${st.toTP === null ? '' : `<div class="pos-row"><span>เหลือถึงเป้า</span><b>${num(st.toTP)}</b></div>`}
+        ${st.risk === null ? '' : `<div class="pos-row"><span>เสี่ยงไว้</span><b>$${num(st.risk)}</b></div>`}
+        <div class="pos-row"><span>ราคาขยับ</span><b>${st.move >= 0 ? '+' : '−'}${Math.abs(st.move).toFixed(2)}</b></div>
+      </div>
+      ${ad ? `<div class="pos-note ${ad.level}">${ad.text}</div>` : ''}
+    </div>`;
+}
+
+/** ต่อปุ่มและช่องกรอกของกล่องไม้ที่ถืออยู่ */
+function bindPosition() {
+  if (!$('posSave')) return;
+  state.position = loadPosition();
+  const fill = (p) => {
+    if (!p) return;
+    $('posSide').value = String(p.side);
+    $('posEntry').value = p.entry || '';
+    $('posSl').value = p.sl || '';
+    $('posTp').value = p.tp || '';
+    $('posSize').value = p.size;
+    $('posContract').value = p.contractSize;
+  };
+  fill(state.position);
+
+  const read = () => ({
+    side: +$('posSide').value === -1 ? -1 : 1,
+    entry: +$('posEntry').value, sl: +$('posSl').value || 0, tp: +$('posTp').value || 0,
+    size: +$('posSize').value, contractSize: +$('posContract').value,
+    /* เก็บเวลาเปิดเดิมไว้ถ้าแค่แก้ตัวเลข จะได้ไม่รีเซ็ต "ถือมานานแค่ไหน" ทุกครั้งที่แตะ */
+    openedAt: (state.position && state.position.openedAt) || Date.now(),
+  });
+
+  $('posSave').addEventListener('click', () => {
+    state.position = read();
+    savePosition(state.position);
+    renderPosition();
+  });
+  $('posClear').addEventListener('click', () => {
+    state.position = null;
+    savePosition(null);
+    ['posEntry', 'posSl', 'posTp'].forEach((id) => { $(id).value = ''; });
+    renderPosition();
+  });
+  /* ดึงจากแผนที่ระบบเพิ่งคำนวณ — คนส่วนใหญ่เข้าตามแผนอยู่แล้ว
+     พิมพ์เลขสี่ตัวใหม่ด้วยมือบนมือถือคือที่ที่พิมพ์ผิดได้ง่ายที่สุด */
+  $('posFromPlan').addEventListener('click', () => {
+    const s = state.setup;
+    if (!s || s.tradeable === false) {
+      toast({ kind: 'info', title: 'ยังไม่มีแผนให้ดึง', body: 'ต้องมีสัญญาณที่เทรดได้อยู่บนหน้าจอก่อน' });
+      return;
+    }
+    $('posSide').value = String(s.side);
+    $('posEntry').value = s.entry.toFixed(2);
+    $('posSl').value = s.sl.toFixed(2);
+    $('posTp').value = s.tpMain.toFixed(2);
+    $('posSize').value = s.lots;
+    $('posContract').value = settings.contractSize || 100;
+    state.position = read();
+    state.position.openedAt = Date.now();
+    savePosition(state.position);
+    renderPosition();
+  });
+  ['posSide', 'posEntry', 'posSl', 'posTp', 'posSize', 'posContract'].forEach((id) =>
+    $(id).addEventListener('input', () => {
+      if (!state.position) return;      // ยังไม่กดบันทึก = ยังไม่ติดตาม
+      state.position = read();
+      savePosition(state.position);
+      renderPosition();
+    }));
+  renderPosition();
+}

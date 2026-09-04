@@ -223,6 +223,11 @@ main { display: grid; grid-template-columns: minmax(0,1fr) 380px; gap: 12px; pad
 .tf-btn:hover { color: var(--text); }
 .tf-btn.active { background: var(--surface-3); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 .canvas-wrap { height: 540px; }
+/* เบราว์เซอร์ต้องไม่แย่งท่าสัมผัสไปเลื่อนหน้า/ซูมหน้า ไม่งั้นซูมกราฟกับลากกราฟจะไม่ทำงานบนมือถือ */
+.canvas-wrap canvas { touch-action: none; }
+/* คำใบ้วิธีใช้ต้องตรงกับอุปกรณ์ที่ถืออยู่ — บอกให้ "เลื่อนล้อ" บนมือถือคือบอกสิ่งที่ทำไม่ได้ */
+.hint-touch { display: none; }
+@media (pointer: coarse) { .hint-desk { display: none; } .hint-touch { display: inline; } }
 #chart { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .legend { display: flex; gap: 14px; padding: 7px 12px; border-top: 1px solid var(--line); font-size: var(--fs-micro); color: var(--muted); flex-wrap: wrap; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
@@ -871,6 +876,36 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
 .news-limits[open] > summary::before { content: '⌄ '; }
 .news-limits > summary:hover { color: var(--text-2); }
 
+/* ── ไม้ที่ถืออยู่ ─────────────────────────────────────────────────── */
+.pos-card.idle { opacity: .72; }
+.pos-live { display: grid; gap: 10px; }
+.pos-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.pos-pl { font-family: var(--mono); font-size: var(--fs-2xl); font-weight: 700; line-height: 1.1; }
+.pos-pl.win { color: var(--up); } .pos-pl.lose { color: var(--down); }
+.pos-pl.sl { color: var(--down); } .pos-pl.tp { color: var(--up); }
+.pos-r { font-family: var(--mono); font-size: var(--fs-lg); color: var(--text-2); }
+.pos-side { font-size: var(--fs-xs); padding: 3px 9px; border-radius: var(--r-full); border: 1px solid var(--line); }
+.pos-side.buy { color: var(--up); border-color: rgba(34,197,94,.45); }
+.pos-side.sell { color: var(--down); border-color: rgba(239,68,68,.45); }
+
+/* แถบเดินทางจาก SL ไปเป้า — เห็นตำแหน่งได้ในแวบเดียวโดยไม่ต้องอ่านตัวเลข */
+.pos-track { position: relative; height: 10px; border-radius: var(--r-full); overflow: hidden;
+  background: linear-gradient(90deg, rgba(239,68,68,.35), rgba(148,163,184,.2) 50%, rgba(34,197,94,.35)); }
+.pos-track i { position: absolute; top: -3px; width: 3px; height: 16px; background: var(--text); border-radius: 2px; }
+.pos-ends { display: flex; justify-content: space-between; font-size: var(--fs-micro); color: var(--text-3); margin-top: 4px; }
+.pos-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.pos-row { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-xs); }
+.pos-row b { font-family: var(--mono); }
+.pos-note { font-size: var(--fs-xs); line-height: 1.65; color: var(--text-2);
+  border-left: 3px solid var(--line); padding-left: 10px; }
+.pos-note.win { border-color: rgba(34,197,94,.5); } .pos-note.lose { border-color: rgba(239,68,68,.5); }
+.pos-note.sl, .pos-note.tp { border-color: var(--gold); color: var(--text); }
+.pos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 11px; }
+.pos-grid label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-micro); color: var(--muted); }
+.pos-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 11px; }
+.pos-form > summary { cursor: pointer; font-size: var(--fs-xs); color: var(--muted); padding: 8px 0; }
+.pos-warn { color: var(--down); font-size: var(--fs-xs); line-height: 1.7; }
+
 /* กล่องพับกฎหลังเข้าไม้ — บนจอคอมกางไว้ หัวข้อจึงไม่ต้องเด่น */
 .step-fold { margin: 0; }
 .step-fold > summary { list-style: none; cursor: pointer; font-size: var(--fs-xs); color: var(--muted);
@@ -931,6 +966,9 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
   /* ปุ่มทุกอันในหน้า ไม่ใช่แค่ที่ระบุชื่อไว้ — ที่ 42px นิ้วโป้งพลาดบ่อย */
   .btn, select, summary, input[type="number"], input[type="text"], .rtab { min-height: 46px; }
   summary { display: flex; align-items: center; }
+
+  /* กราฟสูงขึ้นบนมือถือ เพราะแผงย่อยปิดไว้แล้ว ที่ทั้งหมดจึงเป็นของกราฟราคา */
+  .canvas-wrap, body.simple .canvas-wrap { height: 380px; }
 
   /* ── กล่องแจ้งเตือนลอย ห้ามทับเนื้อหา ─────────────────────────── */
   .toast-wrap {
@@ -1048,7 +1086,7 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
       <span><i style="background:#38bdf8"></i>EMA50</span>
       <span><i style="background:#f472b6"></i>EMA200</span>
       <span><i style="background:#a78bfa"></i>VWAP</span>
-      <span class="hint">เลื่อนล้อ = ซูม · ลาก = เลื่อนกราฟ</span>
+      <span class="hint hint-desk">เลื่อนล้อ = ซูม · ลาก = เลื่อนกราฟ</span><span class="hint hint-touch">สองนิ้วหุบ/กาง = ซูม · ลาก = เลื่อน · แตะค้าง = ดูค่าแท่งนั้น · แตะสองครั้ง = รีเซ็ต</span>
     </div>
   </section>
 
@@ -1075,6 +1113,35 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
     </div>
 
     <!-- แผนเทรด -->
+    <!-- ไม้ที่เปิดอยู่จริง — วางไว้เหนือแผน เพราะไม้ที่ลงเงินไปแล้วสำคัญกว่าไม้ที่ยังไม่ได้ลง -->
+    <div class="card pos-card" id="posCard">
+      <h2>ไม้ที่ถืออยู่ตอนนี้</h2>
+      <div id="posLive"></div>
+      <details id="posForm" class="pos-form">
+        <summary>บันทึก / แก้ไขไม้ที่เปิดอยู่</summary>
+        <div class="pos-grid">
+          <label>ทิศทาง
+            <select id="posSide">
+              <option value="1">ซื้อ (Buy)</option>
+              <option value="-1">ขาย (Sell)</option>
+            </select>
+          </label>
+          <label>ราคาที่เข้า<input type="number" id="posEntry" step="0.01" placeholder="เช่น 4472.54"></label>
+          <label>จุดตัดขาดทุน (SL)<input type="number" id="posSl" step="0.01" placeholder="เช่น 4463.23"></label>
+          <label>เป้าทำกำไร (TP)<input type="number" id="posTp" step="0.01" placeholder="เช่น 4493.23"></label>
+          <label>ขนาดไม้<input type="number" id="posSize" step="0.01" value="1" min="0"></label>
+          <label>ขนาดสัญญา (ออนซ์ต่อ 1 หน่วย)<input type="number" id="posContract" step="1" value="1" min="0"></label>
+        </div>
+        <div class="pos-btns">
+          <button id="posFromPlan" class="btn">ดึงตัวเลขจากแผนด้านล่าง</button>
+          <button id="posSave" class="btn primary">บันทึกไม้นี้</button>
+          <button id="posClear" class="btn">ปิดไม้ / ล้าง</button>
+        </div>
+        <p class="tiny" style="margin:9px 0 0">ระบบไม่ได้ต่อกับโบรกเกอร์ — กรอกเองครั้งเดียวแล้วมันจะคิดกำไรขาดทุนให้ตามราคาสด
+          ใช้ได้กับทุกโบรกเกอร์ และไม่ต้องให้สิทธิ์เข้าบัญชีใคร</p>
+      </details>
+    </div>
+
     <div class="card" id="planCard">
       <h2>แผนเข้า–ออก</h2>
       <div id="planBox" class="plan-empty">ยังไม่มีแผน — รอคะแนนถึงเกณฑ์</div>
@@ -4155,6 +4222,121 @@ function tuneStrategy(ctx, opts = {}) {
   return {DEFAULT_STRATEGY, describeStrategy, toBacktestOpts, evaluateStrategy, tuneStrategy};
 })();
 
+__m.position = (function () {
+
+/**
+ * position.js — ติดตามไม้ที่เปิดอยู่จริง แบบเรียลไทม์
+ *
+ * ทำไมต้องมี: แอปบอกได้ว่า "ควรเข้าตรงไหน" แต่พอเข้าไปแล้วก็เงียบ
+ * ผู้ใช้ต้องสลับไปแอปโบรกเกอร์เพื่อดูว่าตอนนี้กำไรหรือขาดทุนเท่าไร
+ * และที่สำคัญกว่านั้น — ไม่มีอะไรบอกว่า "ยังเหลือระยะอีกเท่าไรถึง SL"
+ * ซึ่งเป็นตัวเลขที่ตัดสินใจได้จริงกว่ากำไรขาดทุนเป็นดอลลาร์เสียอีก
+ *
+ * ไฟล์นี้ไม่ต่อกับโบรกเกอร์ ผู้ใช้บันทึกไม้เอง แล้วระบบคิดให้จากราคาสด
+ * จึงใช้ได้กับทุกโบรกเกอร์โดยไม่ต้องขอสิทธิ์อะไรเลย
+ */
+
+/** ไม้ว่าง ๆ สำหรับเริ่มกรอก */
+function blankPosition(side = 1, price = 0) {
+  return { side, entry: price, sl: 0, tp: 0, size: 1, contractSize: 1, openedAt: Date.now(), note: '' };
+}
+
+const num = (v) => (Number.isFinite(+v) ? +v : NaN);
+
+/**
+ * ตรวจว่าไม้ที่กรอกมาใช้คำนวณได้ไหม — คืนรายการปัญหาเป็นภาษาคน
+ *
+ * ต้องเช็คก่อนคำนวณเสมอ เพราะเลขที่กรอกผิดจะให้กำไรขาดทุนที่ดูสมเหตุสมผล
+ * แต่ผิดความจริง ซึ่งอันตรายกว่าไม่แสดงอะไรเลย
+ */
+function checkPosition(p) {
+  const bad = [];
+  if (!p) return ['ยังไม่ได้บันทึกไม้'];
+  if (p.side !== 1 && p.side !== -1) bad.push('ต้องระบุว่าซื้อหรือขาย');
+  if (!(num(p.entry) > 0)) bad.push('ราคาเข้าต้องมากกว่า 0');
+  if (!(num(p.size) > 0)) bad.push('ขนาดไม้ต้องมากกว่า 0');
+  if (!(num(p.contractSize) > 0)) bad.push('ขนาดสัญญาต้องมากกว่า 0');
+  if (num(p.sl) > 0 && num(p.entry) > 0) {
+    /* SL ผิดฝั่งคือความผิดพลาดที่เกิดบ่อยและมองไม่เห็นด้วยตา
+       ถ้าปล่อยผ่าน ระบบจะบอกว่า "ยังห่าง SL อีกไกล" ทั้งที่จริงเลยมาแล้ว */
+    if (p.side > 0 && p.sl >= p.entry) bad.push('ไม้ซื้อ: จุดตัดขาดทุนต้องต่ำกว่าราคาเข้า');
+    if (p.side < 0 && p.sl <= p.entry) bad.push('ไม้ขาย: จุดตัดขาดทุนต้องสูงกว่าราคาเข้า');
+  }
+  if (num(p.tp) > 0 && num(p.entry) > 0) {
+    if (p.side > 0 && p.tp <= p.entry) bad.push('ไม้ซื้อ: เป้าทำกำไรต้องสูงกว่าราคาเข้า');
+    if (p.side < 0 && p.tp >= p.entry) bad.push('ไม้ขาย: เป้าทำกำไรต้องต่ำกว่าราคาเข้า');
+  }
+  return bad;
+}
+
+/**
+ * สถานะไม้ ณ ราคาปัจจุบัน
+ *
+ * @param {object} p    ไม้ที่บันทึกไว้
+ * @param {number} px   ราคาล่าสุด
+ * @param {number} account ทุนทั้งหมด (ใส่ 0 ถ้าไม่อยากคิดเป็น % ของพอร์ต)
+ */
+function positionStatus(p, px, account = 0) {
+  const problems = checkPosition(p);
+  if (problems.length || !Number.isFinite(px) || px <= 0) return { ok: false, problems };
+
+  const side = p.side;
+  const move = (px - p.entry) * side;              // ระยะที่ราคาไปทางเรา (ติดลบ = สวนทาง)
+  const unit = p.size * p.contractSize;            // กำไรขาดทุนต่อการเคลื่อนไหว 1 หน่วยราคา
+  const pl = move * unit;
+
+  const slDist = p.sl > 0 ? Math.abs(p.entry - p.sl) : null;
+  const tpDist = p.tp > 0 ? Math.abs(p.tp - p.entry) : null;
+  /* คิดเป็น R เสมอเมื่อรู้ SL — เพราะ "ตอนนี้ได้ 0.7R" บอกอะไรได้มากกว่า "ได้ 7 ดอลลาร์"
+     คนที่เทรดด้วยระบบตัดสินใจจากตัวเลขนี้ ไม่ใช่จากจำนวนเงิน */
+  const r = slDist ? move / slDist : null;
+
+  const toSL = p.sl > 0 ? (px - p.sl) * side : null;   // บวก = ยังไม่ถึง SL
+  const toTP = p.tp > 0 ? (p.tp - px) * side : null;   // บวก = ยังไม่ถึงเป้า
+  const risk = slDist ? slDist * unit : null;
+
+  /* เดินทางมาถึงไหนแล้วระหว่าง SL กับ TP — ใช้วาดแถบให้เห็นภาพในแวบเดียว
+     0% = อยู่ที่ SL, 100% = อยู่ที่เป้า */
+  let progress = null;
+  if (p.sl > 0 && p.tp > 0) {
+    const span = Math.abs(p.tp - p.sl);
+    progress = span > 0 ? Math.max(0, Math.min(1, ((px - p.sl) * side) / span)) : null;
+  }
+
+  const hitSL = toSL !== null && toSL <= 0;
+  const hitTP = toTP !== null && toTP <= 0;
+
+  return {
+    ok: true, problems: [], side, price: px, entry: p.entry,
+    move, pl, r, risk,
+    plPct: account > 0 ? (pl / account) * 100 : null,
+    slDist, tpDist, toSL, toTP, progress, hitSL, hitTP,
+    /* สถานะเป็นคำ ใช้เลือกสีและข้อความ ไม่ต้องให้หน้าจอมาตีความเองซ้ำ */
+    state: hitSL ? 'sl' : hitTP ? 'tp' : pl > 0 ? 'win' : pl < 0 ? 'lose' : 'flat',
+    heldMs: p.openedAt ? Date.now() - p.openedAt : null,
+  };
+}
+
+/**
+ * ประโยคเดียวที่บอกว่าตอนนี้ควรรู้สึกยังไงกับไม้นี้
+ *
+ * ตั้งใจให้อ่านจบในแวบเดียวตอนเปิดดูกลางวัน ไม่ใช่ตารางตัวเลขให้มานั่งตีความ
+ * และต้องไม่เชียร์ให้ทำอะไร — หน้าที่ของมันคือรายงาน ไม่ใช่สั่ง
+ */
+function positionAdvice(st) {
+  if (!st || !st.ok) return null;
+  if (st.hitSL) return { level: 'sl', text: 'ราคาถึงจุดตัดขาดทุนแล้ว — ถ้าตั้ง SL ไว้กับโบรกเกอร์ ไม้นี้ควรถูกปิดไปแล้ว' };
+  if (st.hitTP) return { level: 'tp', text: 'ราคาถึงเป้าแล้ว — ถ้าตั้ง TP ไว้ ไม้นี้ควรถูกปิดไปแล้ว' };
+  if (st.r === null) return { level: 'flat', text: 'ยังไม่ได้ใส่จุดตัดขาดทุน จึงบอกได้แค่กำไรขาดทุนเป็นเงิน ไม่ใช่เทียบกับความเสี่ยง' };
+  if (st.r >= 1) return { level: 'win', text: `กำไรตอนนี้ ${st.r.toFixed(2)} เท่าของที่เสี่ยงไป — เลยจุดที่ชนะหนึ่งไม้ลบล้างแพ้หนึ่งไม้ได้แล้ว` };
+  if (st.r >= 0.3) return { level: 'win', text: `กำไรอยู่ ${st.r.toFixed(2)} เท่าของที่เสี่ยง — ยังไม่ถึงเป้า ราคาย่อกลับมาบ้างเป็นเรื่องปกติ` };
+  if (st.r > -0.5) return { level: 'flat', text: 'ยังแกว่งอยู่แถวราคาเข้า — ระยะแค่นี้ยังไม่บอกอะไร ไม่ใช่สัญญาณให้รีบทำอะไร' };
+  return { level: 'lose', text: `ติดลบ ${Math.abs(st.r).toFixed(2)} เท่าของที่เสี่ยง — ยังไม่ถึงจุดตัดขาดทุน แผนเดิมจึงยังไม่ผิด` };
+}
+
+  return {blankPosition, checkPosition, positionStatus, positionAdvice};
+})();
+
 __m.sources = (function () {
 
 /**
@@ -4511,19 +4693,84 @@ class Chart {
     });
     cv.addEventListener('mouseleave', () => { this.mouse = null; this.invalidate(); });
 
-    // สัมผัสบนมือถือ: ลากเพื่อเลื่อนกราฟ
+    /*
+     * สัมผัสบนมือถือ — เดิมทำได้อย่างเดียวคือลากเลื่อน
+     *
+     * ซูมไม่ได้เลย และแตะดูค่าไม่ได้ ทั้งที่โค้ดวาดกล่อง OHLC ไว้แล้ว
+     * แต่กล่องนั้นขึ้นจาก mousemove อย่างเดียว มือถือจึงไม่มีทางเรียกมันออกมาได้
+     *
+     * ท่าที่ใส่ให้ เป็นชุดเดียวกับที่แอปกราฟทั่วไปใช้ คนจะได้ไม่ต้องเรียนใหม่:
+     *   นิ้วเดียวลาก      = เลื่อนกราฟ
+     *   นิ้วเดียวแตะค้าง  = เส้นเล็งพร้อมกล่องข้อมูลของแท่งนั้น
+     *   สองนิ้วหุบ/กาง    = ซูม
+     *   แตะสองครั้ง       = กลับไปมุมมองตั้งต้น
+     */
+    const rel = (t) => {
+      const r = cv.getBoundingClientRect();
+      return { x: t.clientX - r.left, y: t.clientY - r.top };
+    };
+    const spread = (ts) => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+    let pinch = null, holdTimer = null, lastTap = 0, moved = 0;
+
+    const endHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
+
     cv.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 1) this.drag = { x: e.touches[0].clientX - cv.getBoundingClientRect().left, offset: this.view.offset };
+      if (e.touches.length === 2) {
+        /* เริ่มซูม — จำระยะห่างนิ้วกับจำนวนแท่งตอนเริ่ม แล้วคิดเป็นสัดส่วน
+           ถ้าคิดทีละก้าวจะสะสมความคลาดเคลื่อนจนซูมกระตุก */
+        endHold();
+        this.drag = null;
+        pinch = { d: spread(e.touches), count: this.view.count };
+        return;
+      }
+      if (e.touches.length !== 1) return;
+      const p = rel(e.touches[0]);
+      moved = 0;
+      this.drag = { x: p.x, offset: this.view.offset };
+
+      const now = Date.now();
+      if (now - lastTap < 300) {          // แตะสองครั้ง = รีเซ็ต
+        this.view.count = 140; this.view.offset = 0; this.mouse = null;
+        this.drag = null; lastTap = 0; this.invalidate();
+        return;
+      }
+      lastTap = now;
+
+      /* แตะค้างโดยไม่ขยับ = เข้าโหมดอ่านค่า ต้องรอให้แน่ใจก่อนว่าไม่ใช่การลาก */
+      holdTimer = setTimeout(() => {
+        if (moved < 8) { this.drag = null; this.mouse = p; this.invalidate(); }
+      }, 260);
     }, { passive: true });
+
     cv.addEventListener('touchmove', (e) => {
-      if (this.drag && e.touches.length === 1) {
-        const x = e.touches[0].clientX - cv.getBoundingClientRect().left;
-        const bw = this.plot ? this.plot.barW : 6;
-        this.view.offset = Math.max(0, Math.min(this.candles.length - 20, this.drag.offset + Math.round((x - this.drag.x) / bw)));
+      if (pinch && e.touches.length === 2) {
+        const ratio = spread(e.touches) / (pinch.d || 1);
+        // กางนิ้วออก = เห็นแท่งน้อยลง = ซูมเข้า
+        this.view.count = Math.max(20, Math.min(600, Math.round(pinch.count / (ratio || 1))));
         this.invalidate();
+        return;
+      }
+      if (e.touches.length !== 1) return;
+      const p = rel(e.touches[0]);
+      if (this.mouse) { this.mouse = p; this.invalidate(); return; }   // อยู่ในโหมดอ่านค่า
+      if (!this.drag) return;
+      moved = Math.max(moved, Math.abs(p.x - this.drag.x));
+      if (moved >= 8) endHold();
+      const bw = this.plot ? this.plot.barW : 6;
+      this.view.offset = Math.max(0, Math.min(this.candles.length - 20, this.drag.offset + Math.round((p.x - this.drag.x) / bw)));
+      this.invalidate();
+    }, { passive: true });
+
+    cv.addEventListener('touchend', (e) => {
+      endHold();
+      this.drag = null;
+      if (e.touches.length < 2) pinch = null;
+      /* ยกนิ้วแล้วเก็บเส้นเล็ง ไม่งั้นค้างบังกราฟจนกว่าจะแตะที่อื่น */
+      if (this.mouse && e.touches.length === 0) {
+        setTimeout(() => { this.mouse = null; this.invalidate(); }, 2200);
       }
     }, { passive: true });
-    cv.addEventListener('touchend', () => { this.drag = null; });
+    cv.addEventListener('touchcancel', () => { endHold(); this.drag = null; pinch = null; });
   }
 
   setData({ candles, ind, setup, markers, levels }) {
@@ -7611,6 +7858,7 @@ __m.app = (function () {
   const {buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal} = __m.signals;
   const {runBacktest, probabilityFor, wilsonInterval, sessionBucketAt} = __m.backtest;
   const {tuneStrategy, toBacktestOpts} = __m.strategy;
+  const {positionStatus, positionAdvice, checkPosition} = __m.position;
   const {learnAndValidate} = __m.learn;
   const {autoTune, explainAdaptation} = __m.adapt;
   const {SOURCES, testAllSources} = __m.sources;
@@ -7648,7 +7896,9 @@ __m.app = (function () {
 
 
 
+
 const $ = (id) => document.getElementById(id);
+const LS_POS = 'goldtrader.position.v1';
 const LS_SETTINGS = 'goldtrader.settings.v1';
 
 const state = {
@@ -7751,6 +8001,7 @@ async function init() {
   equityCtx = $('equityCanvas').getContext('2d');
   buildStaticUI();
   bindEvents();
+  bindPosition();
   window.addEventListener('resize', () => { chart.resize(); drawEquity(); });
   chart.resize();
   alerts.onUpdate = (entry) => { renderLog(); toast(entry); };
@@ -8076,6 +8327,9 @@ function onLiveCandle(k) {
   if (res.stale) return;
   if (res.appended && state.candles.length > 1) state.prevClose = state.candles[state.candles.length - 2].c;
   updatePriceHeader();
+  /* ไม้ที่ถืออยู่ต้องอัปเดตทุกติ๊ก ไม่ใช่รอรอบวิเคราะห์หรือรอแท่งปิด
+     คนที่มีเงินอยู่ในตลาดอยากรู้ "ตอนนี้" ไม่ใช่อีก 12 นาทีข้างหน้า */
+  renderPosition();
   if (chart) chart.invalidate();   // ให้กราฟไหลตามราคาทุกครั้ง ไม่ต้องรอรอบวิเคราะห์
   alerts.checkRules({ price: k.c, rsi: state.ctx && state.scored ? state.scored.rsi : null, score: state.combined ? state.combined.score : 0 });
 
@@ -8334,6 +8588,7 @@ function renderAll() {
   updatePriceHeader();
   renderSignal();
   renderPlan();
+  renderPosition();
   renderReasons();
   renderMTF();
 }
@@ -9771,6 +10026,153 @@ function setStatus(stateName, msg) {
 }
 
 init();
+
+/* ══════════════════════════════════════════════════════════════════════
+   ไม้ที่ถืออยู่จริง — คิดกำไรขาดทุนสดจากราคาล่าสุด
+   ══════════════════════════════════════════════════════════════════════ */
+/*
+ * อ่าน/เขียนไม้ที่บันทึกไว้
+ *
+ * เคยพลาดมาแล้ว: ประกาศ LS_POS ไว้ท้ายไฟล์ แต่ bindPosition() ทำงานตอนเปิดแอป
+ * const ที่ยังไม่ถึงบรรทัดประกาศจะโยน ReferenceError ซึ่ง try/catch ก้อนนี้กลืนไป
+ * ผลคือ "ไม้ที่บันทึกไว้หายทุกครั้งที่รีเฟรช" โดยไม่มี error ให้เห็นสักตัว
+ * จึงต้องดักเฉพาะความผิดพลาดของที่เก็บข้อมูลจริง ๆ ไม่ใช่ดักทุกอย่าง
+ */
+function loadPosition() {
+  let raw;
+  try { raw = localStorage.getItem(LS_POS); } catch (e) { return null; }   // โหมดส่วนตัว/ปิดคุกกี้
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }               // ข้อมูลเสีย
+}
+function savePosition(p) {
+  try { p ? localStorage.setItem(LS_POS, JSON.stringify(p)) : localStorage.removeItem(LS_POS); } catch (e) { /* เขียนไม่ได้ */ }
+}
+
+const money = (v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`;
+
+/**
+ * วาดสถานะไม้ที่เปิดอยู่
+ *
+ * เรียกทุกครั้งที่ราคาขยับ ไม่ใช่เฉพาะตอนแท่งปิด — คนที่ถือไม้อยู่
+ * อยากรู้ตอนนี้ ไม่ใช่ตอนอีก 12 นาทีข้างหน้าเมื่อแท่งปิด
+ */
+function renderPosition() {
+  const box = $('posLive');
+  const card = $('posCard');
+  if (!box) return;
+  const p = state.position;
+  if (!p) {
+    card.classList.add('idle');
+    box.innerHTML = '<p class="tiny" style="margin:0">ยังไม่ได้บันทึกไม้ไหนไว้ — เปิดหัวข้อข้างล่างเพื่อกรอกไม้ที่เปิดอยู่ '
+      + 'แล้วระบบจะบอกกำไรขาดทุนให้ตลอดเวลา โดยไม่ต้องสลับไปแอปโบรกเกอร์</p>';
+    return;
+  }
+  const problems = checkPosition(p);
+  if (problems.length) {
+    card.classList.remove('idle');
+    box.innerHTML = `<div class="pos-warn">ตัวเลขที่กรอกยังใช้คำนวณไม่ได้:<br>• ${problems.join('<br>• ')}</div>`;
+    return;
+  }
+  const px = state.candles && state.candles.length ? state.candles[state.candles.length - 1].c : NaN;
+  const st = positionStatus(p, px, settings.account || 0);
+  if (!st.ok) {
+    card.classList.remove('idle');
+    box.innerHTML = '<p class="tiny" style="margin:0">รอราคาสด…</p>';
+    return;
+  }
+  card.classList.remove('idle');
+  const ad = positionAdvice(st);
+  const mins = st.heldMs === null ? null : Math.round(st.heldMs / 60000);
+  const num = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '—');
+
+  box.innerHTML = `
+    <div class="pos-live">
+      <div class="pos-head">
+        <span class="pos-side ${st.side > 0 ? 'buy' : 'sell'}">${st.side > 0 ? 'ซื้อ' : 'ขาย'} @ ${st.entry.toFixed(2)}</span>
+        ${mins === null ? '' : `<span class="tiny">ถือมา ${mins < 60 ? `${mins} นาที` : `${Math.floor(mins / 60)} ชม. ${mins % 60} นาที`}</span>`}
+      </div>
+      <div class="pos-head">
+        <span class="pos-pl ${st.state}">${money(st.pl)}</span>
+        ${st.r === null ? '' : `<span class="pos-r">${st.r >= 0 ? '+' : '−'}${Math.abs(st.r).toFixed(2)}R</span>`}
+        ${st.plPct === null ? '' : `<span class="tiny">${st.plPct >= 0 ? '+' : '−'}${Math.abs(st.plPct).toFixed(1)}% ของทุน</span>`}
+      </div>
+      ${st.progress === null ? '' : `
+        <div>
+          <div class="pos-track"><i style="left:calc(${(st.progress * 100).toFixed(1)}% - 1.5px)"></i></div>
+          <div class="pos-ends"><span>ตัดขาดทุน ${p.sl.toFixed(2)}</span><span>ราคาตอนนี้ ${px.toFixed(2)}</span><span>เป้า ${p.tp.toFixed(2)}</span></div>
+        </div>`}
+      <div class="pos-rows">
+        ${st.toSL === null ? '' : `<div class="pos-row"><span>เหลือถึง SL</span><b>${num(st.toSL)}</b></div>`}
+        ${st.toTP === null ? '' : `<div class="pos-row"><span>เหลือถึงเป้า</span><b>${num(st.toTP)}</b></div>`}
+        ${st.risk === null ? '' : `<div class="pos-row"><span>เสี่ยงไว้</span><b>$${num(st.risk)}</b></div>`}
+        <div class="pos-row"><span>ราคาขยับ</span><b>${st.move >= 0 ? '+' : '−'}${Math.abs(st.move).toFixed(2)}</b></div>
+      </div>
+      ${ad ? `<div class="pos-note ${ad.level}">${ad.text}</div>` : ''}
+    </div>`;
+}
+
+/** ต่อปุ่มและช่องกรอกของกล่องไม้ที่ถืออยู่ */
+function bindPosition() {
+  if (!$('posSave')) return;
+  state.position = loadPosition();
+  const fill = (p) => {
+    if (!p) return;
+    $('posSide').value = String(p.side);
+    $('posEntry').value = p.entry || '';
+    $('posSl').value = p.sl || '';
+    $('posTp').value = p.tp || '';
+    $('posSize').value = p.size;
+    $('posContract').value = p.contractSize;
+  };
+  fill(state.position);
+
+  const read = () => ({
+    side: +$('posSide').value === -1 ? -1 : 1,
+    entry: +$('posEntry').value, sl: +$('posSl').value || 0, tp: +$('posTp').value || 0,
+    size: +$('posSize').value, contractSize: +$('posContract').value,
+    /* เก็บเวลาเปิดเดิมไว้ถ้าแค่แก้ตัวเลข จะได้ไม่รีเซ็ต "ถือมานานแค่ไหน" ทุกครั้งที่แตะ */
+    openedAt: (state.position && state.position.openedAt) || Date.now(),
+  });
+
+  $('posSave').addEventListener('click', () => {
+    state.position = read();
+    savePosition(state.position);
+    renderPosition();
+  });
+  $('posClear').addEventListener('click', () => {
+    state.position = null;
+    savePosition(null);
+    ['posEntry', 'posSl', 'posTp'].forEach((id) => { $(id).value = ''; });
+    renderPosition();
+  });
+  /* ดึงจากแผนที่ระบบเพิ่งคำนวณ — คนส่วนใหญ่เข้าตามแผนอยู่แล้ว
+     พิมพ์เลขสี่ตัวใหม่ด้วยมือบนมือถือคือที่ที่พิมพ์ผิดได้ง่ายที่สุด */
+  $('posFromPlan').addEventListener('click', () => {
+    const s = state.setup;
+    if (!s || s.tradeable === false) {
+      toast({ kind: 'info', title: 'ยังไม่มีแผนให้ดึง', body: 'ต้องมีสัญญาณที่เทรดได้อยู่บนหน้าจอก่อน' });
+      return;
+    }
+    $('posSide').value = String(s.side);
+    $('posEntry').value = s.entry.toFixed(2);
+    $('posSl').value = s.sl.toFixed(2);
+    $('posTp').value = s.tpMain.toFixed(2);
+    $('posSize').value = s.lots;
+    $('posContract').value = settings.contractSize || 100;
+    state.position = read();
+    state.position.openedAt = Date.now();
+    savePosition(state.position);
+    renderPosition();
+  });
+  ['posSide', 'posEntry', 'posSl', 'posTp', 'posSize', 'posContract'].forEach((id) =>
+    $(id).addEventListener('input', () => {
+      if (!state.position) return;      // ยังไม่กดบันทึก = ยังไม่ติดตาม
+      state.position = read();
+      savePosition(state.position);
+      renderPosition();
+    }));
+  renderPosition();
+}
 
   return {};
 })();

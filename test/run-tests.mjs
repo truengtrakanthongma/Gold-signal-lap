@@ -12,6 +12,7 @@ import { tuneStrategy, evaluateStrategy, toBacktestOpts, describeStrategy, DEFAU
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
 import { MarketFeed } from '../js/feed.js';
+import { positionStatus, checkPosition, positionAdvice, blankPosition } from '../js/position.js';
 import { SOURCES, validateBars, testSource, testAllSources } from '../js/sources.js';
 import { classifyHeadline, climateOf, parseGdeltDate, fetchNews, economicCalendar, GOLD_DRIVERS } from '../js/news.js';
 import { buildNewsIndex, newsAt, newsAgreement, evaluateNewsFilter, newsVerdict, fetchHistoricalNews, DEFAULT_NEWS_CFG } from '../js/newsfactor.js';
@@ -2625,6 +2626,112 @@ section('37) ทุนไม่พอ = ต้องไม่มีแผนใ�
      เพราะคนที่ตั้งเพดานหลวมเอง ยังต้องเห็นว่ากำลังเสี่ยงเท่าไร */
   ok('ยังมีคำเตือนเรื่องขนาดไม้ที่ถูกบังคับให้ใหญ่เกินตัว',
     poor.sizeForced === true && poor.notes.some((t) => /ทุนไม่พอ|เสี่ยง/.test(t)));
+}
+
+section('38) ติดตามไม้ที่เปิดอยู่ — ตัวเลขต้องตรงกับที่โบรกเกอร์คิด');
+{
+  /*
+   * ผู้ใช้ขอ: ลงไม้ไปแล้วอยากรู้แบบเรียลไทม์ว่ากำไรหรือขาดทุนเท่าไร
+   * ตัวเลขนี้ต้องตรงกับที่เห็นในแอปโบรกเกอร์เป๊ะ ๆ ไม่งั้นแย่กว่าไม่มี
+   * ใช้ไม้จริงจากประวัติที่ผู้ใช้ส่งมาเป็นเคสทดสอบ (1 ทรอยออนซ์ ทอง)
+   */
+  const real = { side: 1, entry: 4472.54, sl: 4463.23, tp: 4493.23, size: 1, contractSize: 1, openedAt: Date.now() - 104000 };
+
+  {
+    const st = positionStatus(real, 4463.22, 59.30);   // ราคาปิดจริงตอนโดน SL
+    ok('คำนวณได้', st.ok === true, (st.problems || []).join(' · '));
+    /* โบรกเกอร์รายงาน -$9.32 พอดี */
+    ok('กำไรขาดทุนตรงกับที่โบรกเกอร์คิด (-$9.32)', Math.abs(st.pl - (-9.32)) < 0.01, `ได้ ${st.pl.toFixed(2)}`);
+    ok('รู้ว่าเลยจุดตัดขาดทุนไปแล้ว', st.hitSL === true && st.state === 'sl');
+    ok('คิดเป็นสัดส่วนของทุนได้', Math.abs(st.plPct - (-9.32 / 59.3 * 100)) < 0.1, `${st.plPct.toFixed(1)}%`);
+  }
+
+  {
+    // ราคาอยู่กึ่งกลางระหว่างเข้ากับเป้า
+    const st = positionStatus(real, 4482.885, 59.30);
+    ok('กำไรครึ่งทางไปเป้า → เป็นบวก', st.pl > 0 && st.state === 'win');
+    ok('บอกเป็นเท่าของความเสี่ยง (R) ไม่ใช่แค่จำนวนเงิน', Math.abs(st.r - 1.114) < 0.01, `${st.r.toFixed(3)}R`);
+    ok('บอกว่าเหลืออีกเท่าไรถึงจุดตัดขาดทุน', Math.abs(st.toSL - 19.655) < 0.01, `${st.toSL.toFixed(2)}`);
+    ok('บอกว่าเหลืออีกเท่าไรถึงเป้า', Math.abs(st.toTP - 10.345) < 0.01, `${st.toTP.toFixed(2)}`);
+    ok('บอกว่าเดินทางมาถึงกี่ % ของช่วง SL→เป้า', st.progress > 0.6 && st.progress < 0.7, `${(st.progress * 100).toFixed(0)}%`);
+  }
+
+  {
+    /* ไม้ขายต้องกลับทิศทุกตัวเลข — ที่ผิดง่ายที่สุดคือลืมคูณ side */
+    const sell = { side: -1, entry: 4472.54, sl: 4482.54, tp: 4452.54, size: 1, contractSize: 1, openedAt: Date.now() };
+    const down = positionStatus(sell, 4462.54, 1000);
+    ok('ไม้ขาย: ราคาลง = กำไร', down.pl > 0 && Math.abs(down.pl - 10) < 0.01, `${down.pl.toFixed(2)}`);
+    ok('ไม้ขาย: 1 เท่าของความเสี่ยงพอดี', Math.abs(down.r - 1) < 1e-9);
+    const up = positionStatus(sell, 4482.54, 1000);
+    ok('ไม้ขาย: ราคาขึ้นถึง SL = ขาดทุนเต็ม', Math.abs(up.r - (-1)) < 1e-9 && up.hitSL === true);
+  }
+
+  {
+    /* ขนาดสัญญาต่างกันคือจุดที่คนพลาดบ่อยที่สุด (1 ล็อต = 100 ออนซ์ ไม่ใช่ 1) */
+    const lot = { side: 1, entry: 4472.54, sl: 4462.54, tp: 4492.54, size: 0.01, contractSize: 100, openedAt: Date.now() };
+    const st = positionStatus(lot, 4482.54, 1000);
+    ok('0.01 ล็อต × 100 ออนซ์ = 1 ออนซ์ → ได้ผลเท่ากับถือ 1 ออนซ์', Math.abs(st.pl - 10) < 1e-9, `${st.pl.toFixed(2)}`);
+  }
+
+  // ── ค่าที่กรอกผิด ต้องไม่ได้ตัวเลขที่ดูสมเหตุสมผลแต่ผิด ──────────────
+  ok('SL ผิดฝั่งของไม้ซื้อ → ฟ้อง ไม่ใช่คำนวณต่อ',
+    checkPosition({ ...real, sl: 4500 }).some((t) => /ต่ำกว่าราคาเข้า/.test(t)));
+  ok('เป้าผิดฝั่งของไม้ขาย → ฟ้อง',
+    checkPosition({ side: -1, entry: 100, sl: 110, tp: 120, size: 1, contractSize: 1 }).some((t) => /ต่ำกว่าราคาเข้า/.test(t)));
+  ok('ขนาดไม้เป็น 0 → ฟ้อง', checkPosition({ ...real, size: 0 }).length > 0);
+  ok('ราคาเข้าเป็นตัวอักษร → ฟ้อง', checkPosition({ ...real, entry: 'abc' }).length > 0);
+  ok('ยังไม่ได้บันทึกไม้ → บอกตรง ๆ ไม่ใช่พัง', checkPosition(null).length > 0);
+  ok('ราคาสดยังไม่มา → ไม่คำนวณ', positionStatus(real, NaN, 100).ok === false);
+
+  // ── ไม่ใส่ SL ก็ยังใช้ได้ แต่ต้องบอกว่าบอกได้แค่ไหน ─────────────────
+  {
+    const noSl = positionStatus({ ...real, sl: 0, tp: 0 }, 4482.54, 1000);
+    ok('ไม่ใส่ SL → ยังบอกกำไรขาดทุนเป็นเงินได้', noSl.ok === true && Math.abs(noSl.pl - 10) < 0.01);
+    ok('ไม่ใส่ SL → ไม่แกล้งคิด R ออกมามั่ว ๆ', noSl.r === null && noSl.progress === null);
+    ok('บอกผู้ใช้ด้วยว่าทำไมไม่มีตัวเลข R', /ยังไม่ได้ใส่จุดตัดขาดทุน/.test(positionAdvice(noSl).text));
+  }
+
+  // ── ข้อความสรุปต้องรายงาน ไม่ใช่สั่งให้ทำ ────────────────────────────
+  {
+    const win = positionAdvice(positionStatus(real, 4492.0, 1000));
+    const lose = positionAdvice(positionStatus(real, 4466.0, 1000));
+    ok('กำไรเกิน 1 เท่าของความเสี่ยง → บอกว่าเลยจุดคุ้มแล้ว', win.level === 'win' && /เท่าของที่เสี่ยง/.test(win.text));
+    ok('ติดลบแต่ยังไม่ถึง SL → บอกว่าแผนเดิมยังไม่ผิด', lose.level === 'lose' && /ยังไม่ถึงจุดตัดขาดทุน/.test(lose.text));
+    const words = [win.text, lose.text].join(' ');
+    ok('ไม่มีคำสั่งให้ปิด/ถือ/เพิ่มไม้ — หน้าที่คือรายงาน ไม่ใช่ตัดสินใจแทน',
+      !/ควรปิด|รีบปิด|ถือต่อ|เพิ่มไม้|ทบ/.test(words), words.slice(0, 60));
+  }
+}
+
+section('39) ค่าคงที่ต้องประกาศก่อนใช้ — และ try/catch ต้องไม่กลืนบั๊ก');
+{
+  /*
+   * บั๊กจริงที่เจอ: ประกาศ const LS_POS ไว้ท้ายไฟล์ แต่ฟังก์ชันที่ใช้มัน
+   * ทำงานตอนเปิดแอป const ที่ยังไม่ถึงบรรทัดประกาศจะโยน ReferenceError
+   * ซึ่ง try/catch ที่ครอบไว้กว้างเกินไปกลืนมันหมด
+   *
+   * ผลลัพธ์: "ไม้ที่บันทึกไว้หายทุกครั้งที่รีเฟรช" โดยไม่มี error ให้เห็นสักตัว
+   * บั๊กแบบนี้หาโดยการอ่านโค้ดยากมาก เพราะทุกอย่างดูถูกต้องหมด
+   */
+  const fs = await import('node:fs');
+  const app = fs.readFileSync('js/app.js', 'utf8');
+
+  for (const key of ['LS_POS', 'LS_SETTINGS']) {
+    const declAt = app.indexOf(`const ${key} =`);
+    ok(`${key}: ประกาศไว้จริง`, declAt > 0);
+    /* ทุกที่ที่เรียกใช้ ต้องอยู่หลังบรรทัดประกาศ ไม่งั้นเจอ ReferenceError ตอนรัน */
+    const uses = [...app.matchAll(new RegExp(`\\\\b${key}\\\\b`, 'g'))].map((m) => m.index);
+    const before = uses.filter((i) => i < declAt);
+    ok(`${key}: ไม่มีที่ไหนเรียกใช้ก่อนบรรทัดประกาศ`, before.length === 0, `มี ${before.length} จุด`);
+  }
+
+  /* ตัวอ่านค่าจากที่เก็บข้อมูล ต้องแยก "อ่านไม่ได้" ออกจาก "ข้อมูลเสีย"
+     ไม่ใช่ครอบทั้งก้อนแล้วคืน null เงียบ ๆ ซึ่งกลืนได้แม้แต่ ReferenceError */
+  const loadFn = app.slice(app.indexOf('function loadPosition()'), app.indexOf('function savePosition('));
+  ok('loadPosition แยก try เป็นสองก้อน (อ่านที่เก็บ / แปลงข้อมูล) ไม่ใช่ครอบทั้งฟังก์ชัน',
+    (loadFn.match(/try\s*\{/g) || []).length >= 2, loadFn.slice(0, 60));
+  ok('loadPosition ไม่ครอบ JSON.parse รวมกับการอ่าน localStorage ในก้อนเดียว',
+    !/try\s*\{\s*return JSON\.parse\(localStorage/.test(loadFn));
 }
 
 console.log(`\n${'─'.repeat(52)}`);

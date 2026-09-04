@@ -127,19 +127,84 @@ export class Chart {
     });
     cv.addEventListener('mouseleave', () => { this.mouse = null; this.invalidate(); });
 
-    // สัมผัสบนมือถือ: ลากเพื่อเลื่อนกราฟ
+    /*
+     * สัมผัสบนมือถือ — เดิมทำได้อย่างเดียวคือลากเลื่อน
+     *
+     * ซูมไม่ได้เลย และแตะดูค่าไม่ได้ ทั้งที่โค้ดวาดกล่อง OHLC ไว้แล้ว
+     * แต่กล่องนั้นขึ้นจาก mousemove อย่างเดียว มือถือจึงไม่มีทางเรียกมันออกมาได้
+     *
+     * ท่าที่ใส่ให้ เป็นชุดเดียวกับที่แอปกราฟทั่วไปใช้ คนจะได้ไม่ต้องเรียนใหม่:
+     *   นิ้วเดียวลาก      = เลื่อนกราฟ
+     *   นิ้วเดียวแตะค้าง  = เส้นเล็งพร้อมกล่องข้อมูลของแท่งนั้น
+     *   สองนิ้วหุบ/กาง    = ซูม
+     *   แตะสองครั้ง       = กลับไปมุมมองตั้งต้น
+     */
+    const rel = (t) => {
+      const r = cv.getBoundingClientRect();
+      return { x: t.clientX - r.left, y: t.clientY - r.top };
+    };
+    const spread = (ts) => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+    let pinch = null, holdTimer = null, lastTap = 0, moved = 0;
+
+    const endHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
+
     cv.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 1) this.drag = { x: e.touches[0].clientX - cv.getBoundingClientRect().left, offset: this.view.offset };
+      if (e.touches.length === 2) {
+        /* เริ่มซูม — จำระยะห่างนิ้วกับจำนวนแท่งตอนเริ่ม แล้วคิดเป็นสัดส่วน
+           ถ้าคิดทีละก้าวจะสะสมความคลาดเคลื่อนจนซูมกระตุก */
+        endHold();
+        this.drag = null;
+        pinch = { d: spread(e.touches), count: this.view.count };
+        return;
+      }
+      if (e.touches.length !== 1) return;
+      const p = rel(e.touches[0]);
+      moved = 0;
+      this.drag = { x: p.x, offset: this.view.offset };
+
+      const now = Date.now();
+      if (now - lastTap < 300) {          // แตะสองครั้ง = รีเซ็ต
+        this.view.count = 140; this.view.offset = 0; this.mouse = null;
+        this.drag = null; lastTap = 0; this.invalidate();
+        return;
+      }
+      lastTap = now;
+
+      /* แตะค้างโดยไม่ขยับ = เข้าโหมดอ่านค่า ต้องรอให้แน่ใจก่อนว่าไม่ใช่การลาก */
+      holdTimer = setTimeout(() => {
+        if (moved < 8) { this.drag = null; this.mouse = p; this.invalidate(); }
+      }, 260);
     }, { passive: true });
+
     cv.addEventListener('touchmove', (e) => {
-      if (this.drag && e.touches.length === 1) {
-        const x = e.touches[0].clientX - cv.getBoundingClientRect().left;
-        const bw = this.plot ? this.plot.barW : 6;
-        this.view.offset = Math.max(0, Math.min(this.candles.length - 20, this.drag.offset + Math.round((x - this.drag.x) / bw)));
+      if (pinch && e.touches.length === 2) {
+        const ratio = spread(e.touches) / (pinch.d || 1);
+        // กางนิ้วออก = เห็นแท่งน้อยลง = ซูมเข้า
+        this.view.count = Math.max(20, Math.min(600, Math.round(pinch.count / (ratio || 1))));
         this.invalidate();
+        return;
+      }
+      if (e.touches.length !== 1) return;
+      const p = rel(e.touches[0]);
+      if (this.mouse) { this.mouse = p; this.invalidate(); return; }   // อยู่ในโหมดอ่านค่า
+      if (!this.drag) return;
+      moved = Math.max(moved, Math.abs(p.x - this.drag.x));
+      if (moved >= 8) endHold();
+      const bw = this.plot ? this.plot.barW : 6;
+      this.view.offset = Math.max(0, Math.min(this.candles.length - 20, this.drag.offset + Math.round((p.x - this.drag.x) / bw)));
+      this.invalidate();
+    }, { passive: true });
+
+    cv.addEventListener('touchend', (e) => {
+      endHold();
+      this.drag = null;
+      if (e.touches.length < 2) pinch = null;
+      /* ยกนิ้วแล้วเก็บเส้นเล็ง ไม่งั้นค้างบังกราฟจนกว่าจะแตะที่อื่น */
+      if (this.mouse && e.touches.length === 0) {
+        setTimeout(() => { this.mouse = null; this.invalidate(); }, 2200);
       }
     }, { passive: true });
-    cv.addEventListener('touchend', () => { this.drag = null; });
+    cv.addEventListener('touchcancel', () => { endHold(); this.drag = null; pinch = null; });
   }
 
   setData({ candles, ind, setup, markers, levels }) {
