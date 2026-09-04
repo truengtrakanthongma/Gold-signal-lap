@@ -854,3 +854,110 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
 .news-limits > summary::before { content: '› '; }
 .news-limits[open] > summary::before { content: '⌄ '; }
 .news-limits > summary:hover { color: var(--text-2); }
+
+/* กล่องพับกฎหลังเข้าไม้ — บนจอคอมกางไว้ หัวข้อจึงไม่ต้องเด่น */
+.step-fold { margin: 0; }
+.step-fold > summary { list-style: none; cursor: pointer; font-size: var(--fs-xs); color: var(--muted);
+  padding: 9px 0; display: flex; align-items: center; gap: 7px; }
+.step-fold > summary::-webkit-details-marker { display: none; }
+.step-fold > summary::before { content: '▸'; transition: transform .15s; }
+.step-fold[open] > summary::before { transform: rotate(90deg); }
+.step-fold[open] > summary { color: var(--text-3); }
+
+/* ตารางน้ำหนักปัจจัย — เดิมกำหนด 11px ไว้ใน JS ทำให้กฎจอมือถือเอื้อมไม่ถึง */
+.wt-num { font-size: var(--fs-micro); }
+.wt-name { font-size: var(--fs-micro); text-align: left; white-space: nowrap; }
+
+/* ══════════════════════════════════════════════════════════════════
+   จอมือถือ — เขียนแยกไว้ท้ายไฟล์เพื่อให้ทับกฎข้างบนได้โดยไม่ต้องไล่แก้ทีละจุด
+
+   วัดหน้าจริงที่ 390px แล้วพบสามอย่าง:
+     · ตัวหนังสือ 468 จุดเล็กกว่า 13px (383 จุดอยู่ที่ 12px)
+       ภาษาไทยมีสระบนล่าง ที่ 11-12px บนมือถือแทบอ่านไม่ออก
+     · หน้าสูง 11.5 จอ ต้องเลื่อนนานมากกว่าจะเจอสิ่งที่ต้องการ
+     · กล่องแจ้งเตือนลอยทับเนื้อหาท้ายจอถาวร
+   ══════════════════════════════════════════════════════════════════ */
+@media (max-width: 720px) {
+  :root {
+    /* ขยับขึ้นทั้งชุด ไม่ใช่แก้เป็นจุด ๆ — สัดส่วนเดิมยังอยู่ ความต่างระหว่างขั้นยังเห็นชัด */
+    --fs-micro: 13px;
+    --fs-xs:    13.5px;
+    --fs-sm:    14.5px;
+    --fs-base:  15.5px;
+    --fs-md:    17px;
+    --fs-lg:    20px;
+    --fs-xl:    24px;
+    --fs-2xl:   32px;
+  }
+
+  /* ตัวหนังสือใหญ่ขึ้นแล้วต้องการที่หายใจมากขึ้นตาม ไม่งั้นบรรทัดจะชนกัน */
+  body { line-height: 1.65; }
+
+  /* สีเทาบนพื้นดำอ่านยากกลางแดด — ดันความสว่างขึ้นเฉพาะบนมือถือ */
+  :root { --text-2: #a8b3c4; --text-3: #8b96a8; }
+
+  /* ── แถวควบคุมด้านบน กินพื้นที่ก่อนถึงสิ่งที่อยากดู ────────────── */
+  .controls { gap: 6px; }
+  .controls .btn { flex: 1; min-width: 0; justify-content: center; padding: 10px 8px; }
+  /* ช่องเลือกสองอันแชร์แถวเดียวกัน ปุ่มสามอันแชร์อีกแถว
+     รวมแล้วสองบรรทัด แทนที่จะเป็นห้า — หัวจอสั้นลง สัญญาณขึ้นมาอยู่ในจอแรก */
+  .controls label { flex: 1 1 calc(50% - 3px); min-width: 0; font-size: var(--fs-micro); }
+  .controls select { width: 100%; }
+
+  /* ── เป้ากดต้องโดนง่ายด้วยนิ้วโป้ง ────────────────────────────── */
+  /* ขยายที่ตัว label ไม่ใช่ที่ช่องติ๊ก — input เป็น replaced element
+     ใส่ ::before ไม่ขึ้น พื้นที่กดจึงไม่โตจริงถ้าไปแก้ที่ช่อง */
+  .chk { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 0 6px; }
+  .chk input[type="checkbox"] { width: 20px; height: 20px; flex: none; }
+  .tab { padding: 13px 15px; min-height: 46px; }
+  .tf-btn { min-height: 44px; }
+  .controls .btn, .controls select { min-height: 46px; }
+  /* ปุ่มทุกอันในหน้า ไม่ใช่แค่ที่ระบุชื่อไว้ — ที่ 42px นิ้วโป้งพลาดบ่อย */
+  .btn, select, summary, input[type="number"], input[type="text"], .rtab { min-height: 46px; }
+  summary { display: flex; align-items: center; }
+
+  /* ── กล่องแจ้งเตือนลอย ห้ามทับเนื้อหา ─────────────────────────── */
+  .toast-wrap {
+    left: 8px; right: 8px; bottom: 8px;
+    max-height: 42vh; overflow-y: auto;
+  }
+  /* เผื่อที่ท้ายหน้า "เฉพาะตอนที่มีกล่องอยู่จริง"
+     ถ้าเผื่อไว้ตลอด จะมีที่ว่างเปล่า 388px ค้างท้ายหน้าทุกครั้งที่ไม่มีแจ้งเตือน */
+  body:has(.toast-wrap > *) main { padding-bottom: 46vh; }
+
+  /* ── ลดความสูงรวมของหน้า ──────────────────────────────────────── */
+  .card { padding: 13px; }
+
+  /* แถบแท็บที่ยังไม่ได้เปิดอันไหน ต้องบอกให้รู้ว่าแตะได้ ไม่ใช่ดูเหมือนพัง */
+  .tabs-section.tabs-collapsed::after {
+    content: 'แตะหัวข้อด้านบนเพื่อดูรายละเอียด · แตะซ้ำเพื่อปิด';
+    display: block; text-align: center; color: var(--text-3);
+    font-size: var(--fs-xs); padding: 14px 10px 4px;
+  }
+
+  /* คำบรรยายกราฟเป็นข้อความยาว 2,500px — พับไว้ ให้เนื้อหาที่ต้องใช้จริงอยู่ใกล้มือ */
+  .narration-body { max-height: 40vh; overflow-y: auto; }
+  .narration::after {
+    content: 'เลื่อนในกล่องนี้เพื่ออ่านต่อ'; display: block;
+    text-align: center; color: var(--text-3); font-size: var(--fs-micro); padding-top: 8px;
+  }
+
+  /* ตารางไม้ย้อนหลังยาวได้ไม่จำกัด ให้เลื่อนในกล่องตัวเอง */
+  #btTrades { max-height: 60vh; overflow-y: auto; }
+  .plan-why .why-body { padding: 0; }
+
+  /* ตารางกว้างเกินจอ ให้เลื่อนในกล่องตัวเอง ไม่ใช่ดันทั้งหน้า */
+  .learn-table { display: block; overflow-x: auto; white-space: nowrap; }
+  .learn-table td:first-child, .learn-table th:first-child { white-space: normal; min-width: 150px; }
+
+  /* ── แผนเทรด: ตัวเลขคือพระเอก ต้องอ่านจากระยะแขนได้ ──────────── */
+  .pm-val { font-size: var(--fs-xl); }
+  .pm-label { font-size: var(--fs-sm); }
+  .pm-note { font-size: var(--fs-xs); }
+}
+
+/* จอเล็กมาก (iPhone SE / จอแคบ) — ลดเฉพาะที่จำเป็น ไม่ลดขนาดตัวหนังสือ */
+@media (max-width: 380px) {
+  .controls .btn { padding: 10px 4px; font-size: var(--fs-xs); }
+  .card { padding: 11px; }
+}

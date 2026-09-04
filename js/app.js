@@ -58,6 +58,9 @@ const settings = {
   newsFilter: true, volFilter: true, sessionFilter: false,
   usdThb: 36.5, apiKey: '',
   alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
+  /* แผง RSI/MACD ใต้กราฟ — null = ยังไม่เคยเลือกเอง ให้ระบบตั้งตามขนาดจอ
+     บนมือถือ สามแผงซ้อนกันเหลือที่ให้กราฟราคาแค่ 60% ซึ่งดูแท่งเทียนแทบไม่ออก */
+  subPanels: null,
   // ค่าของโบรกเกอร์ — ระบบเดาแทนผู้ใช้ไม่ได้ ผิดเมื่อไหร่จำนวนไม้ผิดทั้งหมด
   contractSize: 100, minLot: 0.01, lotStep: 0.01, slManual: null,
   smartSession: true, historyBars: 3000,
@@ -197,7 +200,7 @@ function setMode(simple) {
   if (chart) {
     // โหมดง่ายเหลือกราฟราคาอย่างเดียว แผง RSI/MACD เป็นของคนที่อ่านเป็นแล้ว
     chart.panels.rsi = simple ? false : $('togRSI').checked;
-    chart.panels.macd = simple ? false : $('togMACD').checked;
+    chart.panels.macd = simple ? false : $('togMACD').checked;   // ช่องติ๊กถูกตั้งตามขนาดจอไว้แล้ว
     chart.showBB = simple ? false : $('togBB').checked;
   }
   $('modeToggle').innerHTML = simple ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11M6 2.5v4M11 9.5v4"/></svg> โหมดเต็ม` : `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M5.6 9.4a3 3 0 0 0 4.8 0M6 6.4v.01M10 6.4v.01"/></svg> โหมดง่าย`;
@@ -227,10 +230,30 @@ function bindEvents() {
   $('tourBtn').addEventListener('click', () => new Tour().start());
   $('resetZoom').addEventListener('click', () => chart.scrollToEnd());
 
+  /*
+   * จอแคบ = ให้กราฟราคาเป็นหลัก
+   *
+   * วัดแล้วบนจอ 390px ถ้าเปิด volume + RSI + MACD ครบ กราฟราคาเหลือ 60% ของ 330px
+   * ราว 198px ซึ่งแท่งเทียนเล็กจนอ่านรูปแบบไม่ออก ซึ่งเป็นสิ่งเดียวที่คนเปิดกราฟมาดู
+   * ตั้งให้ครั้งแรกเท่านั้น ถ้าผู้ใช้กดเปิดเองเมื่อไร ระบบจะจำค่านั้นไว้แทน
+   */
+  if (settings.subPanels === null) {
+    settings.subPanels = window.innerWidth > 720;
+    saveSettings();
+  }
+  if (!settings.subPanels) {
+    $('togRSI').checked = false;
+    $('togMACD').checked = false;
+    if (chart) { chart.panels.rsi = false; chart.panels.macd = false; }
+  }
+  const rememberPanels = () => {
+    settings.subPanels = $('togRSI').checked || $('togMACD').checked;
+    saveSettings();
+  };
   $('togBB').addEventListener('change', (e) => { chart.showBB = e.target.checked; chart.render(); });
   $('togLevels').addEventListener('change', (e) => { chart.showLevels = e.target.checked; chart.render(); });
-  $('togRSI').addEventListener('change', (e) => { chart.panels.rsi = e.target.checked; chart.render(); });
-  $('togMACD').addEventListener('change', (e) => { chart.panels.macd = e.target.checked; chart.render(); });
+  $('togRSI').addEventListener('change', (e) => { chart.panels.rsi = e.target.checked; rememberPanels(); chart.render(); });
+  $('togMACD').addEventListener('change', (e) => { chart.panels.macd = e.target.checked; rememberPanels(); chart.render(); });
   $('togMarkers').addEventListener('change', (e) => {
     chart.setData({ markers: e.target.checked && state.bt ? state.bt.trades.map((t) => ({ index: t.index, side: t.side })) : [] });
     chart.render();
@@ -284,9 +307,26 @@ function bindEvents() {
   $('setUsdThb').addEventListener('change', (e) => { settings.usdThb = +e.target.value || 36.5; saveSettings(); updatePriceHeader(); });
   $('setApiKey').addEventListener('change', (e) => { settings.apiKey = e.target.value.trim(); saveSettings(); });
 
+  /*
+   * บนมือถือ แท็บเริ่มต้นแบบ "ยังไม่เปิดอันไหน"
+   *
+   * วัดหน้าจริงแล้วพบว่าแท็บทดสอบย้อนหลังที่เปิดค้างไว้ตั้งแต่แรก สูง 5,320px
+   * คือครึ่งหนึ่งของทั้งหน้า คนเปิดแอปบนมือถือมาดูสัญญาณกับแผน
+   * แต่ต้องเลื่อนผ่านผลวิเคราะห์ที่ไม่ได้ขอ 6 จอกว่าจะถึงท้ายหน้า
+   * บนจอคอมเปิดค้างไว้เหมือนเดิม เพราะที่ทางเหลือเฟือและเห็นพร้อมกันได้
+   */
+  const narrow = () => window.innerWidth <= 720;
+  if (narrow()) {
+    document.querySelectorAll('.tab, .tab-panel').forEach((x) => x.classList.remove('active'));
+    document.querySelector('.tabs-section').classList.add('tabs-collapsed');
+  }
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
+    /* แตะแท็บที่เปิดอยู่ = ปิด (บนมือถือเท่านั้น) จะได้ม้วนเก็บได้โดยไม่ต้องเลื่อนกลับขึ้นไป */
+    const closing = narrow() && t.classList.contains('active');
     document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach((x) => x.classList.remove('active'));
+    document.querySelector('.tabs-section').classList.toggle('tabs-collapsed', closing);
+    if (closing) return;
     t.classList.add('active');
     $('tab-' + t.dataset.tab).classList.add('active');
     if (t.dataset.tab === 'backtest') drawEquity();
@@ -971,16 +1011,22 @@ function renderPlan() {
         </tbody></table>
       </div></div>
 
-      <div class="step"><span class="step-n">3</span><div>
-        <b>หลังเข้าไม้แล้ว — ห้ามทำอะไรอีก</b>
-        <ul class="manage-list">${s.manage.map((m) => `<li>${m}</li>`).join('')}</ul>
-      </div></div>
+      <!-- ขั้น 3-4 เป็นกฎที่เหมือนกันทุกไม้ อ่านครั้งเดียวก็จำได้
+           บนมือถือจึงพับไว้ เพื่อให้ตัวเลขที่ต้องใช้จริง (ขั้น 1-2) ไม่ถูกดันลงไปไกล
+           บนจอคอมกางไว้ตามเดิม เพราะที่ทางเหลือเฟือ -->
+      <details class="step-fold"${window.innerWidth > 720 ? ' open' : ''}>
+        <summary>กฎหลังเข้าไม้แล้ว (เหมือนกันทุกไม้ — อ่านครั้งเดียวพอ)</summary>
+        <div class="step"><span class="step-n">3</span><div>
+          <b>หลังเข้าไม้แล้ว — ห้ามทำอะไรอีก</b>
+          <ul class="manage-list">${s.manage.map((m) => `<li>${m}</li>`).join('')}</ul>
+        </div></div>
 
-      <div class="step"><span class="step-n">4</span><div>
-        <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
-        <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
-        ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>
-      </div></div>
+        <div class="step"><span class="step-n">4</span><div>
+          <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
+          <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
+          ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>
+        </div></div>
+      </details>
 
       <div class="invalidate"><b>แผนนี้ยกเลิกเมื่อไร</b>
         <ul>
@@ -2011,9 +2057,9 @@ function renderWeights() {
     divergence: 'RSI Divergence', vwap: 'ตำแหน่งเทียบ VWAP', stoch: 'Stochastic ตัดกัน',
   };
   $('weightBox').innerHTML = Object.entries(WEIGHTS).map(([k, w]) => `
-    <div class="mtf-row"><span style="font-size:11px">${w}</span>
+    <div class="mtf-row"><span class="wt-num">${w}</span>
       <div class="mtf-bar"><i style="background:var(--accent);left:0;width:${(w / 20) * 100}%"></i></div>
-      <span style="font-size:11px;text-align:left;white-space:nowrap">${names[k]}</span>
+      <span class="wt-name">${names[k]}</span>
     </div>`).join('') + `<p class="tiny">น้ำหนักรวม ${total} — คะแนน 100 คือทุกปัจจัยเห็นตรงกันเต็มที่ (แทบไม่เกิดขึ้นจริง คะแนน 45+ ถือว่าแข็งแรงมากแล้ว)</p>`;
 }
 

@@ -1214,8 +1214,28 @@ section('17) ระบบออกแบบ — ความสม่ำเส�
   ok('ไม่มีขนาดตัวอักษรดิบหลงเหลือ — ต้องใช้โทเคนสเกลเท่านั้น',
     rawSizes.length === 0, `เจอ ${rawSizes.length} จุด: ${[...new Set(rawSizes)].join(', ')}`);
 
-  const scaleTokens = [...css.matchAll(/--fs-([a-z0-9]+):/g)].map((m) => m[1]);
-  ok('สเกลตัวอักษรมีไม่เกิน 8 ขนาด', scaleTokens.length <= 8, `มี ${scaleTokens.length}`);
+  /* นับ "ขั้นของสเกล" ไม่ใช่ "จำนวนบรรทัดที่ประกาศ"
+     การประกาศชื่อเดิมซ้ำใน media query คือการปรับขนาดตามจอ ซึ่งเป็นเรื่องที่ควรทำ
+     สิ่งที่ต้องกันคือการงอกขั้นใหม่ ๆ ขึ้นมาเรื่อย ๆ จนไม่เหลือระบบ */
+  const scaleTokens = [...new Set([...css.matchAll(/--fs-([a-z0-9]+):/g)].map((m) => m[1]))];
+  ok('สเกลตัวอักษรมีไม่เกิน 8 ขั้น', scaleTokens.length <= 8, `มี ${scaleTokens.length}: ${scaleTokens.join(', ')}`);
+
+  /* จอมือถือต้องใช้ "ชื่อเดิมทั้งชุด" ไม่ใช่เพิ่มขั้นใหม่เฉพาะจอเล็ก
+     ถ้าปล่อยให้เพิ่มได้ สุดท้ายจะมีสองระบบที่ไม่ตรงกัน แก้ที่หนึ่งลืมอีกที่ */
+  const mobileBlock = css.slice(css.indexOf('@media (max-width: 720px)', css.indexOf('จอมือถือ')));
+  const mobileTokens = [...new Set([...mobileBlock.matchAll(/--fs-([a-z0-9]+):/g)].map((m) => m[1]))];
+  ok('จอมือถือปรับขนาดครบทั้งสเกล ไม่ใช่แก้บางขั้นแล้วเหลื่อมกัน',
+    mobileTokens.length === scaleTokens.length && mobileTokens.every((t) => scaleTokens.includes(t)),
+    `จอมือถือปรับ ${mobileTokens.length} ขั้น จากทั้งหมด ${scaleTokens.length}`);
+
+  /* ตัวหนังสือบนมือถือต้องไม่เล็กกว่า 12px — ภาษาไทยมีสระบนล่าง
+     ที่ 11px บนจอมือถือ สระกับวรรณยุกต์ทับกันจนอ่านไม่ออก */
+  const mobileSizes = [...mobileBlock.matchAll(/--fs-[a-z0-9]+:\s*([0-9.]+)px/g)].map((m) => parseFloat(m[1]));
+  ok('ขนาดเล็กสุดบนมือถือไม่ต่ำกว่า 12px', mobileSizes.length > 0 && Math.min(...mobileSizes) >= 12,
+    `เล็กสุด ${mobileSizes.length ? Math.min(...mobileSizes) : '-'}px`);
+  const deskSizes = [...css.slice(0, css.indexOf('จอมือถือ')).matchAll(/--fs-[a-z0-9]+:\s*([0-9.]+)px/g)].map((m) => parseFloat(m[1]));
+  ok('ทุกขั้นบนมือถือใหญ่กว่าบนจอคอม (ไม่ใช่เผลอทำให้เล็กลง)',
+    Math.min(...mobileSizes) > Math.min(...deskSizes) && Math.max(...mobileSizes) > Math.max(...deskSizes));
   const used = new Set([...css.matchAll(/var\(--fs-([a-z0-9]+)\)/g)].map((m) => m[1]));
   ok('ทุกขนาดที่ใช้อยู่ในสเกลที่ประกาศไว้',
     [...used].every((u) => scaleTokens.includes(u)), [...used].filter((u) => !scaleTokens.includes(u)).join(','));
