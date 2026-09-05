@@ -3158,6 +3158,46 @@ section('50) ตลาดทองปิดเสาร์-อาทิตย์
   ok('โหมดตรวจสถานะยังตอบ ไม่ใช่เงียบหาย', /แจ้งว่าตลาดปิด/.test(bot3));
 }
 
+section('51) ระงับสัญญาณแล้ว ต้องไม่มีแผนให้กด ไม่ใช่แผนพร้อมป้ายเตือน');
+{
+  /*
+   * รายงานจากผู้ใช้: "ตลาดปิดอยู่มีสัญญาณมาได้ไง ควรจะหยุดนิ่งนะ"
+   *
+   * ตรวจแล้วเจอว่าถูกต้อง — พาดหัวขึ้นถูกว่า "ตอนนี้ยังไม่ต้องทำอะไร" (action = wait)
+   * แต่ rebuildSetup ดูแค่คะแนนกับเกณฑ์ ไม่เคยดู state.blocks เลย
+   * ช่องแผนใต้พาดหัวจึงยังขึ้น "เข้าขาย" พร้อมราคาเข้า/SL/TP/จำนวนล็อตครบ
+   * และกราฟก็ลากเส้นแผนให้ด้วย เพราะ chart.setData รับ state.setup ไปตรง ๆ
+   *
+   * วัดจริงตอนตลาดปิด (เกณฑ์ 1 เพื่อบังคับให้เกิดแผน):
+   *   ก่อนแก้ → setup = { entry 2675.36, sl 2700.42, tp1 2650.30, lots 0.01 } · ช่องแผนขึ้น "เข้าขาย"
+   *   หลังแก้ → setup = null · ช่องแผนขึ้นเหตุผลที่ระงับ
+   *
+   * เป็นรูปแบบเดียวกับที่เคยแก้ตอน "ไม้ที่เสี่ยงเกินเพดาน" แต่ตอนนั้นแก้เฉพาะ
+   * เพดานความเสี่ยง ไม่ได้ทำให้ครอบทุกเหตุที่ระงับสัญญาณ
+   */
+  const fs4 = await import('node:fs');
+  const app4 = fs4.readFileSync('js/app.js', 'utf8');
+  const rebuild = app4.slice(app4.indexOf('function rebuildSetup'), app4.indexOf('function renderPlan'));
+
+  ok('rebuildSetup ดู state.blocks ด้วย ไม่ใช่ดูแค่คะแนน', /state\.blocks/.test(rebuild));
+  ok('ถูกระงับ = ไม่สร้างแผน', /const held = \(state\.blocks \|\| \[\]\)\.length > 0;/.test(rebuild)
+    && /state\.setup = !held &&/.test(rebuild));
+
+  /* เส้นแผนบนกราฟมาจาก state.setup ตัวเดียวกัน ตัดที่ต้นทางจึงครอบทั้งช่องแผนและกราฟ */
+  ok('กราฟรับแผนจาก state.setup ตัวเดียวกัน (ตัดที่ต้นทางแล้วครอบทั้งสองที่)',
+    /chart\.setData\(\{[\s\S]{0,120}setup: state\.setup/.test(app4));
+
+  const plan = app4.slice(app4.indexOf('function renderPlan'), app4.indexOf('function renderPlan') + 1400);
+  ok('ช่องแผนบอกเหตุผลจริงที่ระงับ', /ระบบระงับสัญญาณไว้เพราะ/.test(plan));
+  ok('ไม่โทษว่า "คะแนนไม่ถึงเกณฑ์" ทั้งที่ระงับด้วยเหตุอื่น', /why \|\| \(state\.scored/.test(plan));
+
+  /* ทางเสียงเตือนต้องเงียบด้วย ไม่ใช่เงียบแค่หน้าจอ */
+  ok('เตือนล่วงหน้าไม่ทำงานเมื่อถูกระงับ', /if \(\(state\.blocks \|\| \[\]\)\.length\) return;/.test(app4));
+  ok('สัญญาณยืนยันอิง state.action ซึ่งเป็น wait เมื่อถูกระงับ',
+    /const passes = !!state\.hold && blocks\.length === 0;/.test(app4)
+    && /state\.action = passes \?/.test(app4));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`ผ่าน ${pass} / ล้มเหลว ${fail}`);
 process.exit(fail ? 1 : 0);

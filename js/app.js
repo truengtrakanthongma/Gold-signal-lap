@@ -939,7 +939,19 @@ function rebuildSetup() {
   const score = state.combined.score;
   const side = state.hold ? state.hold.side : Math.sign(score);
 
-  state.setup = state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold) && side
+  /*
+   * ถูกระงับสัญญาณ = ต้องไม่มีแผนให้กด ไม่ใช่แผนพร้อมป้ายเตือน
+   *
+   * เดิมตรงนี้ดูแค่คะแนนกับเกณฑ์ ไม่เคยดู state.blocks เลย
+   * ตอนตลาดปิด พาดหัวขึ้นถูกว่า "ตอนนี้ยังไม่ต้องทำอะไร" แต่ช่องแผนใต้พาดหัว
+   * ยังขึ้น "เข้าขาย" พร้อมราคาเข้า/SL/TP/จำนวนล็อตครบ และกราฟก็ลากเส้นแผนให้ด้วย
+   * ผู้ใช้เห็นตัวเลขพร้อมกดก่อนจะทันอ่านคำเตือน — ซึ่งคือสิ่งที่รายงานเข้ามาจริง
+   *
+   * เป็นรูปแบบเดียวกับที่เคยแก้ไปแล้วตอน "ไม้ที่เสี่ยงเกินเพดาน"
+   * แต่ตอนนั้นแก้เฉพาะเพดานความเสี่ยง ไม่ได้แก้ให้ครอบทุกเหตุที่ระงับสัญญาณ
+   */
+  const held = (state.blocks || []).length > 0;
+  state.setup = !held && state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold) && side
     ? buildSetup(state.ctx, at.index, { ...state.scored, side }, {
         account: settings.account, riskPct: settings.riskPct, entryPrice: at.price, side,
         targetR: activeTargetR(),
@@ -957,9 +969,11 @@ function renderPlan() {
   if (card) card.classList.toggle('no-plan', !state.setup);
   if (!state.setup) {
     box.className = 'plan-empty';
-    box.textContent = state.scored && state.scored.ready
+    /* เหตุผลต้องตรงกับความจริง ถ้าระงับเพราะตลาดปิด อย่าไปโทษว่าคะแนนไม่ถึงเกณฑ์ */
+    const why = (state.blocks || []).length ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ') : null;
+    box.textContent = why || (state.scored && state.scored.ready
       ? `คะแนนปัจจุบัน ${state.combined.score.toFixed(1)} ยังไม่ถึงเกณฑ์ ${settings.threshold} — การไม่เข้าเทรดคือการตัดสินใจอย่างหนึ่ง`
-      : 'ข้อมูลยังไม่พอสำหรับคำนวณ (ต้องการอย่างน้อย ~200 แท่ง)';
+      : 'ข้อมูลยังไม่พอสำหรับคำนวณ (ต้องการอย่างน้อย ~200 แท่ง)');
     sizeBox.innerHTML = '';
     sizeBox.style.display = 'none';
     return;
