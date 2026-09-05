@@ -86,6 +86,38 @@ async function loadCandles() {
   return { bars: null, attempts };
 }
 
+/**
+ * ดึงกรอบเวลาใหญ่จากแหล่งเดียวกับที่กรอบหลักใช้สำเร็จ
+ *
+ * ทำไมต้องมี: บอทเคยให้คะแนนจากกรอบ 15 นาทีอย่างเดียว ส่วนหน้าเว็บผสมสามกรอบ
+ * ตัวเลขเดียวกันจึงหมายคนละอย่างในสองที่ วัดแล้วต่างกันเฉลี่ย 7.7 คะแนน
+ * และมี 179 ครั้งใน 5,700 แท่งที่บอทส่งสัญญาณออกไป ทั้งที่หน้าเว็บตีตกแล้ว
+ * เพราะบอทไม่มีการหักคะแนนตอนกรอบเล็กสวนกรอบใหญ่เลย
+ *
+ * ใช้แหล่งเดิมที่กรอบหลักโหลดสำเร็จ ไม่ไล่หาใหม่ เพราะข้อมูลต้องมาจากเจ้าเดียวกัน
+ * ไม่งั้นจะเอาราคาของคนละตลาดมาเทียบกัน
+ */
+async function loadHigherTf(key) {
+  const src = SOURCES[key];
+  const out = {};
+  if (!src) return out;
+  for (const want of ['1h', '4h']) {
+    if (want === CFG.interval) continue;
+    const tf = src.tf[want];
+    if (tf === undefined) continue;
+    try {
+      const res = await fetch(src.url(tf, 400));
+      if (!res.ok) { log(`กรอบ ${want} โหลดไม่ได้ (รหัส ${res.status})`); continue; }
+      const bars = src.parse(await res.json());
+      /* ต้องมีแท่งพอให้ EMA200 นิ่ง ไม่งั้นคะแนนกรอบนั้นเชื่อไม่ได้
+         เอาข้อมูลไม่พอมาผสม แย่กว่าไม่เอามาเลย */
+      if (bars.length < 260) { log(`กรอบ ${want} ได้แค่ ${bars.length} แท่ง ไม่พอ`); continue; }
+      out[want] = bars;
+    } catch (e) { log(`กรอบ ${want} โหลดไม่ได้: ${e.message}`); }
+  }
+  return out;
+}
+
 /** ตัวกรองความผันผวน ชุดเดียวกับหน้าเว็บ */
 function blocked(ctx, scored) {
   return scored.atrPct < ctx.cfg.minAtrPct || scored.atrPct > ctx.cfg.maxAtrPct;
@@ -283,14 +315,41 @@ async function main() {
   const i = closed.length - 1;
   const last = closed[i];
 
-  const scored = scoreAt(ctx, i);
-  if (!scored.ready) { log('ข้อมูลยังไม่พอให้ตัวชี้วัดนิ่ง'); return; }
+  const base = scoreAt(ctx, i);
+  if (!base.ready) { log('ข้อมูลยังไม่พอให้ตัวชี้วัดนิ่ง'); return; }
+
+  /*
+   * ผสมกรอบเวลาใหญ่แบบเดียวกับหน้าเว็บ
+   *
+   * ต้องเป็นตัวเลขเดียวกันทั้งสองที่ ไม่งั้น "คะแนน 42" ที่เห็นบนเว็บ
+   * กับ "คะแนน 42" ที่เด้งเข้า Discord เป็นคนละเรื่องกัน และผู้ใช้ไม่มีทางรู้
+   *
+   * ถ้ากรอบใหญ่โหลดไม่ได้ combineTimeframes จะเฉลี่ยเฉพาะกรอบที่มี
+   * ไม่ใช่นับเป็นคะแนน 0 ซึ่งจะกดคะแนนลงจนสัญญาณดี ๆ หายไปเงียบ ๆ
+   */
+  const htfBars = await loadHigherTf(key);
+  const htfScored = {};
+  for (const [want, hb] of Object.entries(htfBars)) {
+    try {
+      const hc = hb.filter((b) => b.closed !== false);
+      const hctx = buildContext(hc, { ...DEFAULT_CFG, threshold: CFG.threshold });
+      htfScored[want] = scoreAt(hctx, hc.length - 1);
+    } catch (e) { log(`คิดคะแนนกรอบ ${want} ไม่ได้: ${e.message}`); }
+  }
+  const combined = combineTimeframes(base, htfScored['1h'], htfScored['4h']);
+  /* ใช้คะแนนผสมตัดสิน แต่เก็บรายละเอียดของกรอบหลักไว้เล่าเหตุผล */
+  const scored = { ...base, score: combined.score, mtfNotes: combined.notes };
 
   const state = loadState();
   const side = Math.sign(scored.score);
   const strong = Math.abs(scored.score) >= CFG.threshold;
 
-  log(`แท่งล่าสุด ${new Date(last.t).toISOString()} ราคา ${last.c.toFixed(2)} คะแนน ${scored.score.toFixed(1)} (เกณฑ์ ${CFG.threshold})`);
+  const tfHave = ['15m/หลัก', ...Object.keys(htfScored)].join(', ');
+  log(`แท่งล่าสุด ${new Date(last.t).toISOString()} ราคา ${last.c.toFixed(2)} `
+    + `คะแนนกรอบหลัก ${base.score.toFixed(1)} → คะแนนผสม ${scored.score.toFixed(1)} (เกณฑ์ ${CFG.threshold}) · กรอบที่ใช้ได้: ${tfHave}`);
+  if (combined.missing && combined.missing.length) {
+    log(`⚠ ขาดกรอบเวลาใหญ่ ${combined.missing.length} กรอบ — คะแนนยังไม่ได้ยืนยันกับภาพใหญ่`);
+  }
 
   /*
    * ตรวจสถานะตามสั่ง: รายงานภาพตลาด "จริง" ตอนนี้ ไม่ว่าจะมีสัญญาณหรือไม่

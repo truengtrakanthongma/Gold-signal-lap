@@ -384,9 +384,35 @@ export function scoreAt(ctx, i) {
 /** รวมคะแนนหลายกรอบเวลา — กรอบใหญ่คือ "กระแสน้ำ" กรอบเล็กคือ "จังหวะเข้า" */
 export function combineTimeframes(entry, htf1, htf2) {
   const w = [0.55, 0.30, 0.15];
-  const parts = [entry, htf1, htf2].map((s) => (s && s.ready ? s.score : 0));
-  let total = parts[0] * w[0] + parts[1] * w[1] + parts[2] * w[2];
+  const src = [entry, htf1, htf2];
+  const have = src.map((s) => !!(s && s.ready));
+  const parts = src.map((s) => (s && s.ready ? s.score : 0));
+
+  /*
+   * *** ข้อมูลที่ไม่มี ไม่เท่ากับข้อมูลที่บอกว่า "เฉย ๆ" ***
+   *
+   * ของเดิมให้กรอบเวลาที่โหลดไม่ได้เป็นคะแนน 0 แล้วคูณน้ำหนักตามปกติ
+   * ซึ่งแปลว่า "กรอบใหญ่ไม่เห็นด้วย" ทั้งที่ความจริงคือ "ยังไม่รู้"
+   *
+   * ผลที่วัดได้: ถ้า 1h กับ 4h โหลดไม่ได้ สัญญาณที่ควรได้ 60 จะเหลือ 33
+   * และสัญญาณที่ควรได้ 40 จะเหลือ 22 — ตกเกณฑ์ 35 หายไปเลย
+   * ทั้งที่กราฟไม่ได้เปลี่ยนอะไร และไม่มีอะไรบอกผู้ใช้ว่าเกิดอะไรขึ้น
+   *
+   * กรอบใหญ่โหลดไม่ได้บ่อยกว่าที่คิด (โดนจำกัดจำนวนคำขอเวลาโหลดสามกรอบติดกัน)
+   * ผู้ใช้จึงเจอสัญญาณหายไปเฉย ๆ แล้วสรุปว่า "ระบบไม่แม่น"
+   *
+   * ทางแก้: เฉลี่ยน้ำหนักเฉพาะกรอบที่มีข้อมูลจริง กรอบที่ขาดไม่มีสิทธิ์ออกเสียง
+   */
+  const wSum = w.reduce((a, x, i) => a + (have[i] ? x : 0), 0);
   const notes = [];
+  if (!wSum) return { score: 0, parts, notes: ['ยังไม่มีข้อมูลกรอบเวลาไหนพร้อมใช้'], missing: [1, 2] };
+  let total = w.reduce((a, x, i) => a + (have[i] ? parts[i] * x : 0), 0) / wSum;
+
+  const missing = [1, 2].filter((i) => !have[i]);
+  if (missing.length) {
+    notes.push(`โหลดกรอบเวลาใหญ่ไม่ได้ ${missing.length} กรอบ — คิดคะแนนจากกรอบที่มีข้อมูลเท่านั้น `
+      + 'ไม่ได้หักคะแนนทิ้ง แต่แปลว่ายังไม่ได้ยืนยันกับภาพใหญ่ ให้ระวังมากกว่าปกติ');
+  }
   // ถ้ากรอบเล็กสวนกรอบใหญ่ที่มีเทรนด์แรง → ลดคะแนนลง เพราะสถิติแพ้บ่อย
   if (htf1 && htf1.ready && Math.sign(parts[0]) !== 0 && Math.sign(parts[1]) !== 0 && Math.sign(parts[0]) !== Math.sign(parts[1])) {
     total *= 0.6;
@@ -394,7 +420,7 @@ export function combineTimeframes(entry, htf1, htf2) {
   } else if (htf1 && htf1.ready && Math.sign(parts[0]) === Math.sign(parts[1]) && parts[0] !== 0) {
     notes.push('กรอบเล็กและกรอบใหญ่ไปทางเดียวกัน — เป็นเงื่อนไขที่ทำให้ระยะทางกำไรมักไกลกว่าปกติ');
   }
-  return { score: clamp(total, -100, 100), parts, notes };
+  return { score: clamp(total, -100, 100), parts, notes, missing };
 }
 
 /**

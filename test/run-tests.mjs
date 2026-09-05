@@ -6,7 +6,7 @@
  *  3. การจำลองเทรดใน backtest สมเหตุสมผล (ลำดับเวลา ราคาเข้า ทิศทาง SL/TP ขนาดไม้)
  */
 import * as ta from '../js/indicators.js';
-import { buildContext, scoreAt, buildSetup, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
+import { buildContext, scoreAt, buildSetup, combineTimeframes, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
 import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle, evaluateTarget } from '../js/backtest.js';
 import { tuneStrategy, evaluateStrategy, toBacktestOpts, describeStrategy, DEFAULT_STRATEGY } from '../js/strategy.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
@@ -2907,6 +2907,96 @@ section('43) เกณฑ์สัญญาณต้องนิ่ง — ผ�
         return true;   // ไม่เจอในช่วงนี้ก็ไม่ผิด ตัวจับทำงานนาน ๆ ครั้ง
       })(), `พบ ${info} แท่ง`);
   }
+}
+
+section('44) ข้อมูลที่ขาด ต้องไม่ถูกนับเป็น "ไม่เห็นด้วย"');
+{
+  /*
+   * บั๊กที่เจอ: กรอบเวลาใหญ่โหลดไม่ได้ (โดนจำกัดคำขอ/แหล่งล่ม) แล้วโค้ดให้คะแนน 0
+   * คูณน้ำหนักตามปกติ ซึ่งแปลว่า "กรอบใหญ่ไม่เห็นด้วย" ทั้งที่ความจริงคือ "ยังไม่รู้"
+   *
+   * วัดได้: สัญญาณที่ควรได้ 60 เหลือ 33 · สัญญาณที่ควรได้ 40 เหลือ 22 ตกเกณฑ์ไปเลย
+   * ทั้งที่กราฟไม่ได้เปลี่ยน และไม่มีอะไรบอกผู้ใช้ — เขาเห็นแค่ "สัญญาณหายไป"
+   */
+  const s = (v) => ({ ready: true, score: v });
+
+  ok('ครบทุกกรอบและเห็นตรงกัน → ได้คะแนนเต็ม',
+    Math.abs(combineTimeframes(s(60), s(60), s(60)).score - 60) < 1e-9);
+  ok('ขาดกรอบ 1h แต่ที่เหลือเห็นตรงกัน → คะแนนต้องไม่ถูกหักทิ้ง',
+    Math.abs(combineTimeframes(s(60), undefined, s(60)).score - 60) < 1e-9);
+  ok('ขาดทั้ง 1h และ 4h → ยังได้คะแนนของกรอบหลักเต็ม',
+    Math.abs(combineTimeframes(s(60), undefined, undefined).score - 60) < 1e-9);
+  ok('สัญญาณ 40 ตอนกรอบใหญ่หาย ต้องยังเป็น 40 (เดิมเหลือ 22 = ตกเกณฑ์)',
+    Math.abs(combineTimeframes(s(40), undefined, undefined).score - 40) < 1e-9);
+
+  /* ต้องบอกผู้ใช้ด้วย ไม่ใช่เงียบ ๆ แล้วให้คะแนนเต็มไปเลย
+     คะแนนที่ยังไม่ได้ยืนยันกับภาพใหญ่ ไม่เท่ากับคะแนนที่ยืนยันแล้ว */
+  {
+    const r = combineTimeframes(s(40), undefined, undefined);
+    ok('บอกว่ากรอบไหนขาด', Array.isArray(r.missing) && r.missing.length === 2);
+    ok('มีข้อความอธิบายให้ผู้ใช้อ่าน', r.notes.some((t) => /กรอบเวลาใหญ่/.test(t)));
+  }
+  {
+    const full = combineTimeframes(s(40), s(40), s(40));
+    ok('ครบทุกกรอบ → ไม่มีคำเตือนค้าง', full.missing.length === 0 && !full.notes.some((t) => /โหลดกรอบเวลาใหญ่ไม่ได้/.test(t)));
+  }
+
+  /* การหักคะแนนตอนสวนเทรนด์ต้องยังทำงาน — นั่นคือของจริงที่ต้องเก็บไว้ */
+  {
+    const against = combineTimeframes(s(60), s(-60), s(60)).score;
+    ok('กรอบเล็กสวนกรอบใหญ่ → ยังหักคะแนนหนัก', against < 30, `ได้ ${against.toFixed(1)}`);
+  }
+  ok('ไม่มีข้อมูลเลยสักกรอบ → คะแนน 0 ไม่ใช่ NaN',
+    combineTimeframes(undefined, undefined, undefined).score === 0);
+}
+
+section('45) บอทกับหน้าเว็บต้องคิดคะแนนด้วยสูตรเดียวกัน');
+{
+  /*
+   * บอทเคยให้คะแนนจากกรอบ 15 นาทีอย่างเดียว ส่วนเว็บผสมสามกรอบ
+   * "คะแนน 42" บนเว็บกับใน Discord จึงเป็นคนละเรื่อง และผู้ใช้ไม่มีทางรู้
+   *
+   * วัดบน 5,700 แท่ง: ต่างกันเฉลี่ย 7.7 คะแนน และมี 179 ครั้งที่บอทส่งสัญญาณ
+   * ที่หน้าเว็บตีตกไปแล้ว เพราะบอทไม่มีการหักคะแนนตอนสวนเทรนด์เลย
+   */
+  const fs = await import('node:fs');
+  const bot = fs.readFileSync('bot/run.mjs', 'utf8');
+
+  ok('บอทเรียกใช้ตัวผสมกรอบเวลาจริง ไม่ใช่แค่ import ทิ้งไว้', /combineTimeframes\(base,/.test(bot));
+  ok('บอทโหลดกรอบเวลาใหญ่มาด้วย', /async function loadHigherTf/.test(bot) && /await loadHigherTf\(/.test(bot));
+  ok('ใช้แหล่งข้อมูลเดียวกับกรอบหลัก (ห้ามเอาราคาคนละตลาดมาเทียบ)',
+    /loadHigherTf\(key\)/.test(bot) && /function loadHigherTf\(key\)/.test(bot));
+  ok('กรอบใหญ่ที่ข้อมูลไม่พอ ต้องไม่เอามาผสม', /bars\.length < 260[\s\S]{0,90}continue/.test(bot));
+  ok('ตัดสินด้วยคะแนนผสม ไม่ใช่คะแนนกรอบเดียว', /score: combined\.score/.test(bot));
+  ok('บันทึกไว้ในล็อกว่าใช้กรอบไหนได้บ้าง — จะได้ตรวจย้อนได้ว่าคะแนนมาจากอะไร',
+    /กรอบที่ใช้ได้/.test(bot) && /คะแนนผสม/.test(bot));
+  ok('ถ้าขาดกรอบใหญ่ ต้องเขียนล็อกเตือน', /ขาดกรอบเวลาใหญ่/.test(bot));
+}
+
+section('46) ค่าที่บันทึกไว้เสีย ต้องไม่ทำให้ระบบพังเงียบ');
+{
+  /*
+   * loadSettings เดิมใช้ Object.assign เทค่าจาก localStorage เข้ามาทั้งก้อน
+   * อะไรก็ผ่าน — null, ข้อความ, ติดลบ
+   *   threshold = null  → เทียบกับ 0  → "ทุกแท่งคือสัญญาณ"
+   *   threshold = 'abc' → เทียบกับ NaN → "ไม่มีสัญญาณเลยตลอดกาล"
+   * ทั้งสองกรณีหน้าจอดูปกติทุกอย่าง ไม่มีอะไรฟ้อง
+   */
+  const fs = await import('node:fs');
+  const app = fs.readFileSync('js/app.js', 'utf8');
+
+  ok('มีตารางขอบเขตของค่าตั้งค่า', /const SETTING_RANGE = \{/.test(app));
+  const range = app.slice(app.indexOf('const SETTING_RANGE'), app.indexOf('function loadSettings'));
+  for (const key of ['threshold', 'riskPct', 'account', 'slAtr', 'maxHold']) {
+    ok(`${key} มีขอบเขตกำหนดไว้`, range.includes(`${key}: [`));
+  }
+  const load = app.slice(app.indexOf('function loadSettings'), app.indexOf('function saveSettings'));
+  ok('ตรวจว่าเป็นตัวเลขจริง ไม่ใช่รับมาทั้งก้อน', /Number\.isFinite\(val\)/.test(load));
+  ok('ตรวจว่าอยู่ในช่วงที่ยอมรับได้', /val < range\[0\] \|\| val > range\[1\]/.test(load));
+  ok('ค่าที่ใช้ไม่ได้ → คงค่าตั้งต้น ไม่ใช่รับเข้ามา', /continue;/.test(load));
+  ok('บอกผู้ใช้ว่าค่าไหนถูกทิ้ง ไม่ใช่แก้เงียบ ๆ', /settingsRejected/.test(load) && /settingsRejected/.test(app.slice(app.indexOf('function loadSettings') + 100)));
+  ok('ไม่ใช้ Object.assign เทดิบ ๆ อีกแล้ว', !/Object\.assign\(settings, JSON\.parse/.test(app));
+  ok('รายการเหตุการณ์ที่เสีย ต้องกลับเป็นอาเรย์ว่าง ไม่ใช่ค่าแปลก ๆ', /Array\.isArray\(state\.events\)/.test(load));
 }
 
 console.log(`\n${'─'.repeat(52)}`);

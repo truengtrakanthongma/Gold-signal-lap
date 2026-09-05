@@ -89,9 +89,52 @@ const alerts = new AlertCenter();
 let chart, equityCtx;
 
 // ── ตั้งค่า ──────────────────────────────────────────────────────────────
+
+/*
+ * ขอบเขตที่ยอมรับได้ของค่าตัวเลขแต่ละตัว
+ *
+ * ทำไมต้องมี: ของเดิมใช้ Object.assign เทค่าจาก localStorage เข้ามาทั้งก้อน
+ * อะไรก็ผ่าน — null, ข้อความ, ติดลบ ค่าพวกนี้ทำให้ระบบพังแบบเงียบและร้ายแรง
+ *   threshold = null   → เทียบกับ 0 → "ทุกแท่งคือสัญญาณ"
+ *   threshold = 'abc'  → เทียบกับ NaN → "ไม่มีสัญญาณเลยตลอดกาล"
+ * ทั้งสองกรณีหน้าจอดูปกติทุกอย่าง ไม่มีอะไรฟ้อง
+ *
+ * ค่าเสียเข้ามาได้จริง: เวอร์ชันเก่าเขียนคนละรูปแบบ ผู้ใช้แก้ผ่าน devtools
+ * หรือโค้ดของเราเองเขียนค่าผิดลงไป (เคยเกิดมาแล้วกับการตั้งเกณฑ์ทับอัตโนมัติ)
+ */
+const SETTING_RANGE = {
+  threshold: [5, 95], riskPct: [0.01, 100], account: [0, 1e9],
+  slAtr: [0.2, 10], adxMin: [5, 60], maxHold: [5, 500], spread: [0, 20],
+  contractSize: [0.0001, 1e6], minLot: [0.0001, 1e6], lotStep: [0.0001, 1e6],
+  historyBars: [200, 20000],
+};
+
 function loadSettings() {
-  try { Object.assign(settings, JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}')); } catch (e) { /* ค่าเริ่มต้น */ }
+  let raw = null;
+  try { raw = localStorage.getItem(LS_SETTINGS); } catch (e) { raw = null; }   // โหมดส่วนตัว
+  let saved = {};
+  if (raw) { try { saved = JSON.parse(raw) || {}; } catch (e) { saved = {}; } }
+
+  const rejected = [];
+  for (const [key, val] of Object.entries(saved)) {
+    const range = SETTING_RANGE[key];
+    if (range) {
+      /* ค่าที่มีขอบเขต ต้องเป็นตัวเลขจริงและอยู่ในช่วง ไม่งั้นคงค่าตั้งต้นไว้
+         ทิ้งไปเงียบ ๆ ดีกว่ารับค่าที่ทำให้คำนวณผิดทั้งระบบ */
+      if (!Number.isFinite(val) || val < range[0] || val > range[1]) {
+        rejected.push(`${key}=${JSON.stringify(val)}`);
+        continue;
+      }
+    }
+    settings[key] = val;
+  }
+  if (rejected.length) {
+    /* บอกให้รู้ ไม่ใช่แก้เงียบ ๆ — ถ้าค่าที่ผู้ใช้ตั้งไว้ถูกทิ้ง เขาต้องได้รู้ว่าทำไม */
+    state.settingsRejected = rejected;
+  }
+
   try { state.events = JSON.parse(localStorage.getItem('goldtrader.events') || '[]'); } catch (e) { state.events = []; }
+  if (!Array.isArray(state.events)) state.events = [];
 }
 function saveSettings() {
   try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (e) { /* ignore */ }
@@ -789,6 +832,16 @@ function renderSignal() {
   parts.push(`<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M8 4.6V8l2.2 1.3"/></svg> ${closedInfo}`);
   if (state.scored && state.scored.ready) {
     parts.push(`สภาพตลาด: <b>${state.scored.regime === 'trend' ? 'มีเทรนด์ (ใช้กลยุทธ์ตามแนวโน้ม)' : 'ออกข้าง (ใช้กลยุทธ์เด้งกลับค่าเฉลี่ย)'}</b> · ADX ${state.scored.adx ? state.scored.adx.toFixed(1) : '-'} · ATR ${state.scored.atr.toFixed(2)} (${state.scored.atrPct.toFixed(2)}%)`);
+  }
+  /* กรอบเวลาใหญ่โหลดไม่ได้ = คะแนนไม่ได้ผ่านการยืนยันกับภาพใหญ่
+     ต้องบอก ไม่ใช่ปล่อยให้เห็นแค่ตัวเลขที่ดูปกติ */
+  if (state.combined && state.combined.missing && state.combined.missing.length) {
+    parts.push('<span style="color:var(--gold)">⚠ โหลดกรอบเวลาใหญ่ไม่ครบ — คะแนนคิดจากกรอบที่มีข้อมูลเท่านั้น '
+      + 'ยังไม่ได้ยืนยันกับภาพใหญ่ ให้ระวังมากกว่าปกติ</span>');
+  }
+  if (state.settingsRejected && state.settingsRejected.length) {
+    parts.push(`<span style="color:var(--down)">⚠ ค่าที่บันทึกไว้บางตัวใช้ไม่ได้ จึงกลับไปใช้ค่าตั้งต้น: `
+      + `${state.settingsRejected.join(' · ')}</span>`);
   }
   if (state.blocks && state.blocks.length) {
     parts.push(`<span style="color:var(--gold)"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M3.8 3.8l8.4 8.4"/></svg> ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
