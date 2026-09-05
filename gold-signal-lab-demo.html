@@ -1604,11 +1604,27 @@ function rsi(values, period = 14) {
   let avgG = 0, avgL = 0;
   for (let i = 1; i <= period; i++) { avgG += gains[i]; avgL += losses[i]; }
   avgG /= period; avgL /= period;
-  out[period] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+
+  /*
+   * ไม่มีขาดทุนเลย ไม่ได้แปลว่า "ซื้อมากเกินสุดขีด" เสมอไป
+   *
+   * ของเดิมเขียน avgL === 0 ? 100 ซึ่งถูกเฉพาะตอนราคาขึ้นล้วน
+   * แต่ตอนราคา "ไม่ขยับเลย" ก็ไม่มีขาดทุนเหมือนกัน แล้วได้ 100 ไปด้วย
+   * ทั้งที่ตลาดนิ่งสนิทคือกลาง ๆ ไม่ใช่ร้อนแรงสุดขีด
+   *
+   * ทำไมสำคัญ: RSI 100 ทำให้ระบบดัน "แรงขาย" ออกมาจากตลาดที่ไม่ได้ขยับเลย
+   * และกรณีที่เจอบ่อยที่สุดคือ "ราคาค้าง" — แหล่งข้อมูลส่งราคาเดิมซ้ำ ๆ
+   * ซึ่งเป็นตอนที่ระบบควรเงียบที่สุด กลับกลายเป็นตอนที่มันตะโกนดังที่สุด
+   */
+  const val = (g, l) => {
+    if (l === 0) return g === 0 ? 50 : 100;   // ไม่ขยับเลย = กลาง · ขึ้นล้วน = 100
+    return 100 - 100 / (1 + g / l);
+  };
+  out[period] = val(avgG, avgL);
   for (let i = period + 1; i < n; i++) {
     avgG = (avgG * (period - 1) + gains[i]) / period;
     avgL = (avgL * (period - 1) + losses[i]) / period;
-    out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+    out[i] = val(avgG, avgL);
   }
   return out;
 }
@@ -6060,7 +6076,9 @@ class MarketFeed {
     this.stopped = true;
     this.demoState = null;
     this.requestCount = 0;   // นับคำขอที่ยิงออกไป เพื่อให้ผู้ใช้เห็นว่าใช้โควตาไปเท่าไร
-    this.lastDataAt = 0;     // เวลาที่ได้ข้อมูลล่าสุด — ใช้จับว่าราคาค้างหรือยัง
+    this.lastDataAt = 0;     // เวลาที่ "คำขอสำเร็จ" ล่าสุด — บอกว่าการเชื่อมต่อยังดีอยู่
+    this.lastMoveAt = 0;     // เวลาที่ "ราคาขยับ" ล่าสุด — บอกว่าข้อมูลยังมีชีวิต
+    this._lastSeen = null;   // แท่งล่าสุดที่เห็น ใช้เทียบว่าค่าที่ได้มาซ้ำของเดิมไหม
   }
 
   /*
@@ -6078,11 +6096,51 @@ class MarketFeed {
     return 90000;   // WebSocket ควรมีข้อมูลเข้ามาตลอด เงียบเกินหนึ่งนาทีครึ่ง = ผิดปกติ
   }
 
+  /*
+   * ส่งแท่งออกไป พร้อมจดว่า "ราคาขยับจริงหรือเปล่า"
+   *
+   * ของเดิมตั้ง lastDataAt = Date.now() ทุกครั้งที่ดึงข้อมูลสำเร็จ
+   * แหล่งที่ส่งแท่งเดิมกลับมาซ้ำ ๆ (แคชค้าง / ตลาดปิด / ฟีดตาย) จึงนับเป็น "สด" เสมอ
+   * ตัวจับราคาค้างไม่มีวันทำงาน ทั้งที่ราคาบนจอไม่ขยับมาเป็นชั่วโมง
+   * แถบสถานะยังขึ้นว่า "อัปเดตทุก 15 วินาที" และระบบยังคิดสัญญาณจากราคาที่ตายแล้วต่อไป
+   *
+   * ที่ถูกคือดูว่า "ค่าที่ได้มาต่างจากเดิมไหม" ไม่ใช่แค่ "คำขอผ่านไหม"
+   */
+  _emit(candle) {
+    const prev = this._lastSeen;
+    if (!prev || candle.t !== prev.t || candle.c !== prev.c) {
+      this.lastMoveAt = Date.now();
+      this._lastSeen = { t: candle.t, c: candle.c };
+    }
+    this.onCandle(candle);
+  }
+
+  /*
+   * ราคานิ่งนานแค่ไหนถึงเรียกว่า "ค้าง"
+   *
+   * ต้องกว้างกว่าตัวจับการเชื่อมต่อหลุดมาก เพราะตลาดทองปิดเสาร์-อาทิตย์
+   * และช่วงตลาดเงียบราคาก็นิ่งได้จริง การเตือนผิดบ่อย ๆ แย่กว่าไม่เตือน
+   * แต่ถ้านิ่งเกินนี้ทั้งที่คำขอยังผ่านอยู่ = ข้อมูลไม่ใช่ของสดแล้ว ไม่ว่าจะด้วยเหตุใด
+   */
+  get frozenAfterMs() {
+    if (this.source === 'demo') return 60000;
+    return Math.max(this.staleAfterMs * 4, 10 * 60000);
+  }
+
   /** ข้อมูลค้างหรือยัง และค้างมานานเท่าไร */
   freshness(now = Date.now()) {
     if (this.stopped || !this.lastDataAt) return { stale: false, ageMs: 0, unknown: true };
     const ageMs = now - this.lastDataAt;
-    return { stale: ageMs > this.staleAfterMs, ageMs, limitMs: this.staleAfterMs };
+    /* ยังไม่เคยเห็นราคาขยับเลย = นับจากคำขอแรก ไม่ใช่จากปี 1970 */
+    const moveMs = now - (this.lastMoveAt || this.lastDataAt);
+    const frozen = moveMs > this.frozenAfterMs;
+    return {
+      stale: ageMs > this.staleAfterMs, ageMs, limitMs: this.staleAfterMs,
+      /* แยกสองอาการออกจากกัน เพราะวิธีแก้ต่างกันคนละเรื่อง:
+         หลุด = ต่อใหม่ได้ผล · ค้าง = ต่อใหม่ไม่ช่วย ต้องเปลี่ยนแหล่งหรือรอตลาดเปิด */
+      frozen, moveMs, frozenLimitMs: this.frozenAfterMs,
+      usable: ageMs <= this.staleAfterMs && !frozen,
+    };
   }
 
   /** จังหวะดึงราคาสด ขึ้นกับข้อจำกัดของผู้ให้บริการ */
@@ -6252,7 +6310,7 @@ class MarketFeed {
         const k = msg.k;
         if (!k) return;
         this.lastDataAt = Date.now();
-        this.onCandle({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, closed: !!k.x });
+        this._emit({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, closed: !!k.x });
       } catch (e) { /* ข้ามข้อความที่ parse ไม่ได้ */ }
     };
     this.ws.onerror = () => this.onStatus({ state: 'error', message: 'WebSocket ผิดพลาด' });
@@ -6271,9 +6329,9 @@ class MarketFeed {
       try {
         const rows = await this._tdHistory(this.interval, 3);
         // ส่งแท่งเก่า (ปิดแล้ว) ก่อน แล้วค่อยส่งแท่งล่าสุดที่ยังก่อตัวอยู่
-        rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
+        rows.slice(0, -1).forEach((r) => this._emit({ ...r, closed: true }));
         const last = rows[rows.length - 1];
-        if (last) this.onCandle({ ...last, closed: false });
+        if (last) this._emit({ ...last, closed: false });
         this.lastDataAt = Date.now();
         this.onStatus({ state: 'live',
           message: `XAU/USD จาก Twelve Data · อัปเดตทุก ${Math.round(this.livePollMs / 60000)} นาที `
@@ -6357,9 +6415,9 @@ class MarketFeed {
     const tick = async () => {
       try {
         const rows = await this._genericHistory(this.interval, 3);
-        rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
+        rows.slice(0, -1).forEach((r) => this._emit({ ...r, closed: true }));
         const last = rows[rows.length - 1];
-        if (last) this.onCandle({ ...last, closed: false });
+        if (last) this._emit({ ...last, closed: false });
         this.lastDataAt = Date.now();
         this.onStatus({ state: 'live',
           message: `${src.label} · ${src.kind} · อัปเดตทุก ${Math.round(this.livePollMs / 1000)} วินาที` });
@@ -6383,7 +6441,7 @@ class MarketFeed {
       const move = gauss() * st.price * st.vol * 0.35 * Math.sqrt(DEMO_TICK_MS / 900);
       st.price = Math.max(1, st.price + move);
       if (!st.cur || st.cur.t !== bucket) {
-        if (st.cur) this.onCandle({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
+        if (st.cur) this._emit({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
         if (!st.cur && st.lastBar && st.lastBar.t === bucket) {
           // แท่งสดแท่งแรกคือแท่งเดียวกับที่อยู่ท้ายประวัติ — ต้องสานต่อ ไม่ใช่เขียนทับ
           // ถ้าสร้างใหม่ ราคาเปิดกับปริมาณที่สะสมมาแล้วจะหายไป เกิดช่องว่างราคาปลอม
@@ -6396,7 +6454,7 @@ class MarketFeed {
       st.cur.h = Math.max(st.cur.h, st.price);
       st.cur.l = Math.min(st.cur.l, st.price);
       st.cur.v += (st.volPerTick || 1) * (0.5 + Math.random() + Math.abs(move) / (st.price * st.vol + 1e-9) * 0.3);
-      this.onCandle({ ...st.cur });
+      this._emit({ ...st.cur });
     }, DEMO_TICK_MS);
   }
 }
@@ -8817,6 +8875,15 @@ function analyze(candleClosed, allowAlert = true) {
     blocks.push(`ราคาหยุดอัปเดตมา ${Math.round(fresh.ageMs / 1000)} วินาที (ปกติไม่ควรเกิน `
       + `${Math.round(fresh.limitMs / 1000)} วินาที) — ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบันแล้ว `
       + 'ระบบจึงระงับสัญญาณไว้จนกว่าข้อมูลจะกลับมา');
+  } else if (fresh.frozen) {
+    /*
+     * อาการนี้ต่างจาก "หลุด" คนละเรื่อง และอันตรายกว่า เพราะทุกอย่างดูปกติหมด
+     * คำขอยังผ่าน แถบสถานะยังเขียว แต่ค่าที่ได้กลับมาเป็นแท่งเดิมซ้ำ ๆ
+     * ราคาที่ไม่ขยับทำให้ตัวชี้วัดเพี้ยนไปหมด และแผนที่คำนวณได้ก็อิงราคาที่ไม่มีอยู่จริง
+     */
+    blocks.push(`ราคาไม่ขยับเลยมา ${Math.round(fresh.moveMs / 60000)} นาที ทั้งที่ยังดึงข้อมูลได้ปกติ `
+      + '— แปลว่าตลาดปิดอยู่ หรือแหล่งข้อมูลส่งค่าเดิมซ้ำ (แคชค้าง) '
+      + 'ทั้งสองกรณีคำนวณสัญญาณจากราคานี้ไม่ได้ ระบบจึงระงับไว้ก่อน');
   }
 
   const risk = riskWindow(new Date(), state.events, 30);
@@ -10455,7 +10522,7 @@ function checkFreshness(force = false) {
   const f = feed.freshness();
   const bar = $('staleBar');
   if (!bar) return;
-  if (!f.stale) {
+  if (!f.stale && !f.frozen) {
     if (staleSince) {   // เพิ่งกลับมาปกติ — คำนวณใหม่ทันที ไม่ต้องรอแท่งถัดไป
       staleSince = 0;
       bar.hidden = true;
@@ -10466,6 +10533,16 @@ function checkFreshness(force = false) {
   }
   const secs = Math.round(f.ageMs / 1000);
   bar.hidden = false;
+  /*
+   * ราคาค้างทั้งที่คำขอยังผ่าน — ต่อใหม่ไม่ช่วยอะไรเลย เพราะการเชื่อมต่อไม่ได้เสีย
+   * บอกไปตรง ๆ ว่าเกิดอะไรขึ้นและต้องทำอะไร ดีกว่าขึ้น "กำลังต่อใหม่…" ค้างไว้เฉย ๆ
+   */
+  if (!f.stale && f.frozen) {
+    bar.textContent = `⚠ ราคาไม่ขยับมา ${Math.round(f.moveMs / 60000)} นาที ทั้งที่ยังดึงข้อมูลได้ — `
+      + 'ตลาดปิดอยู่ หรือแหล่งข้อมูลส่งค่าเดิมซ้ำ · ระบบระงับสัญญาณไว้แล้ว ลองเปลี่ยนแหล่งข้อมูลดู';
+    if (!staleSince) { staleSince = Date.now(); analyze(false, false); }
+    return;   // ไม่ต้องกระหน่ำต่อใหม่ ปัญหาไม่ได้อยู่ที่การเชื่อมต่อ
+  }
   bar.textContent = `⚠ ราคาหยุดอัปเดตมา ${secs > 90 ? Math.round(secs / 60) + ' นาที' : secs + ' วินาที'} — `
     + 'ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบัน ระบบระงับสัญญาณไว้แล้ว กำลังต่อใหม่…';
   if (!staleSince) {

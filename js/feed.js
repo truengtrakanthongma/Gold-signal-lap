@@ -90,7 +90,9 @@ export class MarketFeed {
     this.stopped = true;
     this.demoState = null;
     this.requestCount = 0;   // นับคำขอที่ยิงออกไป เพื่อให้ผู้ใช้เห็นว่าใช้โควตาไปเท่าไร
-    this.lastDataAt = 0;     // เวลาที่ได้ข้อมูลล่าสุด — ใช้จับว่าราคาค้างหรือยัง
+    this.lastDataAt = 0;     // เวลาที่ "คำขอสำเร็จ" ล่าสุด — บอกว่าการเชื่อมต่อยังดีอยู่
+    this.lastMoveAt = 0;     // เวลาที่ "ราคาขยับ" ล่าสุด — บอกว่าข้อมูลยังมีชีวิต
+    this._lastSeen = null;   // แท่งล่าสุดที่เห็น ใช้เทียบว่าค่าที่ได้มาซ้ำของเดิมไหม
   }
 
   /*
@@ -108,11 +110,51 @@ export class MarketFeed {
     return 90000;   // WebSocket ควรมีข้อมูลเข้ามาตลอด เงียบเกินหนึ่งนาทีครึ่ง = ผิดปกติ
   }
 
+  /*
+   * ส่งแท่งออกไป พร้อมจดว่า "ราคาขยับจริงหรือเปล่า"
+   *
+   * ของเดิมตั้ง lastDataAt = Date.now() ทุกครั้งที่ดึงข้อมูลสำเร็จ
+   * แหล่งที่ส่งแท่งเดิมกลับมาซ้ำ ๆ (แคชค้าง / ตลาดปิด / ฟีดตาย) จึงนับเป็น "สด" เสมอ
+   * ตัวจับราคาค้างไม่มีวันทำงาน ทั้งที่ราคาบนจอไม่ขยับมาเป็นชั่วโมง
+   * แถบสถานะยังขึ้นว่า "อัปเดตทุก 15 วินาที" และระบบยังคิดสัญญาณจากราคาที่ตายแล้วต่อไป
+   *
+   * ที่ถูกคือดูว่า "ค่าที่ได้มาต่างจากเดิมไหม" ไม่ใช่แค่ "คำขอผ่านไหม"
+   */
+  _emit(candle) {
+    const prev = this._lastSeen;
+    if (!prev || candle.t !== prev.t || candle.c !== prev.c) {
+      this.lastMoveAt = Date.now();
+      this._lastSeen = { t: candle.t, c: candle.c };
+    }
+    this.onCandle(candle);
+  }
+
+  /*
+   * ราคานิ่งนานแค่ไหนถึงเรียกว่า "ค้าง"
+   *
+   * ต้องกว้างกว่าตัวจับการเชื่อมต่อหลุดมาก เพราะตลาดทองปิดเสาร์-อาทิตย์
+   * และช่วงตลาดเงียบราคาก็นิ่งได้จริง การเตือนผิดบ่อย ๆ แย่กว่าไม่เตือน
+   * แต่ถ้านิ่งเกินนี้ทั้งที่คำขอยังผ่านอยู่ = ข้อมูลไม่ใช่ของสดแล้ว ไม่ว่าจะด้วยเหตุใด
+   */
+  get frozenAfterMs() {
+    if (this.source === 'demo') return 60000;
+    return Math.max(this.staleAfterMs * 4, 10 * 60000);
+  }
+
   /** ข้อมูลค้างหรือยัง และค้างมานานเท่าไร */
   freshness(now = Date.now()) {
     if (this.stopped || !this.lastDataAt) return { stale: false, ageMs: 0, unknown: true };
     const ageMs = now - this.lastDataAt;
-    return { stale: ageMs > this.staleAfterMs, ageMs, limitMs: this.staleAfterMs };
+    /* ยังไม่เคยเห็นราคาขยับเลย = นับจากคำขอแรก ไม่ใช่จากปี 1970 */
+    const moveMs = now - (this.lastMoveAt || this.lastDataAt);
+    const frozen = moveMs > this.frozenAfterMs;
+    return {
+      stale: ageMs > this.staleAfterMs, ageMs, limitMs: this.staleAfterMs,
+      /* แยกสองอาการออกจากกัน เพราะวิธีแก้ต่างกันคนละเรื่อง:
+         หลุด = ต่อใหม่ได้ผล · ค้าง = ต่อใหม่ไม่ช่วย ต้องเปลี่ยนแหล่งหรือรอตลาดเปิด */
+      frozen, moveMs, frozenLimitMs: this.frozenAfterMs,
+      usable: ageMs <= this.staleAfterMs && !frozen,
+    };
   }
 
   /** จังหวะดึงราคาสด ขึ้นกับข้อจำกัดของผู้ให้บริการ */
@@ -282,7 +324,7 @@ export class MarketFeed {
         const k = msg.k;
         if (!k) return;
         this.lastDataAt = Date.now();
-        this.onCandle({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, closed: !!k.x });
+        this._emit({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, closed: !!k.x });
       } catch (e) { /* ข้ามข้อความที่ parse ไม่ได้ */ }
     };
     this.ws.onerror = () => this.onStatus({ state: 'error', message: 'WebSocket ผิดพลาด' });
@@ -301,9 +343,9 @@ export class MarketFeed {
       try {
         const rows = await this._tdHistory(this.interval, 3);
         // ส่งแท่งเก่า (ปิดแล้ว) ก่อน แล้วค่อยส่งแท่งล่าสุดที่ยังก่อตัวอยู่
-        rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
+        rows.slice(0, -1).forEach((r) => this._emit({ ...r, closed: true }));
         const last = rows[rows.length - 1];
-        if (last) this.onCandle({ ...last, closed: false });
+        if (last) this._emit({ ...last, closed: false });
         this.lastDataAt = Date.now();
         this.onStatus({ state: 'live',
           message: `XAU/USD จาก Twelve Data · อัปเดตทุก ${Math.round(this.livePollMs / 60000)} นาที `
@@ -387,9 +429,9 @@ export class MarketFeed {
     const tick = async () => {
       try {
         const rows = await this._genericHistory(this.interval, 3);
-        rows.slice(0, -1).forEach((r) => this.onCandle({ ...r, closed: true }));
+        rows.slice(0, -1).forEach((r) => this._emit({ ...r, closed: true }));
         const last = rows[rows.length - 1];
-        if (last) this.onCandle({ ...last, closed: false });
+        if (last) this._emit({ ...last, closed: false });
         this.lastDataAt = Date.now();
         this.onStatus({ state: 'live',
           message: `${src.label} · ${src.kind} · อัปเดตทุก ${Math.round(this.livePollMs / 1000)} วินาที` });
@@ -413,7 +455,7 @@ export class MarketFeed {
       const move = gauss() * st.price * st.vol * 0.35 * Math.sqrt(DEMO_TICK_MS / 900);
       st.price = Math.max(1, st.price + move);
       if (!st.cur || st.cur.t !== bucket) {
-        if (st.cur) this.onCandle({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
+        if (st.cur) this._emit({ ...st.cur, closed: true }); // ปิดแท่งเดิมก่อน
         if (!st.cur && st.lastBar && st.lastBar.t === bucket) {
           // แท่งสดแท่งแรกคือแท่งเดียวกับที่อยู่ท้ายประวัติ — ต้องสานต่อ ไม่ใช่เขียนทับ
           // ถ้าสร้างใหม่ ราคาเปิดกับปริมาณที่สะสมมาแล้วจะหายไป เกิดช่องว่างราคาปลอม
@@ -426,7 +468,7 @@ export class MarketFeed {
       st.cur.h = Math.max(st.cur.h, st.price);
       st.cur.l = Math.min(st.cur.l, st.price);
       st.cur.v += (st.volPerTick || 1) * (0.5 + Math.random() + Math.abs(move) / (st.price * st.vol + 1e-9) * 0.3);
-      this.onCandle({ ...st.cur });
+      this._emit({ ...st.cur });
     }, DEMO_TICK_MS);
   }
 }
