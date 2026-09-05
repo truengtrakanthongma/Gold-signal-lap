@@ -20,7 +20,7 @@ import { isValidWebhook, webhookProblem, sendDiscord, buildSignalMessage, buildT
 import { NEWS_FEEDS, FEED_ORDER, surpriseOf, dedupe, similarity, sourceWeight, tokensOf } from '../js/news.js';
 import { findPivots, clusterLevels, levelsAt } from '../js/levels.js';
 import { springUpthrust, rangeContraction, effortVsResult, holyGrailPullback } from '../js/classic.js';
-import { nextNFP, usDstActive, xauToThaiBaht } from '../js/macro.js';
+import { nextNFP, usDstActive, xauToThaiBaht, goldMarketOpen, sessionInfo } from '../js/macro.js';
 
 let pass = 0, fail = 0;
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
@@ -3098,6 +3098,64 @@ section('49) บอทต้องไม่เตือนจากราคา�
   ok('ด่านนี้ต้องมาก่อนการตัดสินใจส่งสัญญาณ',
     bot.indexOf('const ageMs = Date.now() - last.t') < bot.indexOf("await deliver(msg, 'สัญญาณ')"));
   ok('โหมดตรวจสถานะยังต้องตอบ ไม่ใช่เงียบหาย', /แจ้งว่าข้อมูลเก่า/.test(bot));
+}
+
+section('50) ตลาดทองปิดเสาร์-อาทิตย์ — ระบบต้องรู้เรื่องนี้');
+{
+  /*
+   * ของเดิม sessionInfo ดูแค่ "ชั่วโมงที่เท่าไร" ไม่เคยดูว่าวันอะไร
+   * วันเสาร์บ่ายจึงถูกรายงานว่า "London session · คุณภาพ 0.8"
+   * และเพราะ 0.8 สูงกว่าเกณฑ์ 0.6 ตัวกรองช่วงตลาดก็ไม่ได้กันอะไรเลย
+   *
+   * ตัวจับ "ราคาค้าง" ก็ช่วยไม่ได้ เพราะแหล่งราคาที่ใช้เป็นเหรียญทอง (PAXG/XAUT)
+   * ที่ซื้อขาย 24/7 ราคายังขยับตลอดสุดสัปดาห์ กราฟดูมีชีวิตทุกอย่าง
+   * แต่เป็นคนละตลาดกับที่ผู้ใช้กดส่งคำสั่งได้
+   *
+   * เวลาทำการมาตรฐาน (เขตนิวยอร์ก): อาทิตย์ 18:00 → ศุกร์ 17:00 พักวันละชั่วโมง 17:00-18:00
+   */
+  const at = (iso) => goldMarketOpen(new Date(iso));
+
+  ok('ศุกร์บ่าย (16:59 ET) — เปิด', at('2026-09-04T20:59:00Z').open === true);
+  ok('ศุกร์เย็นหลัง 17:00 ET — ปิด', at('2026-09-04T21:01:00Z').open === false);
+  ok('เสาร์ — ปิดทั้งวัน', at('2026-09-05T12:00:00Z').open === false);
+  ok('อาทิตย์ก่อน 18:00 ET — ยังปิด', at('2026-09-06T21:00:00Z').open === false);
+  ok('อาทิตย์หลัง 18:00 ET — เปิด', at('2026-09-06T22:01:00Z').open === true);
+  ok('กลางสัปดาห์ — เปิด', at('2026-09-08T14:00:00Z').open === true);
+  ok('พักรายวัน 17:00-18:00 ET — ปิด', at('2026-09-08T21:30:00Z').open === false);
+
+  // เวลาที่บอกต้องเป็นเวลาเปิด/ปิดจริง (ต้นชั่วโมง) ไม่ใช่เวลาที่บังเอิญเดินไปเจอ
+  const sat = at('2026-09-05T11:59:14Z');
+  ok('บอกเวลาเปิดครั้งถัดไปได้', sat.opensAt instanceof Date);
+  ok('เวลาเปิดต้องลงตัวที่ต้นชั่วโมง', sat.opensAt.getUTCMinutes() === 0 && sat.opensAt.getUTCSeconds() === 0);
+  ok('เสาร์ → เปิดอีกทีคืนวันอาทิตย์ 18:00 ET', sat.opensAt.toISOString() === '2026-09-06T22:00:00.000Z');
+  ok('ตอนเปิดอยู่ ต้องบอกเวลาปิด ไม่ใช่เวลาเปิด',
+    at('2026-09-08T14:00:00Z').closesAt instanceof Date && at('2026-09-08T14:00:00Z').opensAt === null);
+
+  // ฤดูหนาว ET = UTC-5 เส้นแบ่งต้องเลื่อนตาม ไม่ใช่ตรึงไว้ที่ค่าฤดูร้อน
+  ok('ฤดูหนาว: อาทิตย์ 22:00 UTC (17:00 ET) ยังปิด', at('2026-01-11T22:00:00Z').open === false);
+  ok('ฤดูหนาว: อาทิตย์ 23:00 UTC (18:00 ET) เปิด', at('2026-01-11T23:00:00Z').open === true);
+
+  // sessionInfo ต้องตอบเรื่องตลาดปิดก่อนเรื่องอื่นทั้งหมด
+  const satSess = sessionInfo(new Date('2026-09-05T12:00:00Z'));
+  ok('เสาร์ ต้องไม่ถูกเรียกว่า London session', satSess.key === 'closed');
+  ok('เสาร์ คุณภาพต้องเป็น 0 ไม่ใช่ 0.8', satSess.quality === 0);
+  ok('มีธง closed ให้ด่านตายตัวใช้ตรวจ', satSess.closed === true);
+  ok('บอกด้วยว่าราคาที่ยังขยับมาจากคนละตลาด', /24\/7|เหรียญทอง/.test(satSess.detail));
+  ok('วันธรรมดายังทำงานเหมือนเดิม', sessionInfo(new Date('2026-09-08T14:00:00Z')).key === 'overlap');
+
+  const fs3 = await import('node:fs');
+  const app3 = fs3.readFileSync('js/app.js', 'utf8');
+  ok('หน้าเว็บระงับสัญญาณเมื่อตลาดปิด', /if \(sess\.closed\) \{/.test(app3));
+  ok('เป็นด่านตายตัว ไม่ใช่ตัวกรองที่ปิดได้',
+    !/settings\.\w+ && sess\.closed/.test(app3));
+  ok('ตลาดปิดแล้วไม่ต้องบอกซ้ำว่าอยู่นอกช่วงตลาดหลัก', /!sess\.closed && sess\.quality < 0\.6/.test(app3));
+
+  const bot3 = fs3.readFileSync('bot/run.mjs', 'utf8');
+  ok('บอทไม่เตือนเมื่อตลาดปิด', /const mk = goldMarketOpen\(\);[\s\S]*?if \(!mk\.open\)/.test(bot3));
+  ok('ด่านตลาดปิดต้องมาก่อนการส่งสัญญาณ',
+    bot3.indexOf('const mk = goldMarketOpen()') < bot3.indexOf("await deliver(msg, 'สัญญาณ')"));
+  ok('บอกเวลาเปิดครั้งถัดไปเป็นเวลาไทย', /thTime\(mk\.opensAt\)/.test(bot3));
+  ok('โหมดตรวจสถานะยังตอบ ไม่ใช่เงียบหาย', /แจ้งว่าตลาดปิด/.test(bot3));
 }
 
 console.log(`\n${'─'.repeat(52)}`);

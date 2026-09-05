@@ -22,6 +22,7 @@ import { SOURCES } from '../js/sources.js';
 import { fetchNews } from '../js/news.js';
 import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
 import { instrumentOf } from '../js/instrument.js';
+import { goldMarketOpen, thTime } from '../js/macro.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 const CFG = {
@@ -326,6 +327,29 @@ async function main() {
    * เช็คด้วยระยะห่างจริงระหว่างแท่ง ไม่ใช้ตารางแปลงกรอบเวลา
    * จะได้ไม่มีวันขัดกับสิ่งที่แหล่งข้อมูลส่งมาจริง
    */
+  /*
+   * ตลาดปิด = ไม่ต้องเตือน ต่อให้คะแนนจะสวยแค่ไหน
+   *
+   * บอทตั้งเวลาไว้ทุก 15 นาที ทุกวัน และแหล่งราคาที่ใช้เป็นเหรียญทอง (PAXG/XAUT)
+   * ที่ซื้อขาย 24/7 ราคาจึงยังขยับตลอดเสาร์-อาทิตย์ ด่านตรวจข้อมูลเก่าด้านล่างจับไม่ได้
+   * ผลคือข้อความ "เข้าซื้อ" พร้อมราคาและขนาดไม้ดังที่มือถือทั้งสุดสัปดาห์
+   * ทั้งที่โบรกเกอร์ปิดรับคำสั่ง กดตามไม่ได้สักไม้
+   */
+  const mk = goldMarketOpen();
+  if (!mk.open) {
+    log(`⛔ ตลาดทอง spot ปิดทำการ${mk.opensAt ? ` — เปิดอีกครั้ง ${thTime(mk.opensAt)} (เวลาไทย)` : ''} · ไม่เตือน`);
+    if (CFG.testPing) {
+      await deliver(buildSignalMessage({
+        action: 'warn', score: null, price: last.c, tf: CFG.interval,
+        instrument: `${label} (ตรวจสถานะ)`,
+        blocks: [`ตลาดทอง spot ปิดทำการ${mk.opensAt ? ` จะเปิดอีกครั้ง ${thTime(mk.opensAt)} (เวลาไทย)` : ''}`,
+                 `ราคาที่เห็น (${last.c.toFixed(2)}) มาจากเหรียญทองที่ซื้อขาย 24/7 ซึ่งเป็นคนละตลาดกับที่ส่งคำสั่งได้`,
+                 'ระบบยังทำงานปกติ แต่จะไม่เตือนจนกว่าตลาดจะเปิด'],
+      }), 'แจ้งว่าตลาดปิด');
+    }
+    return;
+  }
+
   const gaps = closed.slice(-40).map((b, k, a) => (k ? b.t - a[k - 1].t : 0)).filter((g) => g > 0).sort((a, b) => a - b);
   const tfMs = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
   const ageMs = Date.now() - last.t;

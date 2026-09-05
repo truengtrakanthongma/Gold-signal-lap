@@ -44,8 +44,66 @@ export function nextNFP(now = new Date()) {
   return null;
 }
 
+/*
+ * ตลาดทอง spot (XAU/USD) ไม่ได้เปิดตลอด 24/7 — และเดิมทั้งระบบไม่รู้เรื่องนี้เลย
+ *
+ * sessionInfo เดิมดูแค่ "ชั่วโมงที่เท่าไร" ไม่เคยดูว่าวันอะไร
+ * วันเสาร์บ่ายจึงถูกรายงานว่า "London session · คุณภาพ 0.8" ทั้งที่ตลาดปิดสนิท
+ * และเพราะ 0.8 สูงกว่าเกณฑ์ 0.6 ตัวกรองช่วงตลาดก็ไม่ได้กันอะไรเลย
+ *
+ * ที่ต้องระวังเป็นพิเศษ: แหล่งราคาที่ระบบใช้อยู่เป็นเหรียญทอง (PAXG/XAUT)
+ * ซึ่งซื้อขายกัน 24/7 ราคาจึงยังขยับตลอดเสาร์-อาทิตย์ ตัวจับ "ราคาค้าง" จึงไม่ทำงาน
+ * กราฟดูมีชีวิตทุกอย่าง แต่เป็นราคาของตลาดคนละตลาดกับที่ผู้ใช้กดส่งคำสั่งได้
+ * และช่วงสุดสัปดาห์สภาพคล่องบางมาก ราคามักเหวี่ยงออกจากราคาทองจริง
+ *
+ * เวลาทำการมาตรฐาน (เขตนิวยอร์ก): เปิดอาทิตย์ 18:00 ถึงศุกร์ 17:00
+ * และพักวันละหนึ่งชั่วโมงช่วง 17:00-18:00
+ */
+function openAtEt(day, hour) {
+  if (day === 6) return false;              // เสาร์ ปิดทั้งวัน
+  if (day === 0) return hour >= 18;         // อาทิตย์ เปิดเย็น
+  if (day === 5) return hour < 17;          // ศุกร์ ปิดเย็น
+  return hour < 17 || hour >= 18;           // จันทร์-พฤหัส พักวันละชั่วโมง
+}
+
+/** เวลาปัจจุบันในเขตนิวยอร์ก (คิดจาก DST สหรัฐฯ ที่มีอยู่แล้ว) */
+function etParts(now) {
+  const et = new Date(now.getTime() - (usDstActive(now) ? 4 : 5) * 3600000);
+  return { day: et.getUTCDay(), hour: et.getUTCHours() + et.getUTCMinutes() / 60 };
+}
+
+/**
+ * ตลาดทองเปิดอยู่ไหม และจะเปลี่ยนสถานะเมื่อไร
+ *
+ * หาเวลาที่สถานะเปลี่ยนด้วยการเดินไปข้างหน้าทีละ 15 นาที แทนการคำนวณตรง ๆ
+ * เพราะแบบนี้ข้ามช่วงเปลี่ยน DST ได้ถูกเองโดยไม่ต้องมีกรณีพิเศษ
+ */
+export function goldMarketOpen(now = new Date()) {
+  const { day, hour } = etParts(now);
+  const open = openAtEt(day, hour);
+  /* เดินจาก "ต้นชั่วโมง" เพื่อให้จุดที่เจอเป็นเวลาเปิด/ปิดจริง ไม่ใช่เวลาที่บังเอิญเดินไปเจอ
+     (เส้นแบ่งอยู่ที่ต้นชั่วโมงเสมอ เพราะเขตนิวยอร์กต่างจาก UTC เป็นจำนวนชั่วโมงเต็ม) */
+  const STEP = 15 * 60000;
+  const from = Math.floor(now.getTime() / 3600000) * 3600000;
+  let at = null;
+  for (let k = 1; k <= 4 * 24 * 4; k++) {
+    const t = new Date(from + k * STEP);
+    const p = etParts(t);
+    if (openAtEt(p.day, p.hour) !== open) { at = t; break; }
+  }
+  return { open, opensAt: open ? null : at, closesAt: open ? at : null };
+}
+
 /** ช่วงเวลาตลาดที่มีผลกับทองคำ (คืนค่าเป็นเวลาไทย UTC+7 ในข้อความ) */
 export function sessionInfo(now = new Date()) {
+  /* ตลาดปิด = ไม่ใช่ "ช่วงที่คุณภาพต่ำ" แต่คือ "เทรดไม่ได้เลย" ต้องตอบก่อนข้ออื่นทั้งหมด */
+  const mk = goldMarketOpen(now);
+  if (!mk.open) {
+    return { key: 'closed', label: 'ตลาดทองปิด', quality: 0, closed: true, opensAt: mk.opensAt,
+      detail: 'ตลาดทอง spot ปิดทำการ' + (mk.opensAt ? ` จะเปิดอีกครั้ง ${thTime(mk.opensAt)} (เวลาไทย)` : '')
+        + ' — ราคาที่ยังขยับอยู่บนกราฟมาจากเหรียญทองที่ซื้อขาย 24/7 ซึ่งเป็นคนละตลาดกับที่ส่งคำสั่งได้ '
+        + 'และช่วงนี้สภาพคล่องบางจนราคามักเหวี่ยงออกจากราคาทองจริง' };
+  }
   const dst = usDstActive(now);
   const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
   const londonOpen = dst ? 7 : 8;          // 08:00 London

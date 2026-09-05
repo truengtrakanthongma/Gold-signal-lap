@@ -565,6 +565,20 @@ function analyze(candleClosed, allowAlert = true) {
       + 'ทั้งสองกรณีคำนวณสัญญาณจากราคานี้ไม่ได้ ระบบจึงระงับไว้ก่อน');
   }
 
+  /*
+   * ตลาดปิด = ห้ามให้สัญญาณ และต้องเป็นด่านตายตัว ไม่ใช่ตัวกรองที่ผู้ใช้ปิดได้
+   *
+   * เดิมระบบไม่รู้จักวันในสัปดาห์เลย วันเสาร์จึงถูกรายงานว่า "London session"
+   * คุณภาพ 0.8 ซึ่งสูงกว่าเกณฑ์ 0.6 ตัวกรองช่วงตลาดจึงปล่อยผ่านทุกครั้ง
+   *
+   * และตัวจับ "ราคาค้าง" ก็ช่วยไม่ได้ในกรณีนี้ เพราะแหล่งราคาที่ใช้อยู่เป็นเหรียญทอง
+   * (PAXG/XAUT) ที่ซื้อขาย 24/7 ราคายังขยับตลอดสุดสัปดาห์ กราฟจึงดูมีชีวิตทุกอย่าง
+   * แต่เป็นคนละตลาดกับที่ผู้ใช้กดส่งคำสั่งได้จริง
+   */
+  if (sess.closed) {
+    blocks.push(`${sess.detail} — สัญญาณช่วงนี้กดตามไม่ได้ ระบบจึงไม่ให้สัญญาณ`);
+  }
+
   const risk = riskWindow(new Date(), state.events, 30);
   if (settings.newsFilter && risk.blocked) {
     blocks.push(`อยู่ในช่วง ±30 นาทีรอบข่าว: ${risk.active.map((e) => e.title).join(', ')} — สเปรดถ่างและราคาสวิงสองทาง สถิติของสัญญาณเทคนิคใช้ไม่ได้ในช่วงนี้`);
@@ -573,7 +587,8 @@ function analyze(candleClosed, allowAlert = true) {
     if (state.scored.atrPct < conf.minAtrPct) blocks.push(`ความผันผวนต่ำผิดปกติ (ATR ${state.scored.atrPct.toFixed(3)}% ของราคา) — ระยะทางกำไรอาจไม่คุ้มสเปรด`);
     if (state.scored.atrPct > conf.maxAtrPct) blocks.push(`ความผันผวนสูงผิดปกติ (ATR ${state.scored.atrPct.toFixed(2)}% ของราคา) — มักเกิดตอนข่าวแรง ความเสี่ยงต่อไม้สูงกว่าที่คำนวณ`);
   }
-  if (settings.sessionFilter && sess.quality < 0.6) {
+  /* ตลาดปิดมีข้อความของตัวเองอยู่แล้ว ไม่ต้องบอกซ้ำว่า "อยู่นอกช่วงตลาดหลัก" */
+  if (settings.sessionFilter && !sess.closed && sess.quality < 0.6) {
     blocks.push(`อยู่นอกช่วงตลาดหลัก (${sess.label}) — สภาพคล่องบาง สัญญาณเบรกหลอกบ่อย`);
   }
   // เอาสถิติที่ระบบวัดได้เองมาใช้จริง ไม่ใช่แค่แสดงให้ดู

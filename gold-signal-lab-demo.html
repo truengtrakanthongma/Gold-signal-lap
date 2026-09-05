@@ -2274,8 +2274,66 @@ function nextNFP(now = new Date()) {
   return null;
 }
 
+/*
+ * ตลาดทอง spot (XAU/USD) ไม่ได้เปิดตลอด 24/7 — และเดิมทั้งระบบไม่รู้เรื่องนี้เลย
+ *
+ * sessionInfo เดิมดูแค่ "ชั่วโมงที่เท่าไร" ไม่เคยดูว่าวันอะไร
+ * วันเสาร์บ่ายจึงถูกรายงานว่า "London session · คุณภาพ 0.8" ทั้งที่ตลาดปิดสนิท
+ * และเพราะ 0.8 สูงกว่าเกณฑ์ 0.6 ตัวกรองช่วงตลาดก็ไม่ได้กันอะไรเลย
+ *
+ * ที่ต้องระวังเป็นพิเศษ: แหล่งราคาที่ระบบใช้อยู่เป็นเหรียญทอง (PAXG/XAUT)
+ * ซึ่งซื้อขายกัน 24/7 ราคาจึงยังขยับตลอดเสาร์-อาทิตย์ ตัวจับ "ราคาค้าง" จึงไม่ทำงาน
+ * กราฟดูมีชีวิตทุกอย่าง แต่เป็นราคาของตลาดคนละตลาดกับที่ผู้ใช้กดส่งคำสั่งได้
+ * และช่วงสุดสัปดาห์สภาพคล่องบางมาก ราคามักเหวี่ยงออกจากราคาทองจริง
+ *
+ * เวลาทำการมาตรฐาน (เขตนิวยอร์ก): เปิดอาทิตย์ 18:00 ถึงศุกร์ 17:00
+ * และพักวันละหนึ่งชั่วโมงช่วง 17:00-18:00
+ */
+function openAtEt(day, hour) {
+  if (day === 6) return false;              // เสาร์ ปิดทั้งวัน
+  if (day === 0) return hour >= 18;         // อาทิตย์ เปิดเย็น
+  if (day === 5) return hour < 17;          // ศุกร์ ปิดเย็น
+  return hour < 17 || hour >= 18;           // จันทร์-พฤหัส พักวันละชั่วโมง
+}
+
+/** เวลาปัจจุบันในเขตนิวยอร์ก (คิดจาก DST สหรัฐฯ ที่มีอยู่แล้ว) */
+function etParts(now) {
+  const et = new Date(now.getTime() - (usDstActive(now) ? 4 : 5) * 3600000);
+  return { day: et.getUTCDay(), hour: et.getUTCHours() + et.getUTCMinutes() / 60 };
+}
+
+/**
+ * ตลาดทองเปิดอยู่ไหม และจะเปลี่ยนสถานะเมื่อไร
+ *
+ * หาเวลาที่สถานะเปลี่ยนด้วยการเดินไปข้างหน้าทีละ 15 นาที แทนการคำนวณตรง ๆ
+ * เพราะแบบนี้ข้ามช่วงเปลี่ยน DST ได้ถูกเองโดยไม่ต้องมีกรณีพิเศษ
+ */
+function goldMarketOpen(now = new Date()) {
+  const { day, hour } = etParts(now);
+  const open = openAtEt(day, hour);
+  /* เดินจาก "ต้นชั่วโมง" เพื่อให้จุดที่เจอเป็นเวลาเปิด/ปิดจริง ไม่ใช่เวลาที่บังเอิญเดินไปเจอ
+     (เส้นแบ่งอยู่ที่ต้นชั่วโมงเสมอ เพราะเขตนิวยอร์กต่างจาก UTC เป็นจำนวนชั่วโมงเต็ม) */
+  const STEP = 15 * 60000;
+  const from = Math.floor(now.getTime() / 3600000) * 3600000;
+  let at = null;
+  for (let k = 1; k <= 4 * 24 * 4; k++) {
+    const t = new Date(from + k * STEP);
+    const p = etParts(t);
+    if (openAtEt(p.day, p.hour) !== open) { at = t; break; }
+  }
+  return { open, opensAt: open ? null : at, closesAt: open ? at : null };
+}
+
 /** ช่วงเวลาตลาดที่มีผลกับทองคำ (คืนค่าเป็นเวลาไทย UTC+7 ในข้อความ) */
 function sessionInfo(now = new Date()) {
+  /* ตลาดปิด = ไม่ใช่ "ช่วงที่คุณภาพต่ำ" แต่คือ "เทรดไม่ได้เลย" ต้องตอบก่อนข้ออื่นทั้งหมด */
+  const mk = goldMarketOpen(now);
+  if (!mk.open) {
+    return { key: 'closed', label: 'ตลาดทองปิด', quality: 0, closed: true, opensAt: mk.opensAt,
+      detail: 'ตลาดทอง spot ปิดทำการ' + (mk.opensAt ? ` จะเปิดอีกครั้ง ${thTime(mk.opensAt)} (เวลาไทย)` : '')
+        + ' — ราคาที่ยังขยับอยู่บนกราฟมาจากเหรียญทองที่ซื้อขาย 24/7 ซึ่งเป็นคนละตลาดกับที่ส่งคำสั่งได้ '
+        + 'และช่วงนี้สภาพคล่องบางจนราคามักเหวี่ยงออกจากราคาทองจริง' };
+  }
   const dst = usDstActive(now);
   const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
   const londonOpen = dst ? 7 : 8;          // 08:00 London
@@ -2345,7 +2403,7 @@ function xauToThaiBaht(xauUsd, usdThb) {
   return perBahtUsd * usdThb;
 }
 
-  return {usDstActive, nextNFP, sessionInfo, riskWindow, thTime, xauToThaiBaht};
+  return {usDstActive, nextNFP, goldMarketOpen, sessionInfo, riskWindow, thTime, xauToThaiBaht};
 })();
 
 __m.signals = (function () {
@@ -8886,6 +8944,20 @@ function analyze(candleClosed, allowAlert = true) {
       + 'ทั้งสองกรณีคำนวณสัญญาณจากราคานี้ไม่ได้ ระบบจึงระงับไว้ก่อน');
   }
 
+  /*
+   * ตลาดปิด = ห้ามให้สัญญาณ และต้องเป็นด่านตายตัว ไม่ใช่ตัวกรองที่ผู้ใช้ปิดได้
+   *
+   * เดิมระบบไม่รู้จักวันในสัปดาห์เลย วันเสาร์จึงถูกรายงานว่า "London session"
+   * คุณภาพ 0.8 ซึ่งสูงกว่าเกณฑ์ 0.6 ตัวกรองช่วงตลาดจึงปล่อยผ่านทุกครั้ง
+   *
+   * และตัวจับ "ราคาค้าง" ก็ช่วยไม่ได้ในกรณีนี้ เพราะแหล่งราคาที่ใช้อยู่เป็นเหรียญทอง
+   * (PAXG/XAUT) ที่ซื้อขาย 24/7 ราคายังขยับตลอดสุดสัปดาห์ กราฟจึงดูมีชีวิตทุกอย่าง
+   * แต่เป็นคนละตลาดกับที่ผู้ใช้กดส่งคำสั่งได้จริง
+   */
+  if (sess.closed) {
+    blocks.push(`${sess.detail} — สัญญาณช่วงนี้กดตามไม่ได้ ระบบจึงไม่ให้สัญญาณ`);
+  }
+
   const risk = riskWindow(new Date(), state.events, 30);
   if (settings.newsFilter && risk.blocked) {
     blocks.push(`อยู่ในช่วง ±30 นาทีรอบข่าว: ${risk.active.map((e) => e.title).join(', ')} — สเปรดถ่างและราคาสวิงสองทาง สถิติของสัญญาณเทคนิคใช้ไม่ได้ในช่วงนี้`);
@@ -8894,7 +8966,8 @@ function analyze(candleClosed, allowAlert = true) {
     if (state.scored.atrPct < conf.minAtrPct) blocks.push(`ความผันผวนต่ำผิดปกติ (ATR ${state.scored.atrPct.toFixed(3)}% ของราคา) — ระยะทางกำไรอาจไม่คุ้มสเปรด`);
     if (state.scored.atrPct > conf.maxAtrPct) blocks.push(`ความผันผวนสูงผิดปกติ (ATR ${state.scored.atrPct.toFixed(2)}% ของราคา) — มักเกิดตอนข่าวแรง ความเสี่ยงต่อไม้สูงกว่าที่คำนวณ`);
   }
-  if (settings.sessionFilter && sess.quality < 0.6) {
+  /* ตลาดปิดมีข้อความของตัวเองอยู่แล้ว ไม่ต้องบอกซ้ำว่า "อยู่นอกช่วงตลาดหลัก" */
+  if (settings.sessionFilter && !sess.closed && sess.quality < 0.6) {
     blocks.push(`อยู่นอกช่วงตลาดหลัก (${sess.label}) — สภาพคล่องบาง สัญญาณเบรกหลอกบ่อย`);
   }
   // เอาสถิติที่ระบบวัดได้เองมาใช้จริง ไม่ใช่แค่แสดงให้ดู
