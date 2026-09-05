@@ -1423,9 +1423,10 @@ table .num, table td.num { text-align: right; font-family: var(--mono); color: v
     <div class="settings-grid">
       <div class="card">
         <h2>เกณฑ์สัญญาณ</h2>
-        <!-- เกณฑ์คะแนนไม่ให้ตั้งเองแล้ว ระบบวัดเองว่าเลขไหนได้ผลดีที่สุดกับข้อมูลจริง
-             แล้วใช้เลขนั้น โชว์ไว้ให้เห็นเฉย ๆ ว่าตอนนี้ใช้เท่าไรและมาจากไหน -->
-        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <output id="setThreshold" class="ro-val">35</output></label>
+        <!-- เกณฑ์คะแนนกลับมาให้ตั้งเองแล้ว — เคยให้ระบบตั้งทับอัตโนมัติจากผลทดสอบ
+             แต่วัดแล้วพบว่ามันเลือกเลขต่ำสุด (20) เจ็ดในสิบครั้ง ซึ่งยิงสัญญาณอ่อน ๆ
+             มากกว่าเกณฑ์ 35 ถึง 2.5 เท่า และเปลี่ยนไปมาทุกครั้งที่กดทดสอบ -->
+        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <input type="number" id="setThreshold" value="35" min="10" max="90" step="1"></label>
         <label>ตัวคูณ ATR สำหรับ Stop Loss <input type="number" id="setSlAtr" value="1.5" min="0.5" max="5" step="0.1"></label>
         <label>ADX ขั้นต่ำที่ถือว่ามีเทรนด์ <input type="number" id="setAdx" value="22" min="10" max="40"></label>
         <label>กรอบเวลาใหญ่ที่ 1 <select id="setHtf1"></select></label>
@@ -2394,15 +2395,23 @@ const DEFAULT_CFG = {
 const WEIGHTS = {
   emaTrend: 16, adxTrend: 12, macdMom: 12, rsiMom: 10, structure: 12,
   patterns: 10, volume: 8, bands: 8, levels: 10, divergence: 10, vwap: 6, stoch: 6,
-  /*
-   * ท่าจากตำราที่คนในวงการยอมรับ (ดู classic.js)
-   *
-   * ให้น้ำหนักพอประมาณไว้ก่อน เพราะ "ตำราบอกว่าดี" ไม่ใช่หลักฐานว่าดีกับ
-   * ทองกรอบ 15 นาทีของเรา ปุ่ม "เรียนรู้แล้วสอบน้ำหนัก" จะเป็นตัวตัดสิน
-   * จากผลเทรดจริงของผู้ใช้เองว่าควรได้น้ำหนักเท่าไร หรือควรเป็นศูนย์
-   */
-  classic: 10,
 };
+
+/*
+ * ทำไม "ท่าจากตำรา" (classic.js) ไม่มีน้ำหนักในนี้
+ *
+ * เคยใส่ไว้ที่ 10 แล้วผู้ใช้ทักว่าระบบเริ่มไม่แม่น ตามไปวัดแล้วเจอสาเหตุ:
+ * คะแนนคิดจาก (คะแนนดิบ ÷ น้ำหนักรวม) × 100 การเพิ่มปัจจัยเข้าไปจึงเพิ่ม
+ * "ตัวหาร" ทันที แต่ตัวจับรูปแบบพวกนี้ทำงานแค่ 1 ครั้งใน 20-134 แท่ง
+ * ตัวตั้งจึงแทบไม่เคยเพิ่มตาม ผลคือคะแนน "ทุกแท่ง" ต่ำลง 7.7%
+ * ทั้งที่สภาพตลาดไม่ได้เปลี่ยน — สเกลที่ผู้ใช้คุ้นมือมาทั้งหมดเลื่อนไปเงียบ ๆ
+ *
+ * และมันไม่เคยพิสูจน์ตัวเองด้วย: วัดบนข้อมูลควบคุมแล้วได้ผลอยู่ในช่วงความคลาดเคลื่อน
+ * ปัจจัยที่ยังพิสูจน์ไม่ได้ ไม่ควรได้สิทธิ์ไปลดคะแนนของปัจจัยที่พิสูจน์แล้ว
+ *
+ * ตัวจับรูปแบบยังอยู่ครบใน classic.js และยังโชว์เป็นข้อมูลประกอบได้
+ * ถ้าวันหนึ่งวัดบนข้อมูลจริงของผู้ใช้แล้วพบว่าช่วยจริง ค่อยใส่น้ำหนักกลับมา
+ */
 const TOTAL_WEIGHT = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
 
 /** คำนวณ series ทั้งหมดรอบเดียว แล้ว scoreAt() แค่อ่านค่าที่ index i (เร็วและไม่มี look-ahead) */
@@ -2504,11 +2513,21 @@ function scoreAt(ctx, i) {
   const adxVal = ctx.adx.adx[i];
   const regime = adxVal !== null && adxVal >= cfg.adxTrendMin ? 'trend' : 'range';
 
+  /*
+   * เพิ่มปัจจัยหนึ่งตัวเข้าไปในคะแนน
+   *
+   * ถ้าคีย์นั้นไม่มีน้ำหนักกำหนดไว้ ต้องบันทึกเป็น "ข้อมูลประกอบ" ไม่ใช่คิดคะแนน
+   * ของเดิมใช้ W[key] ตรง ๆ พอคีย์ไม่มีจะได้ undefined แล้วคูณออกมาเป็น NaN
+   * ซึ่งไหลไปทำให้คะแนนรวมทั้งแท่งเป็น NaN โดยไม่มีอะไรฟ้อง — เจอตอนถอด classic ออก
+   */
   const push = (key, name, side, strength, reason, extra = {}) => {
     if (!side || strength <= 0) return;
+    const w = W[key];
+    const known = Number.isFinite(w);
     factors.push({
-      key, name, side, strength: clamp(strength, 0, 1), weight: W[key],
-      contribution: W[key] * clamp(strength, 0, 1) * side, reason, ...extra,
+      key, name, side, strength: clamp(strength, 0, 1), weight: known ? w : 0,
+      contribution: known ? w * clamp(strength, 0, 1) * side : 0,
+      reason, ...(known ? {} : { info: true }), ...extra,
     });
   };
 
@@ -2586,6 +2605,9 @@ function scoreAt(ctx, i) {
    *
    * NR7 ไม่บอกทิศ จึงไม่เอามาบวกคะแนน แต่เก็บไว้เล่าให้ผู้ใช้ฟัง
    * เพราะรู้ว่ากำลังจะมีการเคลื่อนไหว มีค่าต่อการตัดสินใจรอ
+   *
+   * ตอนนี้ทั้งกลุ่มเป็น "ข้อมูลประกอบ" ล้วน ไม่มีน้ำหนักในคะแนน (ดูเหตุผลที่ WEIGHTS)
+   * ยังบอกผู้ใช้ว่าเจออะไร แต่ไม่ไปลดคะแนนของปัจจัยที่พิสูจน์ตัวเองแล้ว
    */
   const classics = [
     springUpthrust(candles, i, atrVal),
@@ -8392,7 +8414,7 @@ function buildStaticUI() {
   $('minLotInput').value = settings.minLot;
   $('lotStepInput').value = settings.lotStep;
   $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
-  $('setThreshold').textContent = settings.threshold;
+  $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
   $('setAdx').value = settings.adxMin;
   $('setUsdThb').value = settings.usdThb;
@@ -8509,10 +8531,11 @@ function bindEvents() {
     settings.spread = +$('spreadInput').value || 0;
     saveSettings();
   }));
-  ['setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
+  ['setThreshold', 'setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
+    settings.threshold = +$('setThreshold').value || 35;
     settings.slAtr = +$('setSlAtr').value || 1.5;
     settings.adxMin = +$('setAdx').value || 22;
-    saveSettings(); analyze(true, false);
+    saveSettings(); analyze(true, false); doBacktest();
   }));
   $('setHtf1').addEventListener('change', (e) => { settings.htf1 = e.target.value; saveSettings(); reload(); });
   $('setHtf2').addEventListener('change', (e) => { settings.htf2 = e.target.value; saveSettings(); reload(); });
@@ -9408,22 +9431,21 @@ function doBacktest() {
       base: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
     });
     /*
-     * ค่าที่วัดมาได้ ถูกนำไปใช้จริงทันที ไม่ใช่แค่โชว์เป็นข้อเสนอ
+     * *** ผลการวัดเป็นข้อเสนอ ไม่ใช่คำสั่ง ***
      *
-     * เมื่อก่อนระบบวัดได้ว่าเกณฑ์ 40 กับท่า trail ดีที่สุด แล้วก็โชว์ไว้เฉย ๆ
-     * ส่วนสัญญาณสดยังใช้เลขที่ผู้ใช้ตั้งไว้ กลายเป็นสองระบบซ้อนกัน
-     * ทั้งที่การวัดมีคำตอบอยู่แล้ว การให้ผู้ใช้เดาเองจึงไม่มีเหตุผลรองรับ
+     * เคยเขียนให้เอาค่าที่วัดได้ไปตั้งทับเกณฑ์สัญญาณสดทันที ด้วยเหตุผลว่า
+     * "วัดได้แล้วยังให้ผู้ใช้เดาเองทำไม" ซึ่งฟังดูดีแต่ผิดในทางปฏิบัติ
      *
-     * ข้อยกเว้นเดียว: ถ้าสอบไม่ผ่าน (level = bad) ไม่เอาค่านั้นมาใช้
-     * เพราะค่าที่ได้จากการจูนเข้ากับอดีตที่พิสูจน์แล้วว่าใช้ไม่ได้ แย่กว่าค่าตั้งต้น
+     * วัดจริงแล้วพบว่า 7 ใน 10 ครั้ง ตัวหาค่าเลือกเกณฑ์ต่ำสุดที่ค้นหา (20)
+     * เพราะตัวตัดสิน "กำไรเทียบความเจ็บ" ชอบไม้เยอะตราบใดที่ยังไม่เจ็บมาก
+     * เกณฑ์ 20 ยิงสัญญาณมากกว่าเกณฑ์ 35 ถึง 2.5 เท่า ซึ่งคือสัญญาณอ่อน ๆ
+     * ที่ผู้ใช้รู้สึกได้ทันทีว่า "ไม่แม่นแล้ว" — และเขารู้สึกถูก
+     *
+     * ที่แย่กว่านั้นคือมันเปลี่ยนทุกครั้งที่กดทดสอบ ระบบที่เกณฑ์ขยับเองไปมา
+     * เชื่อถือไม่ได้ ต่อให้แต่ละครั้งจะมีเหตุผลรองรับก็ตาม
+     *
+     * ตอนนี้จึงแค่ "เสนอ" ส่วนสัญญาณสดใช้ค่าที่ผู้ใช้ตั้งไว้ ซึ่งนิ่ง
      */
-    if (state.strat.ok && state.strat.level !== 'bad') {
-      settings.threshold = state.strat.strategy.threshold;
-      settings.exitStyle = state.strat.strategy.exitStyle;
-      settings.entryMode = state.strat.strategy.entryMode;
-      saveSettings();
-      $('setThreshold').textContent = settings.threshold;
-    }
     /* ตารางไม้และสถิติรวม ต้องมาจากกลยุทธ์ชุดเดียวกับที่การ์ดข้างบนตัดสิน
        ไม่งั้นก็กลับไปเป็นสองชุดตัวเลขที่ไม่ตรงกันเหมือนเดิม */
     state.bt = state.strat.ok
@@ -9491,9 +9513,14 @@ function renderStrategy() {
     <div class="wf-card ${cls}">
       <div class="wf-verdict">${st.verdict}</div>
       <div class="strat-line">
-        <b>${st.level === 'bad' ? 'ไม่ใช้กลยุทธ์นี้ (สอบไม่ผ่าน) — คงค่าตั้งต้นไว้:' : 'วิธีที่ระบบใช้อยู่ตอนนี้:'}</b>
+        <b>${st.level === 'bad' ? 'ผลทดสอบไม่ผ่าน — ไม่แนะนำกลยุทธ์นี้:' : 'ผลทดสอบเสนอว่า:'}</b>
         ${st.describe}
-        ${st.level === 'bad' ? '' : '<br><span class="tiny">ระบบเลือกให้เองจากการวัด และใช้กับสัญญาณสดแล้ว ไม่ต้องไปตั้งค่าเพิ่ม</span>'}
+        <br><span class="tiny">${st.level === 'bad'
+          ? 'สัญญาณสดยังใช้เกณฑ์ที่ตั้งไว้เอง ไม่ได้เปลี่ยนตามผลนี้'
+          : `นี่คือ<b>ข้อเสนอ</b> ไม่ได้ตั้งทับให้อัตโนมัติ — สัญญาณสดยังใช้เกณฑ์ ${settings.threshold} ที่ตั้งไว้
+             ${st.strategy.threshold !== settings.threshold
+               ? `<button id="useStrat" class="btn" style="margin-top:8px">ใช้เกณฑ์ ${st.strategy.threshold} ตามผลทดสอบ</button>`
+               : ''}`}</span>
       </div>
       <div class="wf-compare">
         <div class="wf-side">
@@ -9531,6 +9558,18 @@ function renderStrategy() {
       </div>
       </details>
     </div>`;
+
+  /* เปลี่ยนเกณฑ์ต้องเป็นการตัดสินใจของผู้ใช้ ไม่ใช่ผลข้างเคียงของการกดทดสอบ */
+  const use = $('useStrat');
+  if (use) {
+    use.addEventListener('click', () => {
+      settings.threshold = st.strategy.threshold;
+      saveSettings();
+      $('setThreshold').value = settings.threshold;
+      analyze(true, false);
+      doBacktest();
+    });
+  }
 }
 
 /**
@@ -9853,7 +9892,7 @@ function applyAdapt(params) {
     settings.adaptPrev = null;
   }
   // ช่องกรอกต้องขยับตาม ไม่งั้นผู้ใช้เห็นเลขเก่าแต่ระบบใช้เลขใหม่
-  $('setThreshold').textContent = settings.threshold;
+  $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
   saveSettings();
   analyze(false, false);

@@ -878,10 +878,17 @@ section('12) เรียนรู้น้ำหนักปัจจัย —
        * ผลแพ้ชนะของไม้ที่เอาไปเรียนรู้ — บั๊กนี้ซ่อนอยู่จนกระทั่งการเพิ่ม
        * ปัจจัยใหม่ทำให้ไม้ขยับมาคาบเกี่ยวพอดี
        */
-      const noEmbargo = runBacktest(ctx, { threshold: r.learnThreshold, toIndex: r.splitAt });
-      const spill = noEmbargo.trades.filter((t) => t.exitIndex >= r.splitAt);
+      /* อย่าผูกกับเกณฑ์ค่าเดียว — ไม้ที่คาบเกี่ยวเส้นแบ่งจะมีหรือไม่มี
+         ขึ้นกับว่าไม้สุดท้ายเปิดตรงไหนพอดี ซึ่งขยับได้เมื่อคะแนนเปลี่ยนแม้เล็กน้อย
+         สิ่งที่ต้องพิสูจน์คือ "การถือข้ามเส้นเกิดขึ้นได้จริง" ไม่ใช่ "เกิดที่เกณฑ์นี้" */
+      let spillFound = 0, triedAt = null;
+      for (const th of [r.learnThreshold, 20, 25, 30, 35]) {
+        const noEmbargo = runBacktest(ctx, { threshold: th, toIndex: r.splitAt });
+        const n = noEmbargo.trades.filter((t) => t.exitIndex >= r.splitAt).length;
+        if (n > spillFound) { spillFound = n; triedAt = th; }
+      }
       ok('ถ้าไม่มีระยะกันชน จะมีไม้ถือข้ามเส้นแบ่งจริง (กันชนจึงไม่ใช่ของเกิน)',
-        spill.length > 0, `ล้ำ ${spill.length} ไม้`);
+        spillFound > 0, `ล้ำ ${spillFound} ไม้ (ที่เกณฑ์ ${triedAt})`);
       ok('ระยะกันชนกว้างพอสำหรับระยะถือสูงสุด',
         r.splitAt - embargoIndex(r.splitAt) >= 60);
     } else { ok('จำนวนไม้ที่ใช้เรียนรู้ = ไม้ในช่วงแรกเท่านั้น', false, r.reason); }
@@ -2843,6 +2850,63 @@ section('42) กราฟห้ามวาดทะลุออกนอกแ�
   ok('มือถือใช้ค่าจาก CSS ไม่ต้องคำนวณ (กราฟอยู่ใต้การ์ดสัญญาณ ต้องเลื่อนอยู่แล้ว)',
     /innerWidth <= 720[\s\S]{0,80}wrap\.style\.height = ''/.test(fit));
   ok('คำนวณใหม่เมื่อหมุนจอด้วย ไม่ใช่แค่ตอนเปลี่ยนขนาดหน้าต่าง', /orientationchange[\s\S]{0,120}fitChart/.test(app));
+}
+
+section('43) เกณฑ์สัญญาณต้องนิ่ง — ผลทดสอบเป็นข้อเสนอ ไม่ใช่คำสั่ง');
+{
+  /*
+   * ผู้ใช้ทักว่า "เริ่มไม่แม่นแล้ว" ตามไปวัดแล้วเจอสองต้นเหตุ ทั้งคู่ผมทำเอง
+   *
+   * 1) เขียนให้เอาค่าที่ตัวหาค่าเลือกได้ ไปตั้งทับเกณฑ์สัญญาณสดทันที
+   *    วัด 10 ครั้ง มันเลือกเกณฑ์ต่ำสุดที่ค้นหา (20) ไป 7 ครั้ง
+   *    เพราะตัวตัดสิน "กำไรเทียบความเจ็บ" ชอบไม้เยอะตราบใดที่ยังไม่เจ็บมาก
+   *    เกณฑ์ 20 ยิงสัญญาณมากกว่าเกณฑ์ 35 ราวสองเท่า = สัญญาณอ่อนเต็มไปหมด
+   *    และมันเปลี่ยนทุกครั้งที่กดทดสอบ ระบบที่เกณฑ์ขยับเองเชื่อถือไม่ได้
+   *
+   * 2) เพิ่มปัจจัย classic น้ำหนัก 10 เข้าไปในตัวหาร ทั้งที่มันทำงานนาน ๆ ครั้ง
+   *    คะแนนทุกแท่งเลยต่ำลง 7.7% ทั้งที่ตลาดไม่ได้เปลี่ยน
+   */
+  const fs = await import('node:fs');
+  const app = fs.readFileSync('js/app.js', 'utf8');
+
+  ok('ไม่มีการตั้งเกณฑ์ทับอัตโนมัติจากผลทดสอบอีกแล้ว',
+    !/settings\.threshold = state\.strat\.strategy\.threshold/.test(app));
+  ok('ไม่มีการตั้งวิธีเข้า/ท่าออกทับอัตโนมัติด้วย',
+    !/settings\.exitStyle = state\.strat\.strategy/.test(app) && !/settings\.entryMode = state\.strat\.strategy/.test(app));
+  ok('ผู้ใช้ตั้งเกณฑ์เองได้ (ช่องกรอกกลับมาแล้ว)',
+    /'setThreshold'[\s\S]{0,200}settings\.threshold = \+\$\('setThreshold'\)\.value/.test(app));
+  ok('ถ้าจะใช้ค่าที่ทดสอบได้ ต้องกดเอง ไม่ใช่เปลี่ยนให้เงียบ ๆ', /useStrat/.test(app));
+
+  const html = fs.readFileSync('index.html', 'utf8');
+  ok('ช่องเกณฑ์เป็นช่องกรอก ไม่ใช่ป้ายอ่านอย่างเดียว',
+    /id="setThreshold"[^>]*type="number"/.test(html) || /type="number"[^>]*id="setThreshold"/.test(html));
+
+  /* สเกลคะแนนต้องกลับไปเท่าเวอร์ชันแรก */
+  const total = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
+  ok(`น้ำหนักรวมกลับมาเป็น 120 เท่าเดิม (ตอนนี้ ${total})`, total === 120);
+  ok('classic ไม่มีน้ำหนักในคะแนนแล้ว', WEIGHTS.classic === undefined);
+
+  /* ปัจจัยที่ไม่มีน้ำหนัก ต้องกลายเป็นข้อมูลประกอบ ไม่ใช่ทำให้คะแนนเป็น NaN */
+  {
+    const ctx = buildContext(makeCandles(600, 17));
+    let nan = 0, info = 0, n = 0;
+    for (let i = 300; i < 600; i++) {
+      const s = scoreAt(ctx, i);
+      if (!s.ready) continue;
+      n++;
+      if (!Number.isFinite(s.score)) nan++;
+      if (s.factors.some((f) => f.key === 'classic')) info++;
+    }
+    ok('คะแนนไม่มี NaN แม้มีปัจจัยที่ไม่ได้กำหนดน้ำหนัก', nan === 0 && n > 100, `NaN ${nan} จาก ${n} แท่ง`);
+    ok('ปัจจัยที่ไม่มีน้ำหนักถูกบันทึกเป็นข้อมูลประกอบ (น้ำหนัก 0 ไม่กระทบคะแนน)',
+      (() => {
+        for (let i = 300; i < 600; i++) {
+          const f = scoreAt(ctx, i).factors.find((x) => x.key === 'classic');
+          if (f) return f.weight === 0 && f.contribution === 0;
+        }
+        return true;   // ไม่เจอในช่วงนี้ก็ไม่ผิด ตัวจับทำงานนาน ๆ ครั้ง
+      })(), `พบ ${info} แท่ง`);
+  }
 }
 
 console.log(`\n${'─'.repeat(52)}`);

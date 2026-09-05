@@ -177,7 +177,7 @@ function buildStaticUI() {
   $('minLotInput').value = settings.minLot;
   $('lotStepInput').value = settings.lotStep;
   $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
-  $('setThreshold').textContent = settings.threshold;
+  $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
   $('setAdx').value = settings.adxMin;
   $('setUsdThb').value = settings.usdThb;
@@ -294,10 +294,11 @@ function bindEvents() {
     settings.spread = +$('spreadInput').value || 0;
     saveSettings();
   }));
-  ['setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
+  ['setThreshold', 'setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
+    settings.threshold = +$('setThreshold').value || 35;
     settings.slAtr = +$('setSlAtr').value || 1.5;
     settings.adxMin = +$('setAdx').value || 22;
-    saveSettings(); analyze(true, false);
+    saveSettings(); analyze(true, false); doBacktest();
   }));
   $('setHtf1').addEventListener('change', (e) => { settings.htf1 = e.target.value; saveSettings(); reload(); });
   $('setHtf2').addEventListener('change', (e) => { settings.htf2 = e.target.value; saveSettings(); reload(); });
@@ -1193,22 +1194,21 @@ function doBacktest() {
       base: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
     });
     /*
-     * ค่าที่วัดมาได้ ถูกนำไปใช้จริงทันที ไม่ใช่แค่โชว์เป็นข้อเสนอ
+     * *** ผลการวัดเป็นข้อเสนอ ไม่ใช่คำสั่ง ***
      *
-     * เมื่อก่อนระบบวัดได้ว่าเกณฑ์ 40 กับท่า trail ดีที่สุด แล้วก็โชว์ไว้เฉย ๆ
-     * ส่วนสัญญาณสดยังใช้เลขที่ผู้ใช้ตั้งไว้ กลายเป็นสองระบบซ้อนกัน
-     * ทั้งที่การวัดมีคำตอบอยู่แล้ว การให้ผู้ใช้เดาเองจึงไม่มีเหตุผลรองรับ
+     * เคยเขียนให้เอาค่าที่วัดได้ไปตั้งทับเกณฑ์สัญญาณสดทันที ด้วยเหตุผลว่า
+     * "วัดได้แล้วยังให้ผู้ใช้เดาเองทำไม" ซึ่งฟังดูดีแต่ผิดในทางปฏิบัติ
      *
-     * ข้อยกเว้นเดียว: ถ้าสอบไม่ผ่าน (level = bad) ไม่เอาค่านั้นมาใช้
-     * เพราะค่าที่ได้จากการจูนเข้ากับอดีตที่พิสูจน์แล้วว่าใช้ไม่ได้ แย่กว่าค่าตั้งต้น
+     * วัดจริงแล้วพบว่า 7 ใน 10 ครั้ง ตัวหาค่าเลือกเกณฑ์ต่ำสุดที่ค้นหา (20)
+     * เพราะตัวตัดสิน "กำไรเทียบความเจ็บ" ชอบไม้เยอะตราบใดที่ยังไม่เจ็บมาก
+     * เกณฑ์ 20 ยิงสัญญาณมากกว่าเกณฑ์ 35 ถึง 2.5 เท่า ซึ่งคือสัญญาณอ่อน ๆ
+     * ที่ผู้ใช้รู้สึกได้ทันทีว่า "ไม่แม่นแล้ว" — และเขารู้สึกถูก
+     *
+     * ที่แย่กว่านั้นคือมันเปลี่ยนทุกครั้งที่กดทดสอบ ระบบที่เกณฑ์ขยับเองไปมา
+     * เชื่อถือไม่ได้ ต่อให้แต่ละครั้งจะมีเหตุผลรองรับก็ตาม
+     *
+     * ตอนนี้จึงแค่ "เสนอ" ส่วนสัญญาณสดใช้ค่าที่ผู้ใช้ตั้งไว้ ซึ่งนิ่ง
      */
-    if (state.strat.ok && state.strat.level !== 'bad') {
-      settings.threshold = state.strat.strategy.threshold;
-      settings.exitStyle = state.strat.strategy.exitStyle;
-      settings.entryMode = state.strat.strategy.entryMode;
-      saveSettings();
-      $('setThreshold').textContent = settings.threshold;
-    }
     /* ตารางไม้และสถิติรวม ต้องมาจากกลยุทธ์ชุดเดียวกับที่การ์ดข้างบนตัดสิน
        ไม่งั้นก็กลับไปเป็นสองชุดตัวเลขที่ไม่ตรงกันเหมือนเดิม */
     state.bt = state.strat.ok
@@ -1276,9 +1276,14 @@ function renderStrategy() {
     <div class="wf-card ${cls}">
       <div class="wf-verdict">${st.verdict}</div>
       <div class="strat-line">
-        <b>${st.level === 'bad' ? 'ไม่ใช้กลยุทธ์นี้ (สอบไม่ผ่าน) — คงค่าตั้งต้นไว้:' : 'วิธีที่ระบบใช้อยู่ตอนนี้:'}</b>
+        <b>${st.level === 'bad' ? 'ผลทดสอบไม่ผ่าน — ไม่แนะนำกลยุทธ์นี้:' : 'ผลทดสอบเสนอว่า:'}</b>
         ${st.describe}
-        ${st.level === 'bad' ? '' : '<br><span class="tiny">ระบบเลือกให้เองจากการวัด และใช้กับสัญญาณสดแล้ว ไม่ต้องไปตั้งค่าเพิ่ม</span>'}
+        <br><span class="tiny">${st.level === 'bad'
+          ? 'สัญญาณสดยังใช้เกณฑ์ที่ตั้งไว้เอง ไม่ได้เปลี่ยนตามผลนี้'
+          : `นี่คือ<b>ข้อเสนอ</b> ไม่ได้ตั้งทับให้อัตโนมัติ — สัญญาณสดยังใช้เกณฑ์ ${settings.threshold} ที่ตั้งไว้
+             ${st.strategy.threshold !== settings.threshold
+               ? `<button id="useStrat" class="btn" style="margin-top:8px">ใช้เกณฑ์ ${st.strategy.threshold} ตามผลทดสอบ</button>`
+               : ''}`}</span>
       </div>
       <div class="wf-compare">
         <div class="wf-side">
@@ -1316,6 +1321,18 @@ function renderStrategy() {
       </div>
       </details>
     </div>`;
+
+  /* เปลี่ยนเกณฑ์ต้องเป็นการตัดสินใจของผู้ใช้ ไม่ใช่ผลข้างเคียงของการกดทดสอบ */
+  const use = $('useStrat');
+  if (use) {
+    use.addEventListener('click', () => {
+      settings.threshold = st.strategy.threshold;
+      saveSettings();
+      $('setThreshold').value = settings.threshold;
+      analyze(true, false);
+      doBacktest();
+    });
+  }
 }
 
 /**
@@ -1638,7 +1655,7 @@ function applyAdapt(params) {
     settings.adaptPrev = null;
   }
   // ช่องกรอกต้องขยับตาม ไม่งั้นผู้ใช้เห็นเลขเก่าแต่ระบบใช้เลขใหม่
-  $('setThreshold').textContent = settings.threshold;
+  $('setThreshold').value = settings.threshold;
   $('setSlAtr').value = settings.slAtr;
   saveSettings();
   analyze(false, false);

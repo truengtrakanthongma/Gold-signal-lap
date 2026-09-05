@@ -387,9 +387,10 @@
     <div class="settings-grid">
       <div class="card">
         <h2>เกณฑ์สัญญาณ</h2>
-        <!-- เกณฑ์คะแนนไม่ให้ตั้งเองแล้ว ระบบวัดเองว่าเลขไหนได้ผลดีที่สุดกับข้อมูลจริง
-             แล้วใช้เลขนั้น โชว์ไว้ให้เห็นเฉย ๆ ว่าตอนนี้ใช้เท่าไรและมาจากไหน -->
-        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <output id="setThreshold" class="ro-val">35</output></label>
+        <!-- เกณฑ์คะแนนกลับมาให้ตั้งเองแล้ว — เคยให้ระบบตั้งทับอัตโนมัติจากผลทดสอบ
+             แต่วัดแล้วพบว่ามันเลือกเลขต่ำสุด (20) เจ็ดในสิบครั้ง ซึ่งยิงสัญญาณอ่อน ๆ
+             มากกว่าเกณฑ์ 35 ถึง 2.5 เท่า และเปลี่ยนไปมาทุกครั้งที่กดทดสอบ -->
+        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <input type="number" id="setThreshold" value="35" min="10" max="90" step="1"></label>
         <label>ตัวคูณ ATR สำหรับ Stop Loss <input type="number" id="setSlAtr" value="1.5" min="0.5" max="5" step="0.1"></label>
         <label>ADX ขั้นต่ำที่ถือว่ามีเทรนด์ <input type="number" id="setAdx" value="22" min="10" max="40"></label>
         <label>กรอบเวลาใหญ่ที่ 1 <select id="setHtf1"></select></label>
