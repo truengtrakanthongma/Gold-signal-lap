@@ -2022,14 +2022,36 @@ function renderBacktest() {
   $('btSummary').innerHTML += beNote + `<div style="grid-column:1/-1">${expl}</div>`;
 
   const maxN = Math.max(...bt.bands.map((b) => b.n), 1);
-  $('btBands').innerHTML = `<table><thead><tr><th>ช่วงคะแนน</th><th>จำนวนไม้</th><th>อัตราชนะ</th><th>ค่าคาดหวัง</th></tr></thead><tbody>
-    ${bt.bands.map((b) => `<tr class="${b.winRate !== null && b.winRate === Math.max(...bt.bands.filter((x) => x.n >= 10).map((x) => x.winRate || 0)) && b.n >= 10 ? 'best' : ''}">
+  /*
+   * ตารางนี้เคยเน้นช่วงที่ "อัตราชนะสูงสุด" โดยขอแค่ 10 ไม้ขึ้นไป
+   *
+   * ซึ่งอันตราย: ชนะ 7 จาก 10 ขึ้นเป็น 70% ตัวใหญ่ ๆ พร้อมไฮไลต์ว่าดีที่สุด
+   * ทั้งที่ข้อมูลเท่านั้นบอกได้แค่ว่าอัตราชนะจริงอยู่ราว 39%-89% = ยังไม่รู้อะไรเลย
+   * ผู้ใช้เห็นแล้วก็ไปตั้งเกณฑ์ตามช่วงนั้น ซึ่งคือการไล่ตามความบังเอิญ
+   *
+   * ตอนนี้จึงโชว์ "ช่วงที่เป็นไปได้จริง" ทุกแถว และจะเน้นช่วงไหนได้
+   * ก็ต่อเมื่อมันแยกออกจากช่วงอื่นจริงทางสถิติ ไม่ใช่แค่ตัวเลขบังเอิญสูงกว่า
+   */
+  const cv = bt.conviction || { level: 'unknown', text: '' };
+  const hiLabel = cv.level === 'helps' && cv.high ? cv.high.label : null;
+  $('btBands').innerHTML = `<table><thead><tr><th>ช่วงคะแนน</th><th>จำนวนไม้</th><th>อัตราชนะ</th><th>ช่วงที่เป็นไปได้จริง</th><th>ค่าคาดหวัง</th></tr></thead><tbody>
+    ${bt.bands.map((b) => `<tr class="${hiLabel && b.label === hiLabel ? 'best' : ''}">
       <td>${b.label}</td>
       <td class="num bar-cell"><i style="width:${(b.n / maxN) * 100}%"></i>${b.n}</td>
       <td class="num">${b.winRate !== null ? b.winRate.toFixed(1) + '%' : '—'}</td>
+      <td class="num tiny">${b.ci ? `${b.ci.low.toFixed(0)}–${b.ci.high.toFixed(0)}%` : '—'}</td>
       <td class="num">${b.avgR !== null ? b.avgR.toFixed(2) + 'R' : '—'}</td>
     </tr>`).join('')}</tbody></table>
-    <p class="tiny">ยิ่งคะแนนสูง อัตราชนะควรยิ่งสูงตาม — ถ้าไม่เป็นเช่นนั้นแปลว่าน้ำหนักปัจจัยยังไม่เหมาะกับตลาดช่วงนี้ (ตัวอย่างต่ำกว่า 20 ไม้ ยังสรุปไม่ได้)</p>`;
+    <div class="wf-card ${cv.level === 'helps' ? 'good' : cv.level === 'hurts' ? 'bad' : 'weak'}" style="margin-top:8px">
+      <div class="wf-verdict">${cv.level === 'helps' ? 'เลือกเฉพาะไม้คะแนนสูง — ช่วยได้จริงในข้อมูลชุดนี้'
+        : cv.level === 'hurts' ? 'เลือกเฉพาะไม้คะแนนสูง — ไม่ช่วย และแย่กว่าเดิม'
+        : cv.level === 'no-evidence' ? 'ยังไม่มีหลักฐานว่าคะแนนสูงชนะมากกว่า'
+        : 'ข้อมูลยังไม่พอจะตัดสิน'}</div>
+      <div class="sub">${cv.text}</div>
+    </div>
+    <p class="tiny">"ช่วงที่เป็นไปได้จริง" คือขอบเขตที่อัตราชนะจริงน่าจะอยู่ (ความเชื่อมั่น 95%) —
+      ยิ่งไม้น้อยช่วงยิ่งกว้าง ถ้าสองช่วงทับกัน แปลว่าข้อมูลยังแยกไม่ออกว่าอันไหนดีกว่า
+      ต่อให้ตัวเลขอัตราชนะจะต่างกันก็ตาม</p>`;
 
   const bestSess = bt.sessions.filter((x) => x.n >= 8).sort((a, b) => (b.winRate || 0) - (a.winRate || 0))[0];
   $('btSessions').innerHTML = `<table><thead><tr><th>ช่วงเวลา</th><th>ไม้</th><th>อัตราชนะ</th><th>ค่าคาดหวัง</th></tr></thead><tbody>

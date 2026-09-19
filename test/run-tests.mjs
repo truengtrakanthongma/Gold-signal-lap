@@ -7,7 +7,7 @@
  */
 import * as ta from '../js/indicators.js';
 import { buildContext, scoreAt, buildSetup, combineTimeframes, holdSignal, DEFAULT_CFG, WEIGHTS } from '../js/signals.js';
-import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle, evaluateTarget } from '../js/backtest.js';
+import { runBacktest, optimizeExits, embargoIndex, compareExitStyles, isTrailStyle, evaluateTarget, convictionCheck, wilsonInterval } from '../js/backtest.js';
 import { tuneStrategy, evaluateStrategy, toBacktestOpts, describeStrategy, DEFAULT_STRATEGY } from '../js/strategy.js';
 import { fitLogistic, standardize, learnWeights, learnAndValidate, probBetter, toDataset } from '../js/learn.js';
 import { tuneOn, rollingWalkForward, driftCheck, autoTune } from '../js/adapt.js';
@@ -3196,6 +3196,56 @@ section('51) ระงับสัญญาณแล้ว ต้องไม่
   ok('สัญญาณยืนยันอิง state.action ซึ่งเป็น wait เมื่อถูกระงับ',
     /const passes = !!state\.hold && blocks\.length === 0;/.test(app4)
     && /state\.action = passes \?/.test(app4));
+}
+
+section('52) "เลือกเฉพาะไม้ที่มั่นใจสุด" — ต้องพิสูจน์ก่อน ไม่ใช่เชื่อไปเอง');
+{
+  /*
+   * ผู้ใช้ขอว่า "ทำให้เลือกเฉพาะไม้ที่มั่นใจสุด" ซึ่งตั้งอยู่บนสมมติฐานว่า
+   * คะแนนสูง = ชนะมากขึ้น — สมมติฐานที่ทั้งระบบพึ่งพา แต่ไม่เคยถูกตรวจสอบเลย
+   *
+   * วัดบนทองจริง XAU/USD (196 ไม้): คะแนน 30-40 ชนะ 38% · 40-50 ชนะ 31% · 50-60 ชนะ 14%
+   * และคะแนนไม่เคยเกิน 56.1 เลยสักครั้งใน 4,220 แท่ง — ตั้งเกณฑ์ 60 = ไม่ได้เทรดเลย
+   * แต่ช่วงความเชื่อมั่นทับกันหมด จึงสรุปไม่ได้ทั้งสองทาง ต้องตอบว่า "ยังไม่รู้"
+   *
+   * ตารางเดิมเน้นช่วงที่ชนะสูงสุดโดยขอแค่ 10 ไม้ ซึ่งเชิญให้ไล่ตามความบังเอิญ
+   */
+  const ci = wilsonInterval(7, 10);
+  ok('ชนะ 7 จาก 10 → ช่วงกว้างมาก ไม่ใช่ "70% แน่นอน"', ci.low < 45 && ci.high > 85);
+  const ci2 = wilsonInterval(700, 1000);
+  ok('ชนะ 700 จาก 1000 → ช่วงแคบลงชัดเจน', ci2.high - ci2.low < 6);
+  ok('ไม่มีข้อมูลเลย → ไม่คืนตัวเลขมั่ว', wilsonInterval(0, 0) === null);
+
+  const band = (label, wins, n) => ({ label, n, wins, winRate: n ? (wins / n) * 100 : null, ci: wilsonInterval(wins, n) });
+
+  ok('ตัวอย่างน้อย → ต้องตอบว่ายังตัดสินไม่ได้',
+    convictionCheck([band('30-45', 4, 10), band('45-60', 8, 10)]).level === 'unknown');
+
+  /* กรณีสำคัญที่สุด: ตัวเลขต่างกันเยอะ แต่ช่วงทับกัน = ยังสรุปไม่ได้ */
+  const overlap = convictionCheck([band('30-45', 15, 40), band('45-60', 22, 40)]);
+  ok('ชนะ 37.5% กับ 55% แต่ตัวอย่างน้อย → ช่วงทับกัน ต้องไม่เคลมว่าดีกว่า', overlap.level === 'no-evidence');
+  ok('และต้องอธิบายด้วยว่าทับกันตรงไหน', /ทับกัน/.test(overlap.text));
+
+  const helps = convictionCheck([band('30-45', 150, 500), band('45-60', 320, 500)]);
+  ok('ตัวอย่างเยอะพอและแยกกันชัด → บอกได้ว่าคะแนนสูงชนะมากกว่าจริง', helps.level === 'helps');
+
+  const hurts = convictionCheck([band('30-45', 320, 500), band('45-60', 150, 500)]);
+  ok('ถ้าคะแนนสูงกลับแย่กว่า ต้องกล้าบอกตรง ๆ', hurts.level === 'hurts');
+
+  /* ผลลัพธ์จริงจาก backtest ต้องมีช่วงความเชื่อมั่นติดมาทุกแถว */
+  const bt = runBacktest(buildContext(makeCandles(2500, 5)), { threshold: 30, exitStyle: 'partial' });
+  ok('ทุกช่วงคะแนนมีช่วงความเชื่อมั่นกำกับ', bt.bands.every((b) => b.n === 0 || (b.ci && Number.isFinite(b.ci.low))));
+  ok('ช่วงความเชื่อมั่นครอบอัตราชนะที่วัดได้เสมอ',
+    bt.bands.filter((b) => b.n > 0).every((b) => b.winRate >= b.ci.low - 1e-9 && b.winRate <= b.ci.high + 1e-9));
+  ok('ผลลัพธ์แนบคำตัดสินเรื่องความมั่นใจมาด้วย',
+    bt.conviction && ['helps', 'hurts', 'no-evidence', 'unknown'].includes(bt.conviction.level));
+
+  const fs5 = await import('node:fs');
+  const app5 = fs5.readFileSync('js/app.js', 'utf8');
+  ok('หน้าจอไม่เน้นช่วงที่ชนะสูงสุดจากตัวอย่างแค่ 10 ไม้อีกแล้ว', !/x\.n >= 10\)\.map\(\(x\) => x\.winRate/.test(app5));
+  ok('เน้นได้เฉพาะตอนที่พิสูจน์แล้วว่าช่วยจริง', /cv\.level === 'helps' && cv\.high \? cv\.high\.label : null/.test(app5));
+  ok('โชว์ช่วงที่เป็นไปได้จริงทุกแถว', /b\.ci\.low\.toFixed\(0\)/.test(app5));
+  ok('บอกคำตัดสินให้ผู้ใช้อ่าน ไม่ใช่เก็บไว้เงียบ ๆ', /cv\.text/.test(app5));
 }
 
 console.log(`\n${'─'.repeat(52)}`);

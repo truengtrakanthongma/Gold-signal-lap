@@ -323,6 +323,39 @@ export function runBacktest(ctx, opts = {}) {
   return summarize(trades, o, missed);
 }
 
+/*
+ * "คะแนนสูง = ชนะมากขึ้น" จริงไหมในข้อมูลชุดนี้
+ *
+ * นี่คือสมมติฐานที่ทั้งระบบตั้งอยู่บนมัน แต่ไม่เคยถูกตรวจสอบ
+ * และเป็นคำถามที่ผู้ใช้ถามตรง ๆ ว่า "เลือกเฉพาะไม้ที่มั่นใจสุดได้ไหม"
+ *
+ * กติกาที่ใช้ตัดสิน เข้มโดยตั้งใจ: จะบอกว่า "จริง" ได้ก็ต่อเมื่อ
+ * ช่วงความเชื่อมั่นของกลุ่มคะแนนสูง ไม่ทับกับของกลุ่มคะแนนต่ำเลย
+ * ถ้าทับกัน = ข้อมูลยังแยกไม่ออก ต้องตอบว่า "ยังไม่รู้" ไม่ใช่เดาข้างที่อยากได้
+ */
+const MIN_BAND_N = 30;   // ต่ำกว่านี้ ช่วงความเชื่อมั่นกว้างจนบอกอะไรไม่ได้
+
+export function convictionCheck(bands) {
+  const usable = bands.filter((b) => b.n >= MIN_BAND_N);
+  if (usable.length < 2) {
+    return { level: 'unknown', minN: MIN_BAND_N,
+      text: `ยังตัดสินไม่ได้ว่า "คะแนนสูง = ชนะมากขึ้น" จริงไหม — ต้องมีอย่างน้อย 2 ช่วงคะแนนที่มีไม้ ${MIN_BAND_N} ไม้ขึ้นไป` };
+  }
+  const low = usable[0], high = usable[usable.length - 1];
+  if (high.ci.low > low.ci.high) {
+    return { level: 'helps', low, high,
+      text: `ในข้อมูลชุดนี้ คะแนนสูงชนะมากกว่าจริง (${high.label} ชนะ ${high.winRate.toFixed(0)}% เทียบกับ ${low.label} ที่ ${low.winRate.toFixed(0)}%) — การเลือกเฉพาะไม้คะแนนสูงมีเหตุผลรองรับ` };
+  }
+  if (low.ci.low > high.ci.high) {
+    return { level: 'hurts', low, high,
+      text: `ในข้อมูลชุดนี้ คะแนนสูงกลับชนะ "น้อยกว่า" (${high.label} ชนะ ${high.winRate.toFixed(0)}% เทียบกับ ${low.label} ที่ ${low.winRate.toFixed(0)}%) — การเลือกเฉพาะไม้คะแนนสูงไม่ช่วย และอาจแย่กว่าเดิม` };
+  }
+  return { level: 'no-evidence', low, high,
+    text: `ยังไม่มีหลักฐานว่าคะแนนสูงชนะมากกว่า — ช่วงที่เป็นไปได้ของทั้งสองกลุ่มทับกันอยู่ `
+      + `(${high.label}: ${high.ci.low.toFixed(0)}-${high.ci.high.toFixed(0)}% · ${low.label}: ${low.ci.low.toFixed(0)}-${low.ci.high.toFixed(0)}%) `
+      + `ความต่างที่เห็นอธิบายด้วยความบังเอิญได้ทั้งหมด` };
+}
+
 function summarize(trades, o, missed = []) {
   const n = trades.length;
   /*
@@ -358,9 +391,12 @@ function summarize(trades, o, missed = []) {
   ].map((b) => {
     const list = trades.filter((t) => t.absScore >= b.min && t.absScore < b.max);
     const w = list.filter((t) => t.rMultiple > 0).length;
-    return { ...b, n: list.length, winRate: list.length ? (w / list.length) * 100 : null,
+    return { ...b, n: list.length, wins: w,
+      winRate: list.length ? (w / list.length) * 100 : null,
+      ci: wilsonInterval(w, list.length),
       avgR: list.length ? list.reduce((a, t) => a + t.rMultiple, 0) / list.length : null };
   });
+  const conviction = convictionCheck(bands);
 
   const sessions = SESSION_BUCKETS.map((s) => {
     const list = trades.filter((t) => t.hourTh >= s.from && t.hourTh < s.to);
@@ -392,7 +428,7 @@ function summarize(trades, o, missed = []) {
 
   const wonTrades = trades.filter((t) => t.hit1R);
   return {
-    trades, equity, bands, sessions, bySide, factors,
+    trades, equity, bands, conviction, sessions, bySide, factors,
     stats: {
       n,
       winRate: n ? (wins1R / n) * 100 : null,
