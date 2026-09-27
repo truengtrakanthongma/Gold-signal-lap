@@ -96,10 +96,14 @@ jobs:
           BOT_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           BOT_TEST_PING: ${{ inputs.test_ping && '1' || '0' }}
           # ปรับได้จาก Settings → Secrets and variables → Actions → Variables
-          BOT_INTERVAL: ${{ vars.BOT_INTERVAL || '15m' }}
-          BOT_THRESHOLD: ${{ vars.BOT_THRESHOLD || '40' }}
+          # กติกาตายตัวอยู่ใน js/system.js (ชุดเดียวกับหน้าเว็บ) ตรงนี้ตั้งได้แค่เรื่องทุนกับโบรกเกอร์
           BOT_ACCOUNT: ${{ vars.BOT_ACCOUNT || '1000' }}
-          BOT_RISK_PCT: ${{ vars.BOT_RISK_PCT || '1' }}
+          BOT_RISK_PCT: ${{ vars.BOT_RISK_PCT || '2' }}
+          BOT_CONTRACT_SIZE: ${{ vars.BOT_CONTRACT_SIZE || '100' }}
+          BOT_MIN_LOT: ${{ vars.BOT_MIN_LOT || '0.01' }}
+          BOT_LOT_STEP: ${{ vars.BOT_LOT_STEP || '0.01' }}
+          BOT_SPREAD: ${{ vars.BOT_SPREAD || '0.30' }}
+          BOT_SIDES: ${{ vars.BOT_SIDES || 'both' }}
           BOT_SOURCES: ${{ vars.BOT_SOURCES || 'kraken_paxg,bitfinex_xaut,binance_paxg,okx_paxg' }}
         run: node bot/run.mjs
 

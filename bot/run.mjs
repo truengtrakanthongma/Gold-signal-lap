@@ -1,64 +1,48 @@
 /**
- * bot/run.mjs — บอทเฝ้าสัญญาณ 24 ชั่วโมง รันบน GitHub Actions
+ * bot/run.mjs — บอทเฝ้าสัญญาณ รันบน GitHub Actions แล้วส่งเข้า Discord
  *
- * ปัญหาที่แก้: หน้าเว็บต้องเปิดค้างไว้ถึงจะเตือนได้ ปิดจอปิดแท็บก็จบ
- * เพราะมันเป็นไฟล์นิ่ง ๆ ไม่มีอะไรรันอยู่เบื้องหลัง
+ * หน้าเว็บเตือนได้เฉพาะตอนเปิดค้างไว้ บอทตัวนี้รันบนเครื่องของ GitHub จึงเตือนได้แม้ปิดเครื่อง
+ * ฟรีสำหรับรีโปสาธารณะ · URL ของ webhook เก็บเป็น Secret ไม่โผล่ในหน้าเว็บ
  *
- * ทำไม GitHub Actions ถึงเป็นคำตอบที่ฟรีจริง:
- *   - รีโปสาธารณะได้นาทีรันไม่จำกัด ไม่มีค่าใช้จ่าย
- *   - ตั้งเวลาให้รันเองได้ (cron) ไม่ต้องมีเซิร์ฟเวอร์ ไม่ต้องเปิดเครื่องทิ้งไว้
- *   - URL ของ webhook เก็บเป็น Secret อยู่ฝั่งเซิร์ฟเวอร์ ไม่โผล่ในหน้าเว็บสาธารณะ
- *   - ใช้เอนจินตัวเดียวกับหน้าเว็บเป๊ะ ๆ สัญญาณจึงตรงกันเสมอ ไม่มีโค้ดสองชุดให้หลุดกัน
+ * ใช้กติกาจาก js/system.js ตัวเดียวกับหน้าเว็บเป๊ะ ๆ ไม่มีสูตรคำนวณของตัวเอง
+ * ระบบเก่าเคยให้บอทคิดคะแนนคนละสูตรกับเว็บ ตัวเลขในสองที่จึงไม่ตรงกัน — ห้ามเกิดอีก
  *
- * *** ข้อจำกัดที่ต้องรู้ ***
- * ตัวตั้งเวลาของ GitHub ไม่ตรงเป๊ะ ช่วงที่คนใช้เยอะอาจช้าไป 5-20 นาที
- * จึงเหมาะกับกรอบเวลา 15 นาทีขึ้นไป ไม่เหมาะกับการเก็งกำไรรายนาที
+ * ข้อจำกัด: ตัวตั้งเวลาของ GitHub ไม่ตรงเป๊ะ บางช่วงช้าหรือข้ามรอบ
+ * กติกาใช้กราฟ 4 ชม. สัญญาณมีอายุหนึ่งแท่ง (4 ชม.) จึงยังทันแม้บอทมาช้าไปหลายสิบนาที
  */
-
-import { buildContext, scoreAt, buildSetup, combineTimeframes, DEFAULT_CFG } from '../js/signals.js';
-import { runBacktest, probabilityFor, sessionBucketAt } from '../js/backtest.js';
-import { DEFAULT_STRATEGY, toBacktestOpts, describeStrategy } from '../js/strategy.js';
+import {
+  RULE, COSTS, H4, D1, resample, markClosed, spotBarsOnly, buildSystem, currentState, sizePlan, planAt,
+} from '../js/system.js';
+import { REFERENCE } from '../js/reference.js';
 import { SOURCES } from '../js/sources.js';
-import { fetchNews } from '../js/news.js';
 import { sendDiscord, buildSignalMessage, webhookProblem } from '../js/discord.js';
-import { instrumentOf } from '../js/instrument.js';
 import { goldMarketOpen, thTime } from '../js/macro.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
+const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
 const CFG = {
-  // เรียงตามความใกล้เคียงราคาทองจริง เจ้าแรกที่ตอบก็ใช้เจ้านั้น
-  sources: (process.env.BOT_SOURCES || 'kraken_paxg,bitfinex_xaut,binance_paxg,okx_paxg').split(','),
-  interval: process.env.BOT_INTERVAL || '15m',
-  threshold: +(process.env.BOT_THRESHOLD || 45),
-  account: +(process.env.BOT_ACCOUNT || 1000),
-  riskPct: +(process.env.BOT_RISK_PCT || 1),
-  bars: +(process.env.BOT_BARS || 720),
-  statePath: process.env.BOT_STATE || 'bot/.state.json',
-  webhook: process.env.DISCORD_WEBHOOK_URL || '',
+  // เรียงตามความใกล้เคียงราคาทองจริง เจ้าแรกที่ตอบครบทั้งกราฟรายวันและ 4 ชม. ก็ใช้เจ้านั้น
+  sources: env('BOT_SOURCES', 'kraken_paxg,bitfinex_xaut,binance_paxg,okx_paxg').split(',').map((s) => s.trim()).filter(Boolean),
+  account: +env('BOT_ACCOUNT', 1000),
+  riskPct: +env('BOT_RISK_PCT', 2),
+  contractSize: +env('BOT_CONTRACT_SIZE', 100),
+  minLot: +env('BOT_MIN_LOT', 0.01),
+  lotStep: +env('BOT_LOT_STEP', 0.01),
+  spread: +env('BOT_SPREAD', COSTS.spread),
+  sides: env('BOT_SIDES', 'both'),
+  statePath: env('BOT_STATE', 'bot/.state.json'),
+  webhook: env('DISCORD_WEBHOOK_URL', ''),
   dryRun: process.env.BOT_DRY_RUN === '1',
   testPing: process.env.BOT_TEST_PING === '1',
 };
-
-/*
- * กลยุทธ์ของบอท — อ่านจากนิยามกลางชุดเดียวกับเว็บ
- *
- * เดิมตรงนี้เขียน exitStyle: 'full' ทิ้งไว้ในโค้ด ขณะที่เว็บใช้ค่าที่ผู้ใช้ตั้ง
- * ผลคืออัตราชนะที่บอทส่งเข้า Discord มาจากวิธีบริหารไม้คนละท่ากับที่หน้าเว็บโชว์
- * ตัวเลขเดียวกันจึงไม่ตรงกันสองที่ ทั้งที่ควรเป็นระบบเดียว
- */
-const STRATEGY = {
-  ...DEFAULT_STRATEGY,
-  threshold: CFG.threshold,
-  exitStyle: process.env.BOT_EXIT_STYLE || DEFAULT_STRATEGY.exitStyle,
-  entryMode: process.env.BOT_ENTRY_MODE || DEFAULT_STRATEGY.entryMode,
-};
+/* ค่ารุ่นเก่าที่ไม่มีความหมายแล้ว — ถ้ายังตั้งไว้ต้องบอก ไม่ใช่เมินเงียบ ๆ */
+const RETIRED = ['BOT_INTERVAL', 'BOT_THRESHOLD', 'BOT_EXIT_STYLE', 'BOT_ENTRY_MODE', 'BOT_BARS'];
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+const f2 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '—');
 
-/** โหลดสถานะรอบก่อน — กันเตือนซ้ำแท่งเดิมเมื่อ GitHub รันช้าจนคาบเกี่ยวกัน */
 function loadState() {
-  try { return JSON.parse(readFileSync(CFG.statePath, 'utf8')); }
-  catch (e) { return { lastCandle: 0, lastSide: 0, lastAt: 0 }; }
+  try { return JSON.parse(readFileSync(CFG.statePath, 'utf8')); } catch (e) { return {}; }
 }
 function saveState(s) {
   try {
@@ -67,396 +51,176 @@ function saveState(s) {
   } catch (e) { log('บันทึกสถานะไม่ได้:', e.message); }
 }
 
-/** ดึงแท่งเทียนจากเจ้าแรกที่ตอบ */
-async function loadCandles() {
-  const attempts = [];
-  for (const key of CFG.sources) {
-    const src = SOURCES[key];
-    if (!src) { attempts.push({ key, reason: 'ไม่รู้จักแหล่งนี้' }); continue; }
-    const tf = src.tf[CFG.interval];
-    if (tf === undefined) { attempts.push({ key, reason: `ไม่มีกรอบเวลา ${CFG.interval}` }); continue; }
-    try {
-      const res = await fetch(src.url(tf, CFG.bars));
-      if (!res.ok) { attempts.push({ key, reason: `รหัส ${res.status}` }); continue; }
-      const bars = src.parse(await res.json());
-      if (bars.length < 260) { attempts.push({ key, reason: `ได้แค่ ${bars.length} แท่ง` }); continue; }
-      log(`ใช้ข้อมูลจาก ${src.label} · ${bars.length} แท่ง`);
-      return { bars, key, label: src.label, attempts };
-    } catch (e) { attempts.push({ key, reason: e.message }); }
-  }
-  return { bars: null, attempts };
+async function fetchBars(key, tf, limit) {
+  const src = SOURCES[key];
+  const res = await fetch(src.url(src.tf[tf], limit));
+  if (!res.ok) throw new Error(`รหัส ${res.status}`);
+  return src.parse(await res.json());
 }
 
 /**
- * ดึงกรอบเวลาใหญ่จากแหล่งเดียวกับที่กรอบหลักใช้สำเร็จ
- *
- * ทำไมต้องมี: บอทเคยให้คะแนนจากกรอบ 15 นาทีอย่างเดียว ส่วนหน้าเว็บผสมสามกรอบ
- * ตัวเลขเดียวกันจึงหมายคนละอย่างในสองที่ วัดแล้วต่างกันเฉลี่ย 7.7 คะแนน
- * และมี 179 ครั้งใน 5,700 แท่งที่บอทส่งสัญญาณออกไป ทั้งที่หน้าเว็บตีตกแล้ว
- * เพราะบอทไม่มีการหักคะแนนตอนกรอบเล็กสวนกรอบใหญ่เลย
- *
- * ใช้แหล่งเดิมที่กรอบหลักโหลดสำเร็จ ไม่ไล่หาใหม่ เพราะข้อมูลต้องมาจากเจ้าเดียวกัน
- * ไม่งั้นจะเอาราคาของคนละตลาดมาเทียบกัน
+ * ดึงกราฟรายวันและกราฟ 4 ชม. จากแหล่งเดียวกัน — ไม่เอาราคาคนละตลาดมาเทียบกัน
+ * แหล่งที่ไม่มีกราฟ 4 ชม. ให้ตรง ๆ ใช้กราฟ 1 ชม. มารวมเอง (ตั้งเวลาแท่งเหมือนกันทุกแหล่ง)
  */
-async function loadHigherTf(key) {
-  const src = SOURCES[key];
-  const out = {};
-  if (!src) return out;
-  for (const want of ['1h', '4h']) {
-    if (want === CFG.interval) continue;
-    const tf = src.tf[want];
-    if (tf === undefined) continue;
+async function loadData() {
+  const attempts = [];
+  for (const key of CFG.sources) {
+    const src = SOURCES[key];
+    if (!src || src.needsKey) { attempts.push({ key, reason: src ? 'ต้องใช้คีย์' : 'ไม่รู้จักแหล่งนี้' }); continue; }
+    if (src.tf['1d'] === undefined) { attempts.push({ key, reason: 'ไม่มีกราฟรายวัน' }); continue; }
     try {
-      const res = await fetch(src.url(tf, 400));
-      if (!res.ok) { log(`กรอบ ${want} โหลดไม่ได้ (รหัส ${res.status})`); continue; }
-      const bars = src.parse(await res.json());
-      /* ต้องมีแท่งพอให้ EMA200 นิ่ง ไม่งั้นคะแนนกรอบนั้นเชื่อไม่ได้
-         เอาข้อมูลไม่พอมาผสม แย่กว่าไม่เอามาเลย */
-      if (bars.length < 260) { log(`กรอบ ${want} ได้แค่ ${bars.length} แท่ง ไม่พอ`); continue; }
-      out[want] = bars;
-    } catch (e) { log(`กรอบ ${want} โหลดไม่ได้: ${e.message}`); }
+      const d1 = await fetchBars(key, '1d', 400);
+      const h4 = src.tf['4h'] !== undefined ? await fetchBars(key, '4h', 720) : resample(await fetchBars(key, '1h', 1000), H4);
+      if (d1.length < 80 || h4.length < 60) { attempts.push({ key, reason: `ข้อมูลน้อยไป (รายวัน ${d1.length} · 4 ชม. ${h4.length})` }); continue; }
+      log(`ใช้ข้อมูลจาก ${src.label} · รายวัน ${d1.length} แท่ง · 4 ชม. ${h4.length} แท่ง`);
+      return { d1, h4, key, label: src.label, attempts };
+    } catch (e) { attempts.push({ key, reason: e.message }); }
   }
-  return out;
-}
-
-/** ตัวกรองความผันผวน ชุดเดียวกับหน้าเว็บ */
-function blocked(ctx, scored) {
-  return scored.atrPct < ctx.cfg.minAtrPct || scored.atrPct > ctx.cfg.maxAtrPct;
-}
-
-/** ปัจจัยที่ดันไปทางเดียวกับคะแนน เรียงจากแรงสุด */
-function topFactors(scored, side, newsLine) {
-  return [
-    ...scored.factors.filter((f) => Math.sign(f.contribution) === side)
-      .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))
-      .slice(0, 4).map((f) => `${f.name}: ${f.reason}`),
-    ...(newsLine ? [`ข่าว: ${newsLine}`] : []),
-  ];
-}
-
-/** เหตุผลที่ยังไม่เตือน — ต้องบอกให้ครบว่าติดข้อไหนบ้าง ไม่ใช่ข้อแรกที่เจอ */
-function statusBlocks(ctx, scored, strong, noSetup) {
-  const out = [];
-  if (!strong) {
-    out.push(`คะแนน ${scored.score.toFixed(1)} ยังไม่ถึงเกณฑ์ ${CFG.threshold} จึงยังไม่เตือน`);
-  }
-  if (blocked(ctx, scored)) {
-    out.push(`ความผันผวนผิดปกติ — ATR ${scored.atrPct.toFixed(3)}% อยู่นอกช่วงที่รับได้ `
-      + `(${ctx.cfg.minAtrPct}–${ctx.cfg.maxAtrPct}%)`);
-  }
-  if (noSetup) out.push('คะแนนถึงเกณฑ์แล้ว แต่วางจุดตัดขาดทุนกับเป้าหมายให้คุ้มความเสี่ยงไม่ได้');
-  out.push('นี่คือรายงานตามที่กดสั่ง ไม่ใช่สัญญาณเข้าเทรด — ตัวเลขทุกตัวเป็นของจริงจากตลาดตอนนี้');
-  return out;
-}
-
-/** ข้อมูลประกอบที่ทั้งสัญญาณจริงและรายงานสถานะใช้ร่วมกัน */
-async function gatherContext(ctx, scored, key, label) {
-  // สถิติย้อนหลังของกรอบเวลานี้ ใช้บอกอัตราชนะที่เคยเกิดจริง
-  let prob = null;
-  try {
-    const bt = runBacktest(ctx, toBacktestOpts(STRATEGY));
-    prob = probabilityFor(scored.score, bt);
-  } catch (e) { log('คำนวณสถิติย้อนหลังไม่ได้:', e.message); }
-
-  // บรรยากาศข่าว (ถ้าดึงได้) — ไม่ใช่เงื่อนไขบังคับ แค่ใส่เป็นบริบท
-  let newsLine = null;
-  try {
-    const news = await fetchNews({ hours: 12 });
-    if (news.ok && news.climate.n) newsLine = `${news.climate.label} (${news.climate.n} ข่าว จาก ${news.label})`;
-  } catch (e) { /* ข่าวดึงไม่ได้ไม่ควรทำให้สัญญาณราคาหายไป */ }
-
-  return { prob, newsLine, inst: instrumentOf(key, ''), label };
-}
-
-/** ข้อความสัญญาณจริง — คืน null เมื่อวางแผนเทรดไม่ได้ */
-function signalMessage(ctx, i, scored, side, last, extra) {
-  const setup = buildSetup(ctx, i, { ...scored, side }, {
-    account: CFG.account, riskPct: CFG.riskPct, entryPrice: last.c, side,
-  });
-  if (!setup) return null;
-  /*
-   * ไม้ที่เสี่ยงเกินเพดาน ต้องไม่ถูกส่งเป็นแผนพร้อมขนาดไม้เข้า Discord
-   *
-   * ข้อความแจ้งเตือนที่มีราคาเข้า/SL/TP/จำนวนล็อตครบ อ่านแล้วเหมือนไฟเขียว
-   * ถ้าทุนไม่พอจนไม้เล็กสุดยังเสี่ยงเกิน 10% ของพอร์ต การส่งแผนไปคือการชวนให้เจ๊ง
-   * ส่งไปว่า "มีสัญญาณแต่ทุนไม่พอ" แทน จะได้รู้ว่าพลาดอะไรไปโดยไม่ถูกชวนให้กด
-   */
-  if (setup.tradeable === false) {
-    const r = setup.ruin;
-    return `⛔ **มีสัญญาณ${side > 0 ? 'ซื้อ' : 'ขาย'} แต่ทุนไม่พอจะเทรดไม้นี้**\n`
-      + `${extra.inst.name} · ${extra.label} · ราคา ${last.c.toFixed(2)} · คะแนน ${scored.score.toFixed(1)}\n\n`
-      + `ไม้เล็กที่สุดที่ส่งคำสั่งได้เสี่ยง $${setup.riskActual.toFixed(2)} `
-      + `= **${setup.riskActualPct.toFixed(0)}%** ของทุน $${CFG.account} (เพดานปลอดภัย ${setup.riskCeiling}%)\n`
-      + (r ? `แพ้ติดกัน ${r.lossesToZero} ไม้ = ทุนหมด · ทุนที่ควรมีสำหรับขนาดนี้คือ $${r.capitalNeeded}\n` : '')
-      + `\n_ไม่ส่งราคาเข้า/SL/TP มาให้ เพราะที่ความเสี่ยงระดับนี้ ตัวเลขที่แม่นแค่ไหนก็ช่วยไม่ได้_`;
-  }
-  return buildSignalMessage({
-    action: side > 0 ? 'buy' : 'sell',
-    score: scored.score, price: last.c, tf: CFG.interval,
-    instrument: `${extra.inst.name} · ${extra.label}`,
-    setup, prob: extra.prob,
-    reasons: topFactors(scored, side, extra.newsLine),
-  });
+  return { attempts };
 }
 
 /*
- * ตรวจค่าตั้งค่าก่อนเริ่มทำงาน
- *
- * ค่าพวกนี้มาจาก Variables ของ GitHub ซึ่งพิมพ์ผิดได้ง่าย เช่นใส่ "1,000"
- * แล้ว +"1,000" ได้ NaN ผลคือ Math.abs(score) >= NaN เป็นเท็จตลอด
- * บอทจึงไม่เตือนเลยสักครั้ง โดยที่ทุกรอบขึ้นติกเขียวสวยงาม
- * ความเงียบแบบนั้นแยกไม่ออกจาก "ตลาดยังไม่มีจังหวะ" — เสียเวลาเป็นวันกว่าจะรู้
+ * ตรวจค่าตั้งค่าก่อนเริ่ม — ค่าจาก Variables ของ GitHub พิมพ์ผิดง่าย ("1,000" กลายเป็น NaN)
+ * บอทที่ตั้งผิดจะเงียบทั้งวันโดยทุกรอบขึ้นติกเขียว แยกไม่ออกจาก "ตลาดยังไม่มีจังหวะ"
  */
 function checkConfig() {
   const bad = [];
-  const pos = (name, v, envName) => { if (!Number.isFinite(v) || v <= 0) bad.push(`${envName} (${name}) = ${JSON.stringify(process.env[envName])} → ใช้เป็นตัวเลขไม่ได้`); };
-  pos('เกณฑ์คะแนน', CFG.threshold, 'BOT_THRESHOLD');
+  const pos = (label, v, name) => { if (!Number.isFinite(v) || v <= 0) bad.push(`${name} (${label}) = ${JSON.stringify(process.env[name])} → ใช้เป็นตัวเลขไม่ได้`); };
   pos('ทุน', CFG.account, 'BOT_ACCOUNT');
   pos('ความเสี่ยงต่อไม้', CFG.riskPct, 'BOT_RISK_PCT');
-  pos('จำนวนแท่งที่ดึง', CFG.bars, 'BOT_BARS');
-  const unknown = CFG.sources.filter((k) => !SOURCES[k]);
-  if (unknown.length === CFG.sources.length) bad.push(`BOT_SOURCES = ไม่รู้จักสักแหล่ง (${CFG.sources.join(', ')})`);
-  /* ชื่อท่าที่พิมพ์ผิดจะไม่ทำให้เครื่องจำลองพัง แต่จะตกไปใช้ท่าตั้งต้นเงียบ ๆ
-     แล้วอัตราชนะที่ส่งเข้า Discord จะมาจากท่าที่ไม่มีใครตั้งใจเลือก */
-  const styles = ['partial', 'full', 'full-be', 'trail', 'trail-1R'];
-  if (!styles.includes(STRATEGY.exitStyle)) bad.push(`BOT_EXIT_STYLE = ${JSON.stringify(STRATEGY.exitStyle)} → ไม่รู้จัก (ใช้ได้: ${styles.join(', ')})`);
-  const modes = ['market', 'pullback'];
-  if (!modes.includes(STRATEGY.entryMode)) bad.push(`BOT_ENTRY_MODE = ${JSON.stringify(STRATEGY.entryMode)} → ไม่รู้จัก (ใช้ได้: ${modes.join(', ')})`);
+  pos('ออนซ์ต่อล็อต', CFG.contractSize, 'BOT_CONTRACT_SIZE');
+  pos('ล็อตเล็กสุด', CFG.minLot, 'BOT_MIN_LOT');
+  pos('ขั้นล็อต', CFG.lotStep, 'BOT_LOT_STEP');
+  if (!Number.isFinite(CFG.spread) || CFG.spread < 0) bad.push(`BOT_SPREAD = ${JSON.stringify(process.env.BOT_SPREAD)} → ใช้เป็นตัวเลขไม่ได้`);
+  if (CFG.riskPct > 10) bad.push(`BOT_RISK_PCT = ${CFG.riskPct} → เกิน 10% ต่อไม้ แพ้ติดกันไม่กี่ไม้ก็หมดพอร์ต`);
+  if (!['both', 'long'].includes(CFG.sides)) bad.push(`BOT_SIDES = ${JSON.stringify(CFG.sides)} → ใช้ได้แค่ both หรือ long`);
+  if (!CFG.sources.some((k) => SOURCES[k])) bad.push(`BOT_SOURCES = ไม่รู้จักสักแหล่ง (${CFG.sources.join(', ')})`);
   return bad;
 }
 
-/*
- * ส่งข้อความออก แล้วรายงานผลตามจริง
- *
- * แยกเป็นฟังก์ชันเดียวเพราะมีที่เรียกหลายแห่ง (สัญญาณ รายงานสถานะ แจ้งว่าดึงราคาไม่ได้)
- * และทุกแห่งต้องบันทึกสถานะก็ต่อเมื่อส่งถึงจริงเท่านั้น
- */
+/* ส่งออกแล้วรายงานผลตามจริง — บันทึกสถานะก็ต่อเมื่อส่งถึงจริงเท่านั้น */
 async function deliver(msg, what) {
-  const results = [];
-  if (CFG.webhook) {
-    const r = await sendDiscord(CFG.webhook, msg);
-    results.push({ ch: 'Discord', ...r });
+  if (CFG.dryRun) { log(`โหมดทดสอบ ไม่ส่ง${what}จริง:\n` + JSON.stringify(msg, null, 2)); return { ok: true, dry: true }; }
+  const r = await sendDiscord(CFG.webhook, msg);
+  log(`${what} → Discord ${r.ok ? `สำเร็จ (${r.ms} มิลลิวินาที)` : `ไม่สำเร็จ: ${r.reason}`}`);
+  return r;
+}
+
+function describe(cur) {
+  const t = cur.trade;
+  switch (cur.kind) {
+    case 'entry': return `สัญญาณ${(t ? t.side : cur.signal.side) > 0 ? 'ซื้อ' : 'ขาย'}ใหม่`;
+    case 'holding': return `ระบบถือ${t.side > 0 ? 'ซื้อ' : 'ขาย'}อยู่ (เข้า ${f2(t.entry)} · ตอนนี้ ${t.rNow >= 0 ? '+' : ''}${t.rNow.toFixed(2)}R)`;
+    case 'cooldown': return 'พักหลังออกไม้';
+    case 'wait': return `เทรนด์${cur.signal.trend > 0 ? 'ขาขึ้น รอราคาย่อ' : 'ขาลง รอราคาเด้ง'}ถึง ${f2(cur.signal.ema)}`;
+    case 'no-trend': return 'เทรนด์ใหญ่ไม่ชัด ไม่เทรด';
+    default: return 'ข้อมูลยังไม่พอ';
   }
-  for (const r of results) {
-    if (r.ok) log(`${what} → ${r.ch} สำเร็จ (${r.ms} มิลลิวินาที)`);
-    else log(`${what} → ${r.ch} ไม่สำเร็จ: ${r.reason}`);
-  }
-  return { ok: results.some((r) => r.ok), results };
 }
 
 async function main() {
-  const badCfg = checkConfig();
-  if (badCfg.length) {
+  const retired = RETIRED.filter((k) => process.env[k]);
+  if (retired.length) log(`หมายเหตุ: ${retired.join(', ')} ไม่มีผลแล้วในระบบใหม่ (ลบออกจาก Variables ได้)`);
+
+  const bad = checkConfig();
+  if (bad.length) {
     log('ตั้งค่าผิด จึงไม่เริ่มทำงาน — ถ้าปล่อยผ่าน บอทจะเงียบทั้งวันโดยไม่มีอะไรฟ้อง:');
-    for (const b of badCfg) log('  •', b);
+    for (const b of bad) log('  •', b);
     log('แก้ที่ Settings → Secrets and variables → Actions → Variables');
     process.exit(1);
   }
-
-  /*
-   * ต้องมีช่องทางที่ใช้ได้อย่างน้อยหนึ่งช่อง
-   *
-   * ตรวจเฉพาะช่องที่ผู้ใช้ตั้งค่ามา ไม่บังคับให้มีครบทั้งสอง
-   * แต่ถ้าตั้งมาแล้วตั้งผิด ต้องหยุดและบอก ไม่ใช่ปล่อยให้เงียบทั้งวัน
-   */
   if (!CFG.dryRun) {
-    const chans = [];
-    if (CFG.webhook) chans.push(['Discord', webhookProblem(CFG.webhook), 'DISCORD_WEBHOOK_URL']);
-
-    if (!chans.length) {
-      log('ยังไม่ได้ตั้ง DISCORD_WEBHOOK_URL จึงไม่มีที่ให้ส่งสัญญาณ');
+    const problem = webhookProblem(CFG.webhook);
+    if (problem) {
+      log(`DISCORD_WEBHOOK_URL ใช้ไม่ได้: ${problem}`);
       log('แก้ที่ Settings → Secrets and variables → Actions → Secrets');
       process.exit(1);
     }
-    const broken = chans.filter(([, why]) => why);
-    if (broken.length === chans.length) {
-      log('ช่องทางแจ้งเตือนที่ตั้งไว้ใช้ไม่ได้ทั้งหมด จึงไม่เริ่มทำงาน:');
-      for (const [ch, why, env] of broken) log(`  • ${ch} (${env}): ${why}`);
-      process.exit(1);
-    }
-    for (const [ch, why, env] of broken) log(`ข้าม ${ch} (${env}): ${why}`);
   }
-
-  /*
-   * ติ๊กมาทั้งสองช่อง = สั่งขัดกันเอง ช่องหนึ่งบอกว่าห้ามส่ง อีกช่องบอกว่าให้ส่ง
-   * ยึดช่องที่ห้ามไว้ก่อน เพราะข้อความที่ส่งไปแล้วเรียกกลับไม่ได้
-   * แต่ต้องบอกให้ชัดว่าทำไมไม่มีอะไรเด้งเข้า Discord ไม่งั้นดูเหมือนพัง
-   */
+  /* ติ๊กมาทั้งสองช่อง = สั่งขัดกันเอง ยึดข้างที่ห้ามส่งไว้ก่อน เพราะข้อความที่ส่งแล้วเรียกคืนไม่ได้ */
   if (CFG.testPing && CFG.dryRun) {
-    log('ติ๊กมาทั้ง dry run และ test ping — dry run แปลว่าห้ามส่งออก จึงยังไม่ส่ง');
-    log('อยากให้รายงานสถานะเด้งเข้า Discord จริง ให้ติ๊กเฉพาะ test ping ช่องเดียว');
+    log('ติ๊กมาทั้ง dry run และ test ping — dry run แปลว่าห้ามส่ง จึงยังไม่ส่ง · อยากให้เด้งเข้า Discord ให้ติ๊ก test ping ช่องเดียว');
     return;
   }
 
-  const { bars, label, key, attempts } = await loadCandles();
-  if (!bars) {
-    log('ดึงข้อมูลราคาไม่ได้จากทุกแหล่ง:', JSON.stringify(attempts));
-    /*
-     * ดึงราคาไม่ได้คือข่าวที่ต้องรู้ ไม่ใช่ความเงียบ
-     * คนกดตรวจสถานะแล้วไม่มีอะไรเด้ง จะแยกไม่ออกว่าระบบปกติหรือพัง
-     */
+  const data = await loadData();
+  if (!data.d1) {
+    log('ดึงข้อมูลราคาไม่ได้จากทุกแหล่ง:', JSON.stringify(data.attempts));
+    /* ดึงราคาไม่ได้คือข่าวที่ต้องรู้ คนกดตรวจสถานะแล้วไม่มีอะไรเด้ง จะแยกไม่ออกว่าปกติหรือพัง */
     if (CFG.testPing) {
-      await deliver(buildSignalMessage({
-        action: 'warn', score: null, price: null, tf: CFG.interval,
-        instrument: 'ตรวจสถานะระบบ',
-        blocks: ['ดึงราคาไม่ได้เลยสักแหล่ง จึงคำนวณอะไรไม่ได้',
-                 ...attempts.map((a) => `${a.key}: ${a.reason}`)],
-      }), 'แจ้งว่าดึงราคาไม่ได้');
+      await deliver(buildSignalMessage({ action: 'warn', price: null, instrument: 'ตรวจสถานะระบบ',
+        blocks: ['ดึงราคาไม่ได้เลยสักแหล่ง จึงคำนวณอะไรไม่ได้', ...data.attempts.map((a) => `${a.key}: ${a.reason}`)] }), 'แจ้งว่าดึงราคาไม่ได้');
     }
     process.exit(1);
   }
 
-  /*
-   * ใช้เฉพาะแท่งที่ปิดแล้ว
-   * แท่งที่ยังก่อตัวอยู่เปลี่ยนค่าได้ตลอด สัญญาณจากมันจึงกลับไปกลับมา
-   * และจะเตือนผิดบ่อยมาก — รอให้ปิดก่อนเสมอ
-   */
-  const closed = bars.filter((b) => b.closed !== false);
-  const ctx = buildContext(closed, { ...DEFAULT_CFG, threshold: CFG.threshold });
-  const i = closed.length - 1;
-  const last = closed[i];
+  const now = Date.now();
+  const h4 = spotBarsOnly(markClosed(data.h4, H4, now), H4);
+  const d1 = spotBarsOnly(markClosed(data.d1, D1, now), D1);
+  const sys = buildSystem(h4, d1);
+  const costs = { spread: CFG.spread, slip: COSTS.slip };
+  const cur = currentState(sys, { costs, longOnly: CFG.sides === 'long' });
+  const last = data.h4[data.h4.length - 1];
+  const instName = data.label;
+
+  log(`ราคาล่าสุด ${f2(last.c)} · สถานะ: ${describe(cur)}`);
+  for (const c of cur.signal.checks || []) log(`  ${c.ok === true ? '✓' : c.ok === false ? '✗' : '…'} ${c.text}`);
 
   /*
-   * แท่งล่าสุดต้องเป็นของสดจริง ก่อนจะเอาไปคิดอะไรทั้งนั้น
-   *
-   * บอทตั้งเวลาไว้ทุก 15 นาที ทุกวัน รวมเสาร์-อาทิตย์ที่ตลาดทองปิด
-   * เดิมไม่มีการตรวจเลยว่าแท่งที่ได้มาเก่าแค่ไหน — ดึงสำเร็จก็คิดคะแนนแล้วยิงเข้า Discord
-   * ผลคือข้อความ "เข้าซื้อ/เข้าขาย" พร้อมราคาและขนาดไม้ ดังขึ้นที่มือถือผู้ใช้
-   * จากราคาของเมื่อวานหรือของเย็นวันศุกร์ ซึ่งกดตามไม่ได้และไม่มีความหมาย
-   *
-   * เช็คด้วยระยะห่างจริงระหว่างแท่ง ไม่ใช้ตารางแปลงกรอบเวลา
-   * จะได้ไม่มีวันขัดกับสิ่งที่แหล่งข้อมูลส่งมาจริง
+   * ด่านตายตัว ก่อนจะคิดเรื่องส่งสัญญาณ:
+   *  - ตลาดทองปิด (แหล่งราคาเป็นเหรียญทองที่ซื้อขาย 24 ชม. ราคาจึงยังขยับตลอดเสาร์-อาทิตย์)
+   *  - แท่งล่าสุดเก่าเกินไป (แหล่งค้าง ส่งของเก่ามา)
    */
-  /*
-   * ตลาดปิด = ไม่ต้องเตือน ต่อให้คะแนนจะสวยแค่ไหน
-   *
-   * บอทตั้งเวลาไว้ทุก 15 นาที ทุกวัน และแหล่งราคาที่ใช้เป็นเหรียญทอง (PAXG/XAUT)
-   * ที่ซื้อขาย 24/7 ราคาจึงยังขยับตลอดเสาร์-อาทิตย์ ด่านตรวจข้อมูลเก่าด้านล่างจับไม่ได้
-   * ผลคือข้อความ "เข้าซื้อ" พร้อมราคาและขนาดไม้ดังที่มือถือทั้งสุดสัปดาห์
-   * ทั้งที่โบรกเกอร์ปิดรับคำสั่ง กดตามไม่ได้สักไม้
-   */
-  const mk = goldMarketOpen();
-  if (!mk.open) {
-    log(`⛔ ตลาดทอง spot ปิดทำการ${mk.opensAt ? ` — เปิดอีกครั้ง ${thTime(mk.opensAt)} (เวลาไทย)` : ''} · ไม่เตือน`);
-    if (CFG.testPing) {
-      await deliver(buildSignalMessage({
-        action: 'warn', score: null, price: last.c, tf: CFG.interval,
-        instrument: `${label} (ตรวจสถานะ)`,
-        blocks: [`ตลาดทอง spot ปิดทำการ${mk.opensAt ? ` จะเปิดอีกครั้ง ${thTime(mk.opensAt)} (เวลาไทย)` : ''}`,
-                 `ราคาที่เห็น (${last.c.toFixed(2)}) มาจากเหรียญทองที่ซื้อขาย 24/7 ซึ่งเป็นคนละตลาดกับที่ส่งคำสั่งได้`,
-                 'ระบบยังทำงานปกติ แต่จะไม่เตือนจนกว่าตลาดจะเปิด'],
-      }), 'แจ้งว่าตลาดปิด');
-    }
+  const blocks = [];
+  const mk = goldMarketOpen(new Date(now));
+  if (!mk.open) blocks.push(`ตลาดทอง spot ปิดอยู่${mk.opensAt ? ` · เปิดอีกครั้ง ${thTime(mk.opensAt)} น. (เวลาไทย)` : ''}`);
+  const ageH = (now - last.t) / 3600000;
+  const liveTf = SOURCES[data.key].tf['4h'] !== undefined ? 4 : 1;
+  if (ageH > liveTf * 3 && mk.open) blocks.push(`แท่งล่าสุดเก่าไป ${ageH.toFixed(1)} ชม. — แหล่งข้อมูลอาจค้าง`);
+  for (const b of blocks) log('⛔', b);
+
+  if (CFG.testPing) {
+    /* รายงานตามสั่ง: บอกภาพตลาดจริงตอนนี้ ไม่ว่าจะมีสัญญาณหรือไม่ — พิสูจน์ได้ทั้งสาย ไม่ใช่แค่ท่อ Discord */
+    const r = await deliver(buildSignalMessage({
+      action: 'wait', price: last.c, instrument: `${instName} (รายงานสถานะ)`,
+      checks: cur.signal.checks, blocks: [describe(cur), ...blocks],
+      notes: ['นี่คือรายงานตามที่กดสั่ง ไม่ใช่สัญญาณเข้าเทรด — ตัวเลขทุกตัวเป็นของจริงจากตลาดตอนนี้'],
+      stats: REFERENCE.stats,
+    }), 'รายงานสถานะ');
+    if (!r.ok) process.exit(1);
     return;
   }
-
-  const gaps = closed.slice(-40).map((b, k, a) => (k ? b.t - a[k - 1].t : 0)).filter((g) => g > 0).sort((a, b) => a - b);
-  const tfMs = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
-  const ageMs = Date.now() - last.t;
-  if (tfMs && ageMs > tfMs * 4) {
-    const mins = Math.round(ageMs / 60000);
-    log(`⛔ แท่งล่าสุดเก่าไป ${mins >= 120 ? (mins / 60).toFixed(1) + ' ชั่วโมง' : mins + ' นาที'} `
-      + `(กรอบเวลา ${Math.round(tfMs / 60000)} นาที) — ตลาดปิดอยู่หรือแหล่งข้อมูลค้าง ไม่เตือน`);
-    if (CFG.testPing) {
-      await deliver(buildSignalMessage({
-        action: 'warn', score: null, price: last.c, tf: CFG.interval,
-        instrument: `${label} (ตรวจสถานะ)`,
-        blocks: [`แท่งล่าสุดเป็นของเมื่อ ${new Date(last.t).toISOString()} ซึ่งเก่ากว่าที่ควรมาก`,
-                 'ตลาดทองปิดเสาร์-อาทิตย์ หรือแหล่งข้อมูลกำลังส่งค่าเดิมซ้ำ',
-                 'ระบบไม่คิดสัญญาณจากราคาที่ไม่ใช่ปัจจุบัน'],
-      }), 'แจ้งว่าข้อมูลเก่า');
-    }
-    return;
-  }
-
-  const base = scoreAt(ctx, i);
-  if (!base.ready) { log('ข้อมูลยังไม่พอให้ตัวชี้วัดนิ่ง'); return; }
-
-  /*
-   * ผสมกรอบเวลาใหญ่แบบเดียวกับหน้าเว็บ
-   *
-   * ต้องเป็นตัวเลขเดียวกันทั้งสองที่ ไม่งั้น "คะแนน 42" ที่เห็นบนเว็บ
-   * กับ "คะแนน 42" ที่เด้งเข้า Discord เป็นคนละเรื่องกัน และผู้ใช้ไม่มีทางรู้
-   *
-   * ถ้ากรอบใหญ่โหลดไม่ได้ combineTimeframes จะเฉลี่ยเฉพาะกรอบที่มี
-   * ไม่ใช่นับเป็นคะแนน 0 ซึ่งจะกดคะแนนลงจนสัญญาณดี ๆ หายไปเงียบ ๆ
-   */
-  const htfBars = await loadHigherTf(key);
-  const htfScored = {};
-  for (const [want, hb] of Object.entries(htfBars)) {
-    try {
-      const hc = hb.filter((b) => b.closed !== false);
-      const hctx = buildContext(hc, { ...DEFAULT_CFG, threshold: CFG.threshold });
-      htfScored[want] = scoreAt(hctx, hc.length - 1);
-    } catch (e) { log(`คิดคะแนนกรอบ ${want} ไม่ได้: ${e.message}`); }
-  }
-  const combined = combineTimeframes(base, htfScored['1h'], htfScored['4h']);
-  /* ใช้คะแนนผสมตัดสิน แต่เก็บรายละเอียดของกรอบหลักไว้เล่าเหตุผล */
-  const scored = { ...base, score: combined.score, mtfNotes: combined.notes };
 
   const state = loadState();
-  const side = Math.sign(scored.score);
-  const strong = Math.abs(scored.score) >= CFG.threshold;
+  saveState({ ...state, lastRun: now, lastKind: cur.kind, lastPrice: last.c });
+  if (cur.kind !== 'entry') { log('ยังไม่ใช่จังหวะเข้า — ไม่เตือน'); return; }
+  if (blocks.length) { log('มีสัญญาณ แต่ติดด่านความปลอดภัย — ไม่เตือน'); return; }
 
-  const tfHave = ['15m/หลัก', ...Object.keys(htfScored)].join(', ');
-  log(`แท่งล่าสุด ${new Date(last.t).toISOString()} ราคา ${last.c.toFixed(2)} `
-    + `คะแนนกรอบหลัก ${base.score.toFixed(1)} → คะแนนผสม ${scored.score.toFixed(1)} (เกณฑ์ ${CFG.threshold}) · กรอบที่ใช้ได้: ${tfHave}`);
-  if (combined.missing && combined.missing.length) {
-    log(`⚠ ขาดกรอบเวลาใหญ่ ${combined.missing.length} กรอบ — คะแนนยังไม่ได้ยืนยันกับภาพใหญ่`);
-  }
+  const side = cur.trade ? cur.trade.side : cur.signal.side;
+  const key = `${h4[cur.closedIndex].t}:${side}`;
+  if (state.lastSignal === key) { log('สัญญาณนี้เตือนไปแล้ว — ข้าม'); return; }
 
-  /*
-   * ตรวจสถานะตามสั่ง: รายงานภาพตลาด "จริง" ตอนนี้ ไม่ว่าจะมีสัญญาณหรือไม่
-   *
-   * เดิมโหมดนี้ยิงข้อความตัวอย่างที่มีตัวเลขตายตัวออกไป ซึ่งพิสูจน์ได้แค่ว่า
-   * ท่อถึง Discord เท่านั้น ไม่ได้บอกเลยว่าอ่านราคาจริงได้ไหม คิดคะแนนได้ไหม
-   * และคนอ่านก็แยกไม่ออกว่าเลขที่เห็นเป็นของจริงหรือของปลอม ซึ่งแย่กว่าไม่ส่ง
-   *
-   * ตอนนี้มันเดินทางเดียวกับสัญญาณจริงทุกขั้น ต่างแค่ส่งออกเสมอแม้คะแนนไม่ถึง
-   * เห็นราคาที่ตรงกับตลาด = พิสูจน์ทั้งสายว่าใช้ได้จริง ไม่ใช่แค่ท่อ Discord
-   */
-  if (CFG.testPing) {
-    const extra = await gatherContext(ctx, scored, key, label);
-    const live = strong && !blocked(ctx, scored)
-      ? signalMessage(ctx, i, scored, side, last, extra) : null;
-    const msg = live || buildSignalMessage({
-      action: 'wait', score: scored.score, price: last.c, tf: CFG.interval,
-      instrument: `${extra.inst.name} · ${label} (ตรวจสถานะ)`,
-      blocks: statusBlocks(ctx, scored, strong, strong && !blocked(ctx, scored)),
-      reasons: topFactors(scored, Math.sign(scored.score) || 1, extra.newsLine),
-    });
-    const res = await deliver(msg, 'รายงานสถานะ');
-    if (!res.ok) { log('ส่งรายงานสถานะไม่สำเร็จสักช่อง'); process.exit(1); }
-    log(`ราคาในข้อความคือราคาจริงจาก ${label}`);
-    return;
-  }
+  const plan = planAt(side, last.c, cur.signal.atr, RULE, costs);
+  const size = sizePlan({ ...plan, account: CFG.account, riskPct: CFG.riskPct,
+    broker: { contractSize: CFG.contractSize, minLot: CFG.minLot, lotStep: CFG.lotStep } });
 
-  if (!strong) { log('คะแนนยังไม่ถึงเกณฑ์ — ไม่เตือน'); saveState({ ...state, lastSeen: last.t }); return; }
+  /* ทุนไม่พอ = ส่งไปบอกว่ามีสัญญาณ แต่ไม่ส่งราคาเข้า/SL/TP — ข้อความที่มีตัวเลขครบอ่านแล้วเหมือนไฟเขียว */
+  const msg = size.tradeable
+    ? buildSignalMessage({ action: side > 0 ? 'buy' : 'sell', price: last.c, instrument: instName,
+      plan, size, checks: cur.signal.checks, stats: REFERENCE.stats })
+    : buildSignalMessage({ action: 'nocap', price: last.c, instrument: instName, checks: cur.signal.checks,
+      blocks: [`มีสัญญาณ${side > 0 ? 'ซื้อ' : 'ขาย'} แต่ไม้เล็กสุดเสี่ยง ${f2(size.riskUsd)} ดอลลาร์ = ${size.riskPctActual.toFixed(0)}% ของทุน (เพดาน ${size.ceilingPct}%)`,
+        `ทุนที่ควรมีสำหรับไม้ขนาดนี้คือ ${size.capitalFor2pct} ดอลลาร์ หรือใช้บัญชีที่ 1 ล็อต = 1 ออนซ์`],
+      notes: ['ไม่ส่งราคาเข้า/SL/TP มาให้ เพราะที่ความเสี่ยงระดับนี้ ตัวเลขที่แม่นแค่ไหนก็ช่วยไม่ได้'], stats: REFERENCE.stats });
 
-  // เตือนซ้ำแท่งเดิมและทิศเดิม = สแปม
-  if (state.lastCandle === last.t && state.lastSide === side) {
-    log('แท่งนี้เตือนไปแล้ว — ข้าม'); return;
-  }
-
-  if (blocked(ctx, scored)) {
-    log(`ความผันผวนผิดปกติ (ATR ${scored.atrPct.toFixed(3)}%) — ไม่เตือน`); return;
-  }
-
-  const extra = await gatherContext(ctx, scored, key, label);
-  const msg = signalMessage(ctx, i, scored, side, last, extra);
-  if (!msg) { log('สร้างแผนเทรดไม่ได้ — ไม่เตือน'); return; }
-
-  if (CFG.dryRun) { log('โหมดทดสอบ ไม่ส่งจริง:\n' + JSON.stringify(msg, null, 2)); return; }
-
-  const res = await deliver(msg, 'สัญญาณ');
-  if (res.ok) {
-    /* จำว่าเตือนแท่งนี้ไปแล้วก็ต่อเมื่อถึงมืออย่างน้อยหนึ่งช่อง
-       ไม่งั้นรอบหน้าจะข้ามไม้นี้ทั้งที่ผู้ใช้ไม่เคยได้รับอะไรเลย */
-    saveState({ lastCandle: last.t, lastSide: side, lastAt: Date.now() });
+  const r = await deliver(msg, 'สัญญาณ');
+  if (r.ok) {
+    /* จำว่าเตือนแล้วก็ต่อเมื่อส่งถึงจริง ไม่งั้นรอบหน้าจะข้ามไม้นี้ทั้งที่ผู้ใช้ไม่เคยได้รับ */
+    if (!r.dry) saveState({ ...loadState(), lastSignal: key, lastSignalAt: now });
   } else {
-    log('ส่งไม่สำเร็จสักช่อง — ไม่บันทึกว่าเตือนแล้ว จะได้ลองใหม่รอบหน้า');
+    log('ส่งไม่สำเร็จ — ไม่บันทึกว่าเตือนแล้ว จะลองใหม่รอบหน้า');
     process.exit(1);
   }
 }
 
-main().catch((e) => { log('บอทล้มเหลว:', e.stack || e.message); process.exit(1); });
+main().catch((e) => { log('ผิดพลาด:', e.stack || e.message); process.exit(1); });

@@ -78,6 +78,17 @@ function etParts(now) {
  * หาเวลาที่สถานะเปลี่ยนด้วยการเดินไปข้างหน้าทีละ 15 นาที แทนการคำนวณตรง ๆ
  * เพราะแบบนี้ข้ามช่วงเปลี่ยน DST ได้ถูกเองโดยไม่ต้องมีกรณีพิเศษ
  */
+/**
+ * ตลาดทอง spot เปิดอยู่ ณ เวลานั้นไหม — แบบเร็ว ไม่หาเวลาเปลี่ยนสถานะ
+ *
+ * ใช้กรองแท่งจากเหรียญทองที่ซื้อขาย 24/7 ให้เหลือเฉพาะช่วงที่ตลาดทองจริงเปิด
+ * ต้องเรียกได้ทีละหลายพันแท่ง จึงแยกออกมาจาก goldMarketOpen ที่ไล่หาเวลาเปิดถัดไปด้วย
+ */
+export function spotOpenAt(t) {
+  const { day, hour } = etParts(new Date(t));
+  return openAtEt(day, hour);
+}
+
 export function goldMarketOpen(now = new Date()) {
   const { day, hour } = etParts(now);
   const open = openAtEt(day, hour);

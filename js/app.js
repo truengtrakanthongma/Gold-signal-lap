@@ -1,2473 +1,735 @@
 /**
- * app.js — ตัวเชื่อมทุกส่วนเข้าด้วยกัน: ข้อมูลสด → วิเคราะห์ → กราฟ/เหตุผล → แจ้งเตือน
+ * app.js — หน้าจอหลัก
+ *
+ * หน้าที่ของไฟล์นี้มีแค่ "ต่อสาย": ดึงราคา → ส่งให้ system.js ตัดสิน → วาดผลออกมา
+ * ไม่มีสูตรคำนวณสัญญาณอยู่ในไฟล์นี้เลย ถ้าเจอตัวเลขตัดสินใจที่นี่ แปลว่าผิดที่
+ *
+ * ลำดับความสำคัญบนจอ (มือถือ): ตอนนี้ควรทำอะไร → แผน → กราฟ → หลักฐานว่ากติกาได้ผล
  */
-
-import { MarketFeed, TF, mergeCandle } from './feed.js';
-import { buildContext, scoreAt, buildSetup, combineTimeframes, explain, scoreLabel, DEFAULT_CFG, WEIGHTS, holdSignal } from './signals.js';
-import { runBacktest, probabilityFor, wilsonInterval, sessionBucketAt } from './backtest.js';
-import { tuneStrategy, toBacktestOpts } from './strategy.js';
-import { positionStatus, positionAdvice, checkPosition } from './position.js';
-import { learnAndValidate } from './learn.js';
-import { autoTune, explainAdaptation } from './adapt.js';
-import { SOURCES, testAllSources } from './sources.js';
-import { fetchNews, economicCalendar, GOLD_DRIVERS } from './news.js';
-import { buildNewsIndex, evaluateNewsFilter, newsVerdict, fetchHistoricalNews } from './newsfactor.js';
-import { buildTestMessage, webhookProblem } from './discord.js';
+import { MarketFeed, mergeCandle } from './feed.js';
+import { SOURCES } from './sources.js';
+import {
+  RULE, COSTS, H4, D1, resample, markClosed, spotBarsOnly, buildSystem, currentState,
+  statsOf, sizePlan, planAt,
+} from './system.js';
+import { REFERENCE } from './reference.js';
+import { ema } from './indicators.js';
 import { Chart } from './chart.js';
 import { AlertCenter } from './alerts.js';
-import { sessionInfo, riskWindow, nextNFP, thTime, xauToThaiBaht } from './macro.js';
-import { levelsAt, fibLevels } from './levels.js';
-import { narrate, narrateShort } from './narrate.js';
-import { Tour } from './tour.js';
-import { toThai } from './glossary.js';
-import { instrumentOf, dataHealth } from './instrument.js';
+import { buildSignalMessage, buildTestMessage, webhookProblem } from './discord.js';
+import { goldMarketOpen, thTime, xauToThaiBaht, nextNFP } from './macro.js';
+import { positionStatus, positionAdvice, checkPosition } from './position.js';
+import { instrumentOf } from './instrument.js';
 
 const $ = (id) => document.getElementById(id);
+const f2 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '—');
+const money = (v) => (Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—');
+const sgn = (v, d = 2) => (Number.isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(d) : '—');
+const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── ค่าตั้ง ──────────────────────────────────────────────────────────
+ * ใช้คีย์เดิมของแอปรุ่นก่อน ทุน ความเสี่ยง สเปกโบรก และไม้ที่บันทึกไว้จึงตามมาด้วย
+ * ค่าทุกตัวต้องผ่านการตรวจช่วงก่อนใช้ — ค่าเสียใน localStorage เคยทำให้ระบบพังเงียบมาแล้ว
+ */
+const LS_SET = 'goldtrader.settings.v1';
 const LS_POS = 'goldtrader.position.v1';
-const LS_SETTINGS = 'goldtrader.settings.v1';
-
-const state = {
-  tf: '15m',
-  candles: [],
-  ctx: null,
-  scored: null,
-  combined: null,
-  hold: null,        // สัญญาณที่กำลังถืออยู่ (ดู holdSignal) — กันแผนกะพริบหายต่อหน้า
-  setup: null,
-  action: 'wait',
-  htf: {},          // { '1h': {candles, ctx, scored} }
-  bt: null,
-  lastAnalyze: 0,
-  lastClosedT: null,
-  htfTimer: null,
-  warnedAt: 0,          // เตือนล่วงหน้าครั้งล่าสุดเมื่อไร
-  warnedSide: 0,
-  narrationOpen: true,
-  planDetailsOpen: false,
-  analyzeTimer: null,
-  events: [],
-  prevClose: null,
-  reasonTab: 'pro',
+const LS_SEEN = 'gsl.v2.alerted';
+const DEFAULTS = {
+  account: 1000, riskPct: 2, contractSize: 100, minLot: 0.01, lotStep: 0.01, spread: 0.30,
+  sides: 'both', source: 'kraken_paxg', apiKey: '', sound: true, theme: 'auto', usdThb: 36.5,
 };
+const RANGE = {
+  account: [1, 1e9], riskPct: [0.1, 10], contractSize: [0.01, 1000], minLot: [0.0001, 100],
+  lotStep: [0.0001, 100], spread: [0, 20], usdThb: [10, 100],
+};
+const settings = loadSettings();
 
-const settings = {
-  /* ค่าตั้งต้นเป็น Kraken ไม่ใช่ Binance — Binance ถูกบล็อกในไทยและอีกหลายประเทศ
-     ผู้ใช้ที่เปิดครั้งแรกจึงเจอ "โหลดข้อมูลไม่ได้" ทั้งที่เจ้าอื่นเข้าได้สบาย
-     (ยังมีการไล่ลองแหล่งสำรองอยู่ แต่ค่าตั้งต้นที่ใช้ได้เลยดีกว่าค่าที่ต้องรอ fallback) */
-  source: 'kraken_paxg', symbol: 'PAXGUSDT', tf: '15m', htf1: '1h', htf2: '4h',
-  threshold: 35, slAtr: 1.5, adxMin: 22,
-  account: 1000, riskPct: 1,
-  newsFilter: true, volFilter: true, sessionFilter: false,
-  usdThb: 36.5, apiKey: '',
-  alertMode: 'early', maxHold: 60, spread: 0.30, simpleMode: true,
-  /* แผง RSI/MACD ใต้กราฟ — null = ยังไม่เคยเลือกเอง ให้ระบบตั้งตามขนาดจอ
-     บนมือถือ สามแผงซ้อนกันเหลือที่ให้กราฟราคาแค่ 60% ซึ่งดูแท่งเทียนแทบไม่ออก */
-  subPanels: null,
-  // ค่าของโบรกเกอร์ — ระบบเดาแทนผู้ใช้ไม่ได้ ผิดเมื่อไหร่จำนวนไม้ผิดทั้งหมด
-  contractSize: 100, minLot: 0.01, lotStep: 0.01, slManual: null,
-  smartSession: true, historyBars: 3000,
-  learnedWeights: null,   // น้ำหนักที่ผ่านการพิสูจน์กับข้อมูลนอกช่วงเรียนรู้แล้วเท่านั้น
-  adaptParams: null,      // ค่าที่ระบบจูนเองจากตลาดที่โหลดมา (คะแนน/SL/เป้า)
-  /*
-   * วิธีบริหารไม้ — ค่าตั้งต้นคือ 'full' (ถือเต็มไม้ถึงเป้า)
-   *
-   * เดิมเป็น 'partial' (ปิดครึ่งที่ 1R) ซึ่งทำให้ 19% ของไม้ทั้งหมดจบที่ +0.5R
-   * คือ "ชนะ" ที่ได้กำไรครึ่งเดียวของที่เสี่ยงไป ตอนแพ้เสียเต็ม 1R
-   *
-   * อีกเหตุผลที่สำคัญไม่แพ้กัน: ตัวหาเป้าหมายที่ดีที่สุด (evaluateTarget)
-   * คำนวณแบบถือเต็มไม้มาตลอด ถ้า backtest หลักปิดครึ่ง ตัวเลขสองที่จะคนละฐาน
-   * เทียบกันไม่ได้ — ตั้งเป็น 'full' ทำให้ทั้งระบบพูดภาษาเดียวกัน
-   */
-  exitStyle: 'full',
-  /* ค่าตั้งต้นเป็นเข้าเลย เพราะวัดแล้วการรอย่อแพ้ในตลาดที่มีเทรนด์
-     ปุ่มทดสอบจะเขียนทับด้วยค่าที่วัดได้จากข้อมูลจริงอีกที */
-  entryMode: 'market',
+function loadSettings() {
+  let raw = {};
+  try { raw = JSON.parse(localStorage.getItem(LS_SET) || '{}') || {}; } catch (e) { raw = {}; }
+  const out = { ...DEFAULTS };
+  for (const [k, [lo, hi]] of Object.entries(RANGE)) {
+    const v = Number(raw[k]);
+    if (Number.isFinite(v) && v >= lo && v <= hi) out[k] = v;
+  }
+  if (raw.sides === 'long' || raw.sides === 'both') out.sides = raw.sides;
+  if (typeof raw.source === 'string' && (SOURCES[raw.source] || raw.source === 'demo')) out.source = raw.source;
+  if (typeof raw.apiKey === 'string') out.apiKey = raw.apiKey;
+  if (typeof raw.sound === 'boolean') out.sound = raw.sound;
+  if (['auto', 'dark', 'light'].includes(raw.theme)) out.theme = raw.theme;
+  return out;
+}
+function saveSettings() {
+  try { localStorage.setItem(LS_SET, JSON.stringify(settings)); } catch (e) { /* โหมดส่วนตัว */ }
+}
+const costs = () => ({ spread: settings.spread, slip: COSTS.slip });
+const broker = () => ({ contractSize: settings.contractSize, minLot: settings.minLot, lotStep: settings.lotStep });
+
+/* ── สถานะของหน้า ─────────────────────────────────────────────────── */
+const state = {
+  key: null,        // แหล่งที่ใช้จริงรอบล่าสุด
+  baseTf: '4h',     // กรอบที่ดึงสด (แหล่งที่ไม่มี 4 ชม. ใช้ 1 ชม. แล้วรวมเอง)
+  base: [],
+  d1raw: [],
+  h4: [], d1: [],
+  sys: null, cur: null,
+  price: null,
+  loadedAt: 0,
+  loading: false,
+  error: null,
+  tf: '4h',
+  firstCalc: true,
+  lastAlertKey: null,
 };
 
 const feed = new MarketFeed();
 const alerts = new AlertCenter();
-let chart, equityCtx;
+const chart = new Chart($('chart'));
 
-// ── ตั้งค่า ──────────────────────────────────────────────────────────────
-
-/*
- * ขอบเขตที่ยอมรับได้ของค่าตัวเลขแต่ละตัว
- *
- * ทำไมต้องมี: ของเดิมใช้ Object.assign เทค่าจาก localStorage เข้ามาทั้งก้อน
- * อะไรก็ผ่าน — null, ข้อความ, ติดลบ ค่าพวกนี้ทำให้ระบบพังแบบเงียบและร้ายแรง
- *   threshold = null   → เทียบกับ 0 → "ทุกแท่งคือสัญญาณ"
- *   threshold = 'abc'  → เทียบกับ NaN → "ไม่มีสัญญาณเลยตลอดกาล"
- * ทั้งสองกรณีหน้าจอดูปกติทุกอย่าง ไม่มีอะไรฟ้อง
- *
- * ค่าเสียเข้ามาได้จริง: เวอร์ชันเก่าเขียนคนละรูปแบบ ผู้ใช้แก้ผ่าน devtools
- * หรือโค้ดของเราเองเขียนค่าผิดลงไป (เคยเกิดมาแล้วกับการตั้งเกณฑ์ทับอัตโนมัติ)
- */
-const SETTING_RANGE = {
-  threshold: [5, 95], riskPct: [0.01, 100], account: [0, 1e9],
-  slAtr: [0.2, 10], adxMin: [5, 60], maxHold: [5, 500], spread: [0, 20],
-  contractSize: [0.0001, 1e6], minLot: [0.0001, 1e6], lotStep: [0.0001, 1e6],
-  historyBars: [200, 20000],
-};
-
-function loadSettings() {
-  let raw = null;
-  try { raw = localStorage.getItem(LS_SETTINGS); } catch (e) { raw = null; }   // โหมดส่วนตัว
-  let saved = {};
-  if (raw) { try { saved = JSON.parse(raw) || {}; } catch (e) { saved = {}; } }
-
-  const rejected = [];
-  for (const [key, val] of Object.entries(saved)) {
-    const range = SETTING_RANGE[key];
-    if (range) {
-      /* ค่าที่มีขอบเขต ต้องเป็นตัวเลขจริงและอยู่ในช่วง ไม่งั้นคงค่าตั้งต้นไว้
-         ทิ้งไปเงียบ ๆ ดีกว่ารับค่าที่ทำให้คำนวณผิดทั้งระบบ */
-      if (!Number.isFinite(val) || val < range[0] || val > range[1]) {
-        rejected.push(`${key}=${JSON.stringify(val)}`);
-        continue;
-      }
-    }
-    settings[key] = val;
-  }
-  if (rejected.length) {
-    /* บอกให้รู้ ไม่ใช่แก้เงียบ ๆ — ถ้าค่าที่ผู้ใช้ตั้งไว้ถูกทิ้ง เขาต้องได้รู้ว่าทำไม */
-    state.settingsRejected = rejected;
-  }
-
-  try { state.events = JSON.parse(localStorage.getItem('goldtrader.events') || '[]'); } catch (e) { state.events = []; }
-  if (!Array.isArray(state.events)) state.events = [];
-}
-function saveSettings() {
-  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (e) { /* ignore */ }
-}
-function saveEvents() {
-  try { localStorage.setItem('goldtrader.events', JSON.stringify(state.events)); } catch (e) { /* ignore */ }
-}
-function cfg() {
-  const base = { ...DEFAULT_CFG, slAtrMult: settings.slAtr, threshold: settings.threshold, adxTrendMin: settings.adxMin };
-  // ใส่น้ำหนักที่เรียนรู้มาก็ต่อเมื่อ "ครบทุกปัจจัย" เท่านั้น
-  // ถ้าใส่ไม่ครบ ปัจจัยที่ขาดจะกลายเป็น undefined แล้วคะแนนทั้งระบบพังเป็น NaN เงียบ ๆ
-  const lw = settings.learnedWeights;
-  if (lw && Object.keys(WEIGHTS).every((k) => Number.isFinite(lw[k]))) base.weights = lw;
-  return base;
-}
-
-/**
- * เป้าหมายที่ใช้จริง
- * ค่าที่ระบบศึกษาตลาดแล้วจูนเองมาก่อน เพราะมันถูกวัดผลกับหลายช่วงเวลา
- * ส่วนกลยุทธ์ชุดเดียวจากปุ่มทดสอบ วัดกับการแบ่งครั้งเดียว จึงเป็นตัวสำรอง
- */
-function activeTargetR() {
-  if (settings.adaptParams && Number.isFinite(settings.adaptParams.targetR)) return settings.adaptParams.targetR;
-  return state.strat && state.strat.ok ? state.strat.strategy.targetR : null;
-}
-
-// ── เริ่มระบบ ────────────────────────────────────────────────────────────
-async function init() {
-  loadSettings();
-  state.tf = settings.tf;
-  chart = new Chart($('chart'));
-  equityCtx = $('equityCanvas').getContext('2d');
-  buildStaticUI();
-  bindEvents();
-  bindPosition();
-  window.addEventListener('resize', () => { fitChart(); chart.resize(); drawEquity(); });
-  window.addEventListener('orientationchange', () => setTimeout(() => { fitChart(); chart.resize(); }, 250));
-  fitChart();
-  chart.resize();
-  alerts.onUpdate = (entry) => { renderLog(); toast(entry); };
-  renderAlertUI();
-  renderWeights();
-  renderLearn();   // ถ้าเคยยืนยันน้ำหนักชุดใหม่ไว้ ต้องบอกให้เห็นตั้งแต่เปิดหน้า
-  renderAdapt();
-  loadNews(); armNewsTimer();
-  renderContextTab();
-  setInterval(renderContextTab, 30000);
-  setInterval(tickCountdown, 1000);
-  setInterval(checkFreshness, 5000);
-  /*
-   * ที่จับสำหรับตรวจสอบและทดสอบ
-   *
-   * เหตุผลที่ยอมเปิดออกมา: ตัวจับ "ราคาค้าง" เป็นกลไกความปลอดภัย ถ้าทดสอบไม่ได้
-   * มันจะพังเงียบ ๆ วันหนึ่งโดยไม่มีใครรู้ ซึ่งแย่กว่าการไม่มีเลย
-   * ไม่ได้เปิดอะไรใหม่ให้ใคร — API key อยู่ใน localStorage ซึ่งเปิดคอนโซลก็เห็นอยู่แล้ว
-   *
-   * ผู้ใช้ทั่วไปใช้ตรวจอาการได้: เปิดคอนโซลแล้วพิมพ์ __gsl.feed.freshness()
-   */
-  window.__gsl = { feed, state, settings, checkFreshness, analyze };
-  /*
-   * มือถือพักจอแล้วกลับมา เป็นจังหวะที่ข้อมูลค้างบ่อยที่สุด
-   * ต้องเช็กทันทีที่กลับมาดู ไม่ใช่รอรอบถัดไปอีก 5 วินาที
-   */
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkFreshness(true); });
-  window.addEventListener('online', () => checkFreshness(true));
-  await reload();
-
-  // คนเปิดครั้งแรกยังไม่รู้ว่าต้องมองตรงไหน พาชมให้รอบหนึ่งก่อน
-  if (!Tour.seen()) setTimeout(() => new Tour().start(), 1200);
-}
-
-function buildStaticUI() {
-  const tfs = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-  $('tfGroup').innerHTML = tfs.map((t) => `<button class="tf-btn${t === state.tf ? ' active' : ''}" data-tf="${t}">${t}</button>`).join('');
-  const opts = tfs.map((t) => `<option value="${t}">${t} — ${TF[t].label}</option>`).join('');
-  $('setHtf1').innerHTML = opts; $('setHtf2').innerHTML = opts;
-  $('setHtf1').value = settings.htf1; $('setHtf2').value = settings.htf2;
-  $('sourceSel').value = settings.source;
-  $('symbolSel').value = settings.symbol;
-  $('accountInput').value = settings.account;
-  $('riskInput').value = settings.riskPct;
-  $('contractInput').value = settings.contractSize;
-  $('minLotInput').value = settings.minLot;
-  $('lotStepInput').value = settings.lotStep;
-  $('slManualInput').value = settings.slManual === null ? '' : settings.slManual;
-  $('setThreshold').value = settings.threshold;
-  $('setSlAtr').value = settings.slAtr;
-  $('setAdx').value = settings.adxMin;
-  $('setUsdThb').value = settings.usdThb;
-  $('setApiKey').value = settings.apiKey;
-  $('maxHoldInput').value = settings.maxHold;
-  $('spreadInput').value = settings.spread;
-  $('setNewsFilter').checked = settings.newsFilter;
-  $('setVolFilter').checked = settings.volFilter;
-  $('setSessionFilter').checked = settings.sessionFilter;
-  $('setSmartSession').checked = settings.smartSession !== false;
-  $('historyBars').value = String(settings.historyBars || 3000);
-  $('alertMode').value = settings.alertMode || 'early';
-  setMode(settings.simpleMode !== false);
-}
-
-/**
- * โหมดง่าย = ซ่อนทุกอย่างที่ไม่จำเป็นสำหรับคนเปิดครั้งแรก
- * เหลือแค่ ราคา · กราฟ · "ตอนนี้ควรทำอะไร" · คำอธิบายกราฟ
- * คนที่อยากดูละเอียดค่อยกดเปิดโหมดเต็มเอง
- */
-function setMode(simple) {
-  settings.simpleMode = simple;
-  saveSettings();
-  document.body.classList.toggle('simple', simple);
-  if (chart) {
-    // โหมดง่ายเหลือกราฟราคาอย่างเดียว แผง RSI/MACD เป็นของคนที่อ่านเป็นแล้ว
-    chart.panels.rsi = simple ? false : $('togRSI').checked;
-    chart.panels.macd = simple ? false : $('togMACD').checked;   // ช่องติ๊กถูกตั้งตามขนาดจอไว้แล้ว
-    chart.showBB = simple ? false : $('togBB').checked;
-  }
-  $('modeToggle').innerHTML = simple ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11M6 2.5v4M11 9.5v4"/></svg> โหมดเต็ม` : `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M5.6 9.4a3 3 0 0 0 4.8 0M6 6.4v.01M10 6.4v.01"/></svg> โหมดง่าย`;
-  $('modeToggle').title = simple
-    ? 'เปิดผลทดสอบย้อนหลัง ตั้งค่า และตัวชี้วัดทั้งหมด'
-    : 'ซ่อนเครื่องมือขั้นสูง เหลือเฉพาะสิ่งที่ต้องดู';
-  if (chart) chart.resize();
-}
-
-function bindEvents() {
-  $('tfGroup').addEventListener('click', (e) => {
-    const b = e.target.closest('.tf-btn');
-    if (!b) return;
-    state.tf = settings.tf = b.dataset.tf;
-    saveSettings();
-    document.querySelectorAll('.tf-btn').forEach((x) => x.classList.toggle('active', x === b));
-    reload();
-  });
-  $('sourceSel').addEventListener('change', (e) => {
-    settings.source = e.target.value; saveSettings();
-    $('symbolSel').disabled = settings.source !== 'binance';
-    reload();
-  });
-  $('symbolSel').addEventListener('change', (e) => { settings.symbol = e.target.value; saveSettings(); reload(); });
-  $('reloadBtn').addEventListener('click', () => reload());
-  $('modeToggle').addEventListener('click', () => setMode(!settings.simpleMode));
-  $('tourBtn').addEventListener('click', () => new Tour().start());
-  $('resetZoom').addEventListener('click', () => chart.scrollToEnd());
-
-  /*
-   * จอแคบ = ให้กราฟราคาเป็นหลัก
-   *
-   * วัดแล้วบนจอ 390px ถ้าเปิด volume + RSI + MACD ครบ กราฟราคาเหลือ 60% ของ 330px
-   * ราว 198px ซึ่งแท่งเทียนเล็กจนอ่านรูปแบบไม่ออก ซึ่งเป็นสิ่งเดียวที่คนเปิดกราฟมาดู
-   * ตั้งให้ครั้งแรกเท่านั้น ถ้าผู้ใช้กดเปิดเองเมื่อไร ระบบจะจำค่านั้นไว้แทน
-   */
-  if (settings.subPanels === null) {
-    settings.subPanels = window.innerWidth > 720;
-    saveSettings();
-  }
-  if (!settings.subPanels) {
-    $('togRSI').checked = false;
-    $('togMACD').checked = false;
-    if (chart) { chart.panels.rsi = false; chart.panels.macd = false; }
-  }
-  const rememberPanels = () => {
-    settings.subPanels = $('togRSI').checked || $('togMACD').checked;
-    saveSettings();
-  };
-  $('togBB').addEventListener('change', (e) => { chart.showBB = e.target.checked; chart.render(); });
-  $('togLevels').addEventListener('change', (e) => { chart.showLevels = e.target.checked; chart.render(); });
-  $('togRSI').addEventListener('change', (e) => { chart.panels.rsi = e.target.checked; rememberPanels(); chart.render(); });
-  $('togMACD').addEventListener('change', (e) => { chart.panels.macd = e.target.checked; rememberPanels(); chart.render(); });
-  $('togMarkers').addEventListener('change', (e) => {
-    chart.setData({ markers: e.target.checked && state.bt ? state.bt.trades.map((t) => ({ index: t.index, side: t.side })) : [] });
-    chart.render();
-  });
-
-  ['accountInput', 'riskInput', 'contractInput', 'minLotInput', 'lotStepInput', 'slManualInput']
-    .forEach((id) => $(id).addEventListener('input', () => {
-      settings.account = +$('accountInput').value || 1000;
-      settings.riskPct = +$('riskInput').value || 1;
-      settings.contractSize = +$('contractInput').value || 100;
-      settings.minLot = +$('minLotInput').value || 0.01;
-      settings.lotStep = +$('lotStepInput').value || 0.01;
-      /* ว่าง = ให้ระบบวางให้ ไม่ใช่ศูนย์ ซึ่งจะกลายเป็นจุดตัดขาดทุนที่ราคา 0 */
-      const raw = $('slManualInput').value.trim();
-      settings.slManual = raw === '' ? null : (Number.isFinite(+raw) ? +raw : null);
-      saveSettings();
-      if (state.scored) { rebuildSetup(); renderPlan(); }
-    }));
-
-  $('runBt').addEventListener('click', () => doBacktest());
-  $('runNewsTest').addEventListener('click', () => doNewsTest());
-  $('refreshNews').addEventListener('click', () => loadNews());
-  $('newsAuto').addEventListener('change', (e) => { settings.newsAuto = e.target.checked; saveSettings(); armNewsTimer(); });
-  $('testSources').addEventListener('click', () => doTestSources());
-  $('runAdapt').addEventListener('click', () => doAdapt());
-  $('applyAdapt').addEventListener('click', () => applyAdapt(state.adapt && state.adapt.params));
-  $('resetAdapt').addEventListener('click', () => applyAdapt(null));
-  $('runLearn').addEventListener('click', () => doLearn());
-  $('applyLearn').addEventListener('click', () => applyLearned(state.learn && state.learn.weights));
-  $('resetLearn').addEventListener('click', () => applyLearned(null));
-  ['maxHoldInput', 'spreadInput'].forEach((id) => $(id).addEventListener('change', () => {
-    settings.maxHold = +$('maxHoldInput').value || 60;
-    settings.spread = +$('spreadInput').value || 0;
-    saveSettings();
-  }));
-  ['setThreshold', 'setSlAtr', 'setAdx'].forEach((id) => $(id).addEventListener('change', () => {
-    settings.threshold = +$('setThreshold').value || 35;
-    settings.slAtr = +$('setSlAtr').value || 1.5;
-    settings.adxMin = +$('setAdx').value || 22;
-    saveSettings(); analyze(true, false); doBacktest();
-  }));
-  $('setHtf1').addEventListener('change', (e) => { settings.htf1 = e.target.value; saveSettings(); reload(); });
-  $('setHtf2').addEventListener('change', (e) => { settings.htf2 = e.target.value; saveSettings(); reload(); });
-  $('setSmartSession').addEventListener('change', (e) => { settings.smartSession = e.target.checked; saveSettings(); analyze(true, false); });
-  $('historyBars').addEventListener('change', (e) => { settings.historyBars = +e.target.value || 3000; saveSettings(); reload(); });
-  ['setNewsFilter', 'setVolFilter', 'setSessionFilter'].forEach((id) => $(id).addEventListener('change', () => {
-    settings.newsFilter = $('setNewsFilter').checked;
-    settings.volFilter = $('setVolFilter').checked;
-    settings.sessionFilter = $('setSessionFilter').checked;
-    saveSettings(); analyze(true, false);
-  }));
-  $('setUsdThb').addEventListener('change', (e) => { settings.usdThb = +e.target.value || 36.5; saveSettings(); updatePriceHeader(); });
-  $('setApiKey').addEventListener('change', (e) => { settings.apiKey = e.target.value.trim(); saveSettings(); });
-
-  /*
-   * บนมือถือ แท็บเริ่มต้นแบบ "ยังไม่เปิดอันไหน"
-   *
-   * วัดหน้าจริงแล้วพบว่าแท็บทดสอบย้อนหลังที่เปิดค้างไว้ตั้งแต่แรก สูง 5,320px
-   * คือครึ่งหนึ่งของทั้งหน้า คนเปิดแอปบนมือถือมาดูสัญญาณกับแผน
-   * แต่ต้องเลื่อนผ่านผลวิเคราะห์ที่ไม่ได้ขอ 6 จอกว่าจะถึงท้ายหน้า
-   * บนจอคอมเปิดค้างไว้เหมือนเดิม เพราะที่ทางเหลือเฟือและเห็นพร้อมกันได้
-   */
-  const narrow = () => window.innerWidth <= 720;
-  if (narrow()) {
-    document.querySelectorAll('.tab, .tab-panel').forEach((x) => x.classList.remove('active'));
-    document.querySelector('.tabs-section').classList.add('tabs-collapsed');
-  }
-  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
-    /* แตะแท็บที่เปิดอยู่ = ปิด (บนมือถือเท่านั้น) จะได้ม้วนเก็บได้โดยไม่ต้องเลื่อนกลับขึ้นไป */
-    const closing = narrow() && t.classList.contains('active');
-    document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach((x) => x.classList.remove('active'));
-    document.querySelector('.tabs-section').classList.toggle('tabs-collapsed', closing);
-    if (closing) return;
-    t.classList.add('active');
-    $('tab-' + t.dataset.tab).classList.add('active');
-    if (t.dataset.tab === 'backtest') drawEquity();
-  }));
-  document.querySelectorAll('.rtab').forEach((t) => t.addEventListener('click', () => {
-    document.querySelectorAll('.rtab').forEach((x) => x.classList.remove('active'));
-    t.classList.add('active');
-    state.reasonTab = t.dataset.r;
-    renderReasons();
-  }));
-
-  // แจ้งเตือน
-  $('enableNotif').addEventListener('click', async () => {
-    const res = await alerts.requestDesktopPermission();
-    toast({ kind: 'info', title: res === 'granted' ? 'เปิดแจ้งเตือนแล้ว' : 'ไม่ได้รับอนุญาต', body: res === 'granted' ? 'จะเด้งแจ้งเตือนแม้สลับแท็บอยู่' : 'อนุญาตได้ที่ไอคอนกุญแจข้าง URL' });
-    alerts.playSound('info');
-  });
-  $('togSound').addEventListener('change', (e) => { alerts.sound = e.target.checked; alerts.save(); if (e.target.checked) alerts.playSound('info'); });
-  $('togSpeak').addEventListener('change', (e) => { alerts.speak = e.target.checked; alerts.save(); });
-  $('alertMode').addEventListener('change', (e) => { settings.alertMode = e.target.value; saveSettings(); alerts.resetCooldown(); });
-  $('toggleNarration').addEventListener('click', () => {
-    state.narrationOpen = !state.narrationOpen;
-    $('narrationBody').style.display = state.narrationOpen ? '' : 'none';
-    $('toggleNarration').textContent = state.narrationOpen ? 'ย่อ' : 'ขยาย';
-  });
-  $('cooldownInput').addEventListener('change', (e) => { alerts.cooldownMs = (+e.target.value || 0) * 60000; alerts.save(); });
-  $('webhookInput').addEventListener('change', (e) => {
-    alerts.webhookUrl = e.target.value.trim(); alerts.save(); renderWebhookStatus();
-  });
-  $('testWebhook').addEventListener('click', async () => {
-    const btn = $('testWebhook');
-    btn.disabled = true;
-    $('webhookStatus').textContent = 'กำลังส่ง…';
-    await alerts.testWebhook(buildTestMessage());
-    btn.disabled = false;
-  });
-  alerts.onWebhookResult = renderWebhookStatus;
-  $('addRule').addEventListener('click', () => {
-    const value = +$('ruleValue').value;
-    if (!value) return;
-    alerts.addRule({ type: $('ruleType').value, value, once: $('ruleOnce').checked });
-    $('ruleValue').value = '';
-    renderRules();
-  });
-  $('clearLog').addEventListener('click', () => { alerts.clearLog(); renderLog(); });
-  $('addEvent').addEventListener('click', () => {
-    const title = $('evTitle').value.trim();
-    const time = $('evTime').value;
-    if (!title || !time) return;
-    state.events.push({ title, time: new Date(time).toISOString(), impact: 'high' });
-    saveEvents(); $('evTitle').value = ''; $('evTime').value = '';
-    renderContextTab();
-  });
-}
-
-// ── โหลดข้อมูล ───────────────────────────────────────────────────────────
-async function reload() {
-  feed.stop();
-  feed.configure({ source: settings.source, symbol: settings.symbol, interval: state.tf, apiKey: settings.apiKey });
-  setStatus('loading', `กำลังโหลด ${settings.symbol} ${state.tf}…`);
+/* ── โหลดข้อมูล ───────────────────────────────────────────────────── */
+async function loadAll() {
+  if (state.loading) return;
+  state.loading = true;
+  setLive('loading', 'กำลังโหลด');
   try {
-    state.candles = await feed.loadHistory(state.tf, settings.historyBars || 3000);
-    if (!state.candles.length) throw new Error('ไม่มีข้อมูลย้อนหลัง');
-    state.htf = {};
-    for (const tf of [settings.htf1, settings.htf2]) {
-      if (tf === state.tf) continue;
-      try {
-        const c = await feed.loadHistory(tf, 400);
-        state.htf[tf] = { candles: c };
-      } catch (e) { /* กรอบใหญ่โหลดไม่ได้ก็ยังวิเคราะห์กรอบหลักได้ */ }
+    feed.stop();
+    feed.configure({ source: settings.source, apiKey: settings.apiKey, interval: '4h' });
+    let d1raw, base, baseTf;
+    if (settings.source === 'demo') {
+      /* โหมดจำลอง: สร้างกราฟ 4 ชม. ชุดเดียวแล้วรวมเป็นรายวันเอง
+         ถ้าสุ่มสองชุดแยกกัน เทรนด์รายวันจะไม่เกี่ยวกับราคา 4 ชม. เลย */
+      base = await feed.loadFrom('demo', '4h', 1300);
+      baseTf = '4h';
+      d1raw = resample(base, D1);
+      feed.activeSource = 'demo';
+    } else {
+      /* กราฟรายวันเลือกแหล่งที่ใช้ได้ก่อน (ไล่ลองแหล่งสำรองให้) แล้วกราฟ 4 ชม. ต้องมาจากเจ้าเดียวกัน */
+      d1raw = await feed.loadHistory('1d', 400);
+      const key = feed.activeSource || settings.source;
+      const src = SOURCES[key];
+      baseTf = !src || src.tf['4h'] !== undefined ? '4h' : '1h';
+      base = await feed.loadFrom(key, baseTf, baseTf === '4h' ? 720 : 1000);
     }
-    state.prevClose = state.candles.length > 1 ? state.candles[state.candles.length - 2].c : null;
-    const lastClosed = [...state.candles].reverse().find((c) => c.closed !== false);
-    state.lastClosedT = lastClosed ? lastClosed.t : null;
-    // วิเคราะห์ครั้งแรกแบบไม่แจ้งเตือน — สัญญาณที่ค้างอยู่ตั้งแต่ก่อนเปิดหน้าไม่ใช่ "สัญญาณใหม่"
-    analyze(true, false);
-    doBacktest();
-    renderContextTab();
-    feed.start(onLiveCandle, (s) => setStatus(s.state, s.message));
-    /* ถ้าแหล่งที่เลือกใช้ไม่ได้แล้วระบบไปหยิบแหล่งสำรองมาแทน ต้องบอกให้รู้
-       ไม่ใช่เปลี่ยนเงียบ ๆ — ราคาแต่ละเจ้าต่างกันได้ไม่กี่ดอลลาร์ และผู้ใช้ควรรู้ว่ากำลังดูของใคร */
-    if (feed.fellBackFrom) {
-      /* คีย์ 'binance' รุ่นเก่าไม่มีใน SOURCES จึงต้องมีชื่อไทยสำรองไว้
-         ไม่งั้นข้อความจะขึ้นว่า "ต่อ binance ไม่ได้" ซึ่งดูเหมือนโค้ดหลุด */
-      const NAME = { binance: 'Binance (ค่าตั้งต้น)', demo: 'โหมดจำลอง', twelvedata: 'Twelve Data' };
-      const nameOf = (k) => (SOURCES[k] ? SOURCES[k].label : (NAME[k] || k));
-      const from = nameOf(feed.fellBackFrom);
-      const to = nameOf(feed.activeSource);
-      toast({ kind: 'info', title: `เปลี่ยนแหล่งราคาให้อัตโนมัติ — ใช้ ${to} แทน`,
-        body: `ต่อ ${from} ไม่ได้ (มักเป็นเพราะประเทศไทยบล็อก Binance หรือตัวบล็อกโฆษณาในเบราว์เซอร์)\n\n`
-          + `นี่คือราคาจริงจาก ${to} ไม่ใช่ข้อมูลจำลอง ถ้าอยากใช้เจ้าอื่นเลือกได้ที่ช่อง "แหล่งข้อมูล"` });
-    }
-    clearInterval(state.htfTimer);   // ไม่งั้นโหลดใหม่ทุกครั้งจะเพิ่มตัวจับเวลาซ้อนกันเรื่อย ๆ
-    state.htfTimer = setInterval(refreshHtf, feed.htfRefreshMs);
+    state.key = feed.activeSource || settings.source;
+    state.baseTf = baseTf;
+    state.base = base.slice();
+    state.d1raw = d1raw.slice();
+    state.loadedAt = Date.now();
+    state.error = null;
+    feed.configure({ interval: baseTf });
+    feed.start(onCandle, onStatus);
+    recompute();
   } catch (e) {
-    // ต่อข้อมูลจริงไม่ได้ (เน็ตล่ม / โดนบล็อก / โบรกเกอร์ล่ม)
-    // ไม่ปล่อยให้เจอหน้าจอว่าง ๆ — สลับไปโหมดจำลองให้ใช้งานต่อได้ พร้อมบอกสาเหตุให้ชัด
-    if (settings.source !== 'demo') {
-      settings.source = 'demo';           // เปลี่ยนเฉพาะรอบนี้ ไม่บันทึก ครั้งหน้าจะลองต่อของจริงอีก
-      $('sourceSel').value = 'demo';
-      toast({ kind: 'info', title: '⚠ ต่อข้อมูลราคาจริงไม่ได้ — สลับไปโหมดจำลองให้ชั่วคราว',
-        body: `${e.message}\n\nสาเหตุที่พบบ่อย: ไม่ได้ต่อเน็ต · ตัวบล็อกโฆษณาบล็อก Binance · เน็ตองค์กร/มหาวิทยาลัยบล็อกไว้\nแก้แล้วกด "↻ โหลดใหม่" เพื่อกลับไปใช้ราคาจริง` });
-      await reload();
-      setStatus('demo', '⚠ กำลังแสดงข้อมูลจำลอง (ไม่ใช่ราคาจริง) — ต่อ Binance ไม่ได้ กด "โหลดใหม่" เพื่อลองอีกครั้ง');
-      return;
-    }
-    setStatus('error', e.message);
-    toast({ kind: 'info', title: 'โหลดข้อมูลไม่สำเร็จ', body: e.message });
+    state.error = e.message || String(e);
+    setLive('error', 'โหลดราคาไม่ได้');
+    renderError();
+  } finally {
+    state.loading = false;
   }
 }
 
-async function refreshHtf() {
-  for (const tf of Object.keys(state.htf)) {
-    try { state.htf[tf].candles = await feed.loadHistory(tf, 400); } catch (e) { /* ครั้งหน้าค่อยลองใหม่ */ }
-  }
+function onCandle(k) {
+  mergeCandle(state.base, k);
+  state.price = k.c;
+  renderPrice();
+  scheduleRecompute();
+}
+function onStatus(st) {
+  if (st.state === 'error') setLive('error', 'เชื่อมต่อสะดุด');
 }
 
-function onLiveCandle(k) {
-  const res = mergeCandle(state.candles, k);
-  if (res.stale) return;
-  if (res.appended && state.candles.length > 1) state.prevClose = state.candles[state.candles.length - 2].c;
-  updatePriceHeader();
-  /* ไม้ที่ถืออยู่ต้องอัปเดตทุกติ๊ก ไม่ใช่รอรอบวิเคราะห์หรือรอแท่งปิด
-     คนที่มีเงินอยู่ในตลาดอยากรู้ "ตอนนี้" ไม่ใช่อีก 12 นาทีข้างหน้า */
-  renderPosition();
-  if (chart) chart.invalidate();   // ให้กราฟไหลตามราคาทุกครั้ง ไม่ต้องรอรอบวิเคราะห์
-  alerts.checkRules({ price: k.c, rsi: state.ctx && state.scored ? state.scored.rsi : null, score: state.combined ? state.combined.score : 0 });
-
-  // "แท่งปิด" คือเหตุการณ์ที่ข้อมูลของแท่งนั้นสมบูรณ์แล้ว — ต้องให้คะแนนตอนนี้
-  // ไม่ใช่ตอนแท่งใหม่เพิ่งเปิด (แท่งที่เพิ่งเปิดมีแค่ราคาเดียว รูปแบบแท่งเทียนยังอ่านไม่ได้)
-  if (k.closed && k.t !== state.lastClosedT) {
-    state.lastClosedT = k.t;
-    analyze(true);
-    return;
-  }
-  scheduleAnalyze(false);
+let recomputeTimer = null;
+function scheduleRecompute() {
+  if (recomputeTimer) return;
+  recomputeTimer = setTimeout(() => { recomputeTimer = null; recompute(); }, 900);
 }
 
-function scheduleAnalyze() {
+/** เตรียมข้อมูลให้หน้าตาเหมือนทอง spot แล้วส่งให้กติกาตัดสิน */
+function recompute() {
+  if (!state.base.length) return;
   const now = Date.now();
-  if (now - state.lastAnalyze > 2000) { analyze(false); return; }
-  clearTimeout(state.analyzeTimer);
-  state.analyzeTimer = setTimeout(() => analyze(false), 2000);
-}
-
-// ── วิเคราะห์ ────────────────────────────────────────────────────────────
-function analyze(candleClosed, allowAlert = true) {
-  if (!state.candles.length) return;
-  state.lastAnalyze = Date.now();
-  const conf = cfg();
-  state.ctx = buildContext(state.candles, conf);
-  const last = state.candles.length - 1;
-  state.scored = scoreAt(state.ctx, last);
-
-  for (const tf of Object.keys(state.htf)) {
-    const h = state.htf[tf];
-    if (!h.candles || h.candles.length < 60) continue;
-    h.ctx = buildContext(h.candles, conf);
-    h.scored = scoreAt(h.ctx, h.candles.length - 1);
-  }
-  const h1 = state.htf[settings.htf1] ? state.htf[settings.htf1].scored : null;
-  const h2 = state.htf[settings.htf2] ? state.htf[settings.htf2].scored : null;
-  state.combined = combineTimeframes(state.scored, h1, h2);
-
-  // ตัวกรองความปลอดภัย
-  const blocks = [];
-  const sess = sessionInfo(new Date());
-  /*
-   * ข้อมูลค้าง = ห้ามให้สัญญาณ ต้องมาก่อนตัวกรองอื่นทั้งหมด
-   *
-   * ถ้าราคาหยุดอัปเดตแล้วระบบยังบอก "เข้าซื้อ" ต่อไป นั่นอันตรายกว่าการไม่มีสัญญาณเลย
-   * เพราะผู้ใช้จะเข้าไม้ตามราคาที่ไม่มีอยู่จริงแล้ว
-   */
-  const fresh = feed.freshness();
-  if (fresh.stale) {
-    blocks.push(`ราคาหยุดอัปเดตมา ${Math.round(fresh.ageMs / 1000)} วินาที (ปกติไม่ควรเกิน `
-      + `${Math.round(fresh.limitMs / 1000)} วินาที) — ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบันแล้ว `
-      + 'ระบบจึงระงับสัญญาณไว้จนกว่าข้อมูลจะกลับมา');
-  } else if (fresh.frozen) {
-    /*
-     * อาการนี้ต่างจาก "หลุด" คนละเรื่อง และอันตรายกว่า เพราะทุกอย่างดูปกติหมด
-     * คำขอยังผ่าน แถบสถานะยังเขียว แต่ค่าที่ได้กลับมาเป็นแท่งเดิมซ้ำ ๆ
-     * ราคาที่ไม่ขยับทำให้ตัวชี้วัดเพี้ยนไปหมด และแผนที่คำนวณได้ก็อิงราคาที่ไม่มีอยู่จริง
-     */
-    blocks.push(`ราคาไม่ขยับเลยมา ${Math.round(fresh.moveMs / 60000)} นาที ทั้งที่ยังดึงข้อมูลได้ปกติ `
-      + '— แปลว่าตลาดปิดอยู่ หรือแหล่งข้อมูลส่งค่าเดิมซ้ำ (แคชค้าง) '
-      + 'ทั้งสองกรณีคำนวณสัญญาณจากราคานี้ไม่ได้ ระบบจึงระงับไว้ก่อน');
-  }
-
-  /*
-   * ตลาดปิด = ห้ามให้สัญญาณ และต้องเป็นด่านตายตัว ไม่ใช่ตัวกรองที่ผู้ใช้ปิดได้
-   *
-   * เดิมระบบไม่รู้จักวันในสัปดาห์เลย วันเสาร์จึงถูกรายงานว่า "London session"
-   * คุณภาพ 0.8 ซึ่งสูงกว่าเกณฑ์ 0.6 ตัวกรองช่วงตลาดจึงปล่อยผ่านทุกครั้ง
-   *
-   * และตัวจับ "ราคาค้าง" ก็ช่วยไม่ได้ในกรณีนี้ เพราะแหล่งราคาที่ใช้อยู่เป็นเหรียญทอง
-   * (PAXG/XAUT) ที่ซื้อขาย 24/7 ราคายังขยับตลอดสุดสัปดาห์ กราฟจึงดูมีชีวิตทุกอย่าง
-   * แต่เป็นคนละตลาดกับที่ผู้ใช้กดส่งคำสั่งได้จริง
-   */
-  if (sess.closed) {
-    blocks.push(`${sess.detail} — สัญญาณช่วงนี้กดตามไม่ได้ ระบบจึงไม่ให้สัญญาณ`);
-  }
-
-  const risk = riskWindow(new Date(), state.events, 30);
-  if (settings.newsFilter && risk.blocked) {
-    blocks.push(`อยู่ในช่วง ±30 นาทีรอบข่าว: ${risk.active.map((e) => e.title).join(', ')} — สเปรดถ่างและราคาสวิงสองทาง สถิติของสัญญาณเทคนิคใช้ไม่ได้ในช่วงนี้`);
-  }
-  if (settings.volFilter && state.scored.ready) {
-    if (state.scored.atrPct < conf.minAtrPct) blocks.push(`ความผันผวนต่ำผิดปกติ (ATR ${state.scored.atrPct.toFixed(3)}% ของราคา) — ระยะทางกำไรอาจไม่คุ้มสเปรด`);
-    if (state.scored.atrPct > conf.maxAtrPct) blocks.push(`ความผันผวนสูงผิดปกติ (ATR ${state.scored.atrPct.toFixed(2)}% ของราคา) — มักเกิดตอนข่าวแรง ความเสี่ยงต่อไม้สูงกว่าที่คำนวณ`);
-  }
-  /* ตลาดปิดมีข้อความของตัวเองอยู่แล้ว ไม่ต้องบอกซ้ำว่า "อยู่นอกช่วงตลาดหลัก" */
-  if (settings.sessionFilter && !sess.closed && sess.quality < 0.6) {
-    blocks.push(`อยู่นอกช่วงตลาดหลัก (${sess.label}) — สภาพคล่องบาง สัญญาณเบรกหลอกบ่อย`);
-  }
-  // เอาสถิติที่ระบบวัดได้เองมาใช้จริง ไม่ใช่แค่แสดงให้ดู
-  // ถ้าช่วงเวลานี้เคยขาดทุนซ้ำ ๆ ในอดีต ก็ไม่มีเหตุผลจะเทรดในช่วงนี้
-  if (settings.smartSession !== false && state.bt && state.bt.stats.n) {
-    const now = sessionBucketAt(new Date());
-    const stat = now ? state.bt.sessions.find((x) => x.key === now.key) : null;
-    if (stat && stat.n >= 8 && stat.avgR !== null && stat.avgR < 0) {
-      blocks.push(`ช่วง${stat.label} เคยขาดทุนในอดีต (${stat.n} ไม้ · เฉลี่ย ${stat.avgR.toFixed(2)} เท่าของความเสี่ยงต่อไม้) — ระบบจึงข้ามช่วงนี้`);
-    }
-  }
-  state.blocks = blocks;
-
-  const score = state.combined.score;
-
-  /*
-   * ให้สัญญาณอยู่นานพอที่คนจะกดตามทัน
-   *
-   * เดิมใช้เส้นเดียวตัดสินทั้งเข้าและออก คะแนนที่แกว่งรอบเกณฑ์จึงทำให้แผน
-   * กะพริบเข้าออกทุกไม่กี่วินาที ผู้ใช้รายงานตรง ๆ ว่า "มาแป๊บเดียวแล้วหาย"
-   * ตอนนี้เริ่มสัญญาณต้องถึงเกณฑ์เต็ม แต่จะยกเลิกต่อเมื่อตกลงไปต่ำกว่า 75% ของเกณฑ์
-   */
-  state.hold = state.scored.ready ? holdSignal(state.hold, score, settings.threshold) : null;
-  const passes = !!state.hold && blocks.length === 0;
-  state.action = passes ? (state.hold.side > 0 ? 'buy' : 'sell') : 'wait';
-
-  state.setupAt = { index: last, price: state.candles[last].c };
-  rebuildSetup();
-
+  const h4src = state.baseTf === '4h' ? state.base : resample(state.base, H4, now);
+  state.h4 = spotBarsOnly(markClosed(h4src, H4, now), H4);
+  state.d1 = spotBarsOnly(markClosed(state.d1raw, D1, now), D1);
+  if (!state.h4.length) return;
+  state.sys = buildSystem(state.h4, state.d1);
+  state.cur = currentState(state.sys, { costs: costs(), longOnly: settings.sides === 'long' });
+  if (state.price === null) state.price = state.base[state.base.length - 1].c;
   renderAll();
-  renderNarration();
-  if (candleClosed) renderContextTab();
-  chart.setData({
-    candles: state.candles, ind: state.ctx, setup: state.setup,
-    levels: buildLevelList(),
-  });
-  chart.render();
-
-  if (allowAlert) handleAlerting(candleClosed);
+  maybeAlert();
+  state.firstCalc = false;
 }
 
-/**
- * ตัดสินใจว่าจะเตือนเมื่อไร
- *
- * ปัญหาที่ต้องแก้: ถ้ารอให้แท่งปิดก่อนค่อยเตือน บนกรอบ 15 นาทีอาจช้าไป 15 นาที
- * แต่ถ้าเตือนทุกครั้งที่คะแนนถึงเกณฑ์ระหว่างแท่งยังไม่ปิด สัญญาณจะกลับไปกลับมา
- *
- * ทางออก (โหมด early): เตือน 2 จังหวะ
- *   1. "เตรียมตัว" — คะแนนเข้าใกล้เกณฑ์ระหว่างแท่งกำลังก่อตัว → ให้เวลาไปเปิดจอ ตั้งออเดอร์รอ
- *   2. "ยืนยัน"   — แท่งปิดแล้วคะแนนยังถึงเกณฑ์จริง → สัญญาณที่เชื่อถือได้
- */
-function handleAlerting(candleClosed) {
-  const mode = settings.alertMode || 'early';
-  const side = state.action === 'buy' ? 1 : state.action === 'sell' ? -1 : 0;
-
-  if (mode === 'instant') {
-    if (side && alerts.shouldFireSignal(side)) fireSignalAlert();
-    return;
+/* ── ตัวกรองความปลอดภัย: ข้อมูลเก่า ตลาดปิด ─────────────────────────── */
+function blocks() {
+  const out = [];
+  const mk = goldMarketOpen(new Date());
+  if (!mk.open) {
+    out.push({ key: 'closed', text: `ตลาดทอง spot ปิดอยู่${mk.opensAt ? ` · เปิดอีกครั้ง ${thTime(mk.opensAt)} น.` : ''} — ราคาที่ยังขยับมาจากเหรียญทองที่ซื้อขาย 24 ชม. ซึ่งเป็นคนละตลาดกับที่ส่งคำสั่งได้` });
   }
-  if (mode === 'closed') {
-    if (side && candleClosed && alerts.shouldFireSignal(side)) fireSignalAlert();
-    return;
-  }
-
-  // โหมด early
-  if (side && candleClosed && alerts.shouldFireSignal(side)) { fireSignalAlert(); return; }
-  if (candleClosed) return;
-
-  // ระหว่างแท่งกำลังก่อตัว: เตือนล่วงหน้าเมื่อคะแนนเข้าใกล้เกณฑ์แล้ว
-  if (!state.combined || !state.scored || !state.scored.ready) return;
-  const score = state.combined.score;
-  const near = settings.threshold * 0.8;
-  const warnSide = Math.abs(score) >= near ? Math.sign(score) : 0;
-  if (!warnSide) return;
-  if ((state.blocks || []).length) return;
-  const now = Date.now();
-  if (warnSide === state.warnedSide && now - state.warnedAt < Math.max(60000, alerts.cooldownMs)) return;
-  state.warnedSide = warnSide;
-  state.warnedAt = now;
-
-  const price = state.candles[state.candles.length - 1].c;
-  const remain = candleRemainMs();
-  alerts.fire({
-    kind: 'warn',
-    title: `⚡ เตรียมตัว: อาจมีสัญญาณ${warnSide > 0 ? 'ซื้อ' : 'ขาย'} ${settings.symbol}`,
-    body: `คะแนนตอนนี้ ${score.toFixed(1)} (เกณฑ์ ${settings.threshold}) ที่ราคา ${price.toFixed(2)}\n` +
-          `แท่งจะปิดในอีก ${remain !== null ? fmtRemain(remain) : '-'} — ถ้าปิดแล้วคะแนนยังถึงเกณฑ์ ระบบจะยืนยันอีกครั้ง\n` +
-          `นี่ยังไม่ใช่สัญญาณยืนยัน แต่ให้เวลาคุณเตรียมตั้งคำสั่งรอไว้ก่อน`,
-    price, score,
-  });
+  const fr = feed.freshness();
+  if (!fr.unknown && fr.stale) out.push({ key: 'stale', text: `ราคาไม่อัปเดตมา ${Math.round(fr.ageMs / 1000)} วินาที — ตัวเลขบนจออาจไม่ใช่ราคาตอนนี้ กำลังเชื่อมต่อใหม่` });
+  else if (!fr.unknown && fr.frozen && mk.open) out.push({ key: 'frozen', text: `ราคาไม่ขยับเลยมา ${Math.round(fr.moveMs / 60000)} นาที ทั้งที่ยังดึงข้อมูลได้ — แหล่งข้อมูลอาจส่งค่าเดิมซ้ำ ลองเปลี่ยนแหล่งราคาในตั้งค่า` });
+  if (settings.source === 'demo') out.push({ key: 'demo', text: 'นี่คือโหมดจำลอง ราคาไม่ใช่ของจริง — ห้ามเทรดตาม' });
+  return out;
 }
 
-/** เหลืออีกกี่มิลลิวินาทีแท่งปัจจุบันจะปิด */
-function candleRemainMs() {
-  if (!state.candles.length) return null;
-  const last = state.candles[state.candles.length - 1];
-  const step = TF[state.tf].ms;
-  const closeAt = last.t + step;
-  return Math.max(0, closeAt - Date.now());
-}
-
-function fmtRemain(ms) {
-  const total = Math.floor(ms / 1000);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = total % 60;
-  if (h > 0) return `${h} ชม. ${String(m).padStart(2, '0')} น.`;
-  return `${m}:${String(sec).padStart(2, '0')} นาที`;
-}
-
-function tickCountdown() {
-  const el = $('countdown');
-  if (!el) return;
-  const remain = candleRemainMs();
-  if (remain === null) return;
-  const b = el.querySelector('b');
-  if (b) b.textContent = fmtRemain(remain);
-  el.classList.toggle('soon', remain < 60000);
-}
-
-/** อัปเดตคำบรรยายกราฟ */
-function renderNarration() {
-  if (!state.ctx || !state.scored) return;
-  const htfScores = [{ tf: state.tf, score: state.scored.ready ? state.scored.score : null }];
-  for (const tf of [settings.htf1, settings.htf2]) {
-    if (tf === state.tf) continue;
-    const h = state.htf[tf];
-    htfScores.push({ tf, score: h && h.scored && h.scored.ready ? h.scored.score : null });
-  }
-  const sections = narrate({
-    candles: state.candles, ctx: state.ctx, scored: state.scored, combined: state.combined,
-    setup: state.setup, action: state.action, blocks: state.blocks || [], tf: state.tf,
-    session: sessionInfo(new Date()), prob: probabilityFor(state.combined ? state.combined.score : 0, probSource().bt),
-    htfScores,
-    instrument: instrumentOf(settings.source, settings.symbol),
-  });
-  $('narrationBody').innerHTML = sections.map((sec) => `
-    <div class="narr ${sec.tone}">
-      <h3>${sec.title}</h3>
-      <p>${sec.text}</p>
-    </div>`).join('');
-  $('narrationTime').textContent = `อัปเดตล่าสุด ${new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })}`;
-}
-
-/**
- * แหล่งสถิติที่ใช้อ้างอิงความน่าจะเป็น
- * ถ้าผ่านการตรวจแบบแบ่งข้อมูลและมีไม้พอ ให้ใช้ผลจาก "ช่วงสอบจริง" เสมอ
- * เพราะสถิติจากข้อมูลชุดเดียวกับที่ใช้ตั้งกฎ มักสวยเกินความจริง
- */
-function probSource() {
-  const wf = state.wf;
-  if (wf && wf.ok && wf.outSample.stats.n >= 15) return { bt: wf.outSample, outOfSample: true };
-  return { bt: state.bt, outOfSample: false };
-}
-
-function buildLevelList() {
-  if (!state.ctx) return [];
-  const i = state.candles.length - 1;
-  const price = state.candles[i].c;
-  const span = state.scored && state.scored.atr ? state.scored.atr * 12 : price * 0.05;
-  return levelsAt(state.ctx.zones, i)
-    .filter((z) => z.touches >= 2 && Math.abs(z.price - price) < span)
-    .map((z) => ({ price: z.price, touches: z.touches, type: z.price <= price ? 'support' : 'resistance' }))
-    .sort((a, b) => b.touches - a.touches)
-    .slice(0, 8);
-}
-
-function fireSignalAlert() {
-  const s = state.setup;
-  const prob = probabilityFor(state.combined.score, probSource().bt);
-  const ex = explain({ ...state.scored, side: Math.sign(state.combined.score) });
-  const top = ex.pro.slice(0, 3).map((f) => `• ${f.name}`).join('\n');
-  const body = [
-    `${state.action === 'buy' ? '🟢 สัญญาณซื้อ' : '🔴 สัญญาณขาย'} ${settings.symbol} ${state.tf}`,
-    `คะแนน ${state.combined.score.toFixed(1)} · โอกาสถึง 1R ${prob.p !== null ? prob.p.toFixed(0) + '%' : 'ยังไม่มีสถิติ'}`,
-    s ? s.plan : '',
-    s ? 'แนะนำ: ตั้งคำสั่งรอ (limit) ที่ราคาเข้า ไม่ต้องไล่ราคาตลาด' : '',
-    narrateShort({ scored: state.scored, combined: state.combined, action: state.action, candles: state.candles }),
-    top,
-  ].filter(Boolean).join('\n');
-  alerts.fire({
-    kind: state.action,
-    title: `${state.action === 'buy' ? '🟢 เข้าซื้อ' : '🔴 เข้าขาย'} ${settings.symbol} @ ${state.candles[state.candles.length - 1].c.toFixed(2)}`,
-    body,
-    price: state.candles[state.candles.length - 1].c,
-    score: state.combined.score,
-  });
-}
-
-// ── แสดงผล ──────────────────────────────────────────────────────────────
+/* ── วาดทุกส่วน ───────────────────────────────────────────────────── */
 function renderAll() {
-  updatePriceHeader();
-  renderSignal();
-  renderPlan();
+  renderLiveState();
+  renderPrice();
+  renderDecision();
+  renderChart();
+  renderLiveRecord();
   renderPosition();
-  renderReasons();
-  renderMTF();
+  renderBanner();
 }
 
-function updatePriceHeader() {
-  const last = state.candles[state.candles.length - 1];
-  if (!last) return;
-  const inst = instrumentOf(settings.source, settings.symbol);
-  $('livePrice').textContent = last.c.toFixed(2);
-  $('priceUnit').textContent = inst.isSpot ? 'USD / ออนซ์' : `USD · ${inst.name}`;
-  const base = state.prevClose || last.o;
-  const chg = last.c - base;
-  const pct = (chg / base) * 100;
-  const el = $('priceChange');
-  el.textContent = `${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(2)} (${pct.toFixed(2)}%)`;
-  el.className = 'chg ' + (chg >= 0 ? 'up' : 'down');
-  $('thbPrice').textContent = `≈ ${Math.round(xauToThaiBaht(last.c, settings.usdThb)).toLocaleString('th-TH')} บาท/บาททองคำ (คิดที่ ${settings.usdThb} บาท/ดอลลาร์)`;
-  renderInstrumentLine(inst);
+function setLive(st, text) {
+  $('live').dataset.state = st;
+  $('liveText').textContent = text;
+}
+function renderLiveState() {
+  const mk = goldMarketOpen(new Date());
+  const fr = feed.freshness();
+  if (settings.source === 'demo') setLive('demo', 'จำลอง');
+  else if (!fr.unknown && fr.stale) setLive('stale', 'ข้อมูลค้าง');
+  else if (!mk.open) setLive('closed', 'ตลาดปิด');
+  else setLive('live', 'สด');
 }
 
-/** บรรทัดบอกว่ากำลังดูราคาอะไร และมันต่างจากทองสปอตยังไง */
-function renderInstrumentLine(inst) {
-  const el = $('instrumentLine');
-  if (!el) return;
-  const h = state.candles.length ? dataHealth(state.candles, TF[state.tf].ms) : null;
-  const warn = inst.isSpot ? '' : ' · <b>ไม่ใช่ราคาทองสปอต</b>';
-  const health = h
-    ? ` · ${h.bars.toLocaleString('th-TH')} แท่ง ย้อนหลัง ${h.days.toFixed(1)} วัน`
-      + (h.gaps ? ` · <span style="color:var(--gold)">มีช่วงข้อมูลขาด ${h.gaps} จุด</span>` : '')
-      + (h.ok ? '' : ' · <span style="color:var(--down)">ข้อมูลผิดลำดับ</span>')
-    : '';
-  el.innerHTML = `<span title="${inst.long}">กำลังดู <b>${inst.name}</b> (${inst.kind})${warn}</span>${health}`;
-  el.className = 'instrument-line' + (inst.isSpot ? '' : ' proxy');
-}
-
-function renderSignal() {
-  const score = state.combined ? state.combined.score : 0;
-  const lbl = scoreLabel(score, settings.threshold);
-  const card = $('signalCard');
-  card.className = 'card signal-card ' + (state.action === 'wait' ? '' : state.action);
-  const act = $('actionText');
-  act.className = 'action ' + state.action;
-  act.innerHTML = state.action === 'buy' ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12.5V3.5M4 7.5L8 3.5l4 4"/></svg> เข้าซื้อ (BUY)` : state.action === 'sell' ? `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.5v9M4 8.5l4 4 4-4"/></svg> เข้าขาย (SELL)` : `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 4v8M10 4v8"/></svg> รอจังหวะ`;
-  $('gradeText').className = 'grade ' + lbl.cls;
-  $('gradeText').textContent = lbl.text;
-  $('scoreText').textContent = score.toFixed(1);
-  const fill = $('gaugeFill');
-  const pct = Math.min(50, Math.abs(score) / 2);
-  fill.className = 'gauge-fill ' + (score > 0 ? 'buy' : score < 0 ? 'sell' : '');
-  fill.style.left = score >= 0 ? '50%' : `${50 - pct}%`;
-  fill.style.width = `${pct}%`;
-
-  const hasSignal = Math.abs(score) >= settings.threshold;
-  const src = probSource();
-  const prob = probabilityFor(score, src.bt);
-  if (!hasSignal) {
-    $('probValue').textContent = '—';
-    $('probValue').style.color = 'var(--muted)';
-    $('probNote').textContent = `คะแนนยังไม่ถึงเกณฑ์ ${settings.threshold} จึงยังไม่มีสถิติของ "ไม้นี้" ให้อ้างอิง`;
-  } else {
-    $('probValue').textContent = prob.p !== null ? `${prob.p.toFixed(0)}%` : '—';
-    $('probValue').style.color = prob.p === null ? 'var(--muted)' : prob.p >= 55 ? 'var(--up)' : prob.p >= 45 ? 'var(--gold)' : 'var(--down)';
-    $('probNote').textContent = (src.outOfSample ? 'วัดจากช่วงข้อมูลที่ระบบไม่เคยเห็น — ' : '')
-      + prob.note + (prob.avgR != null ? ` · ค่าคาดหวังต่อไม้ ${prob.avgR.toFixed(2)}R` : '');
+function renderPrice() {
+  const px = state.price;
+  if (!Number.isFinite(px)) return;
+  $('price').textContent = money(px);
+  /* เทียบกับราคาปิดของวันทำการล่าสุดของตลาดจริง ไม่ใช่แท่งวันอาทิตย์ของเหรียญทอง */
+  const closedD1 = state.d1.filter((b) => b.closed !== false);
+  const ref = closedD1.length ? closedD1[closedD1.length - 1].c : null;
+  const el = $('priceChg');
+  if (ref) {
+    const d = px - ref, pct = (d / ref) * 100;
+    el.textContent = `${sgn(d)} (${sgn(pct)}%)`;
+    el.className = 'chg ' + (d >= 0 ? 'up' : 'down');
   }
-
-  const last = state.candles[state.candles.length - 1];
-  const closedInfo = last && last.closed === false ? 'แท่งปัจจุบันยังไม่ปิด — คะแนนอาจเปลี่ยนได้จนกว่าแท่งจะปิด' : 'คำนวณจากแท่งที่ปิดแล้ว';
-  const parts = [];
-  parts.push(`<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M8 4.6V8l2.2 1.3"/></svg> ${closedInfo}`);
-  if (state.scored && state.scored.ready) {
-    parts.push(`สภาพตลาด: <b>${state.scored.regime === 'trend' ? 'มีเทรนด์ (ใช้กลยุทธ์ตามแนวโน้ม)' : 'ออกข้าง (ใช้กลยุทธ์เด้งกลับค่าเฉลี่ย)'}</b> · ADX ${state.scored.adx ? state.scored.adx.toFixed(1) : '-'} · ATR ${state.scored.atr.toFixed(2)} (${state.scored.atrPct.toFixed(2)}%)`);
-  }
-  /* กรอบเวลาใหญ่โหลดไม่ได้ = คะแนนไม่ได้ผ่านการยืนยันกับภาพใหญ่
-     ต้องบอก ไม่ใช่ปล่อยให้เห็นแค่ตัวเลขที่ดูปกติ */
-  if (state.combined && state.combined.missing && state.combined.missing.length) {
-    parts.push('<span style="color:var(--gold)">⚠ โหลดกรอบเวลาใหญ่ไม่ครบ — คะแนนคิดจากกรอบที่มีข้อมูลเท่านั้น '
-      + 'ยังไม่ได้ยืนยันกับภาพใหญ่ ให้ระวังมากกว่าปกติ</span>');
-  }
-  if (state.settingsRejected && state.settingsRejected.length) {
-    parts.push(`<span style="color:var(--down)">⚠ ค่าที่บันทึกไว้บางตัวใช้ไม่ได้ จึงกลับไปใช้ค่าตั้งต้น: `
-      + `${state.settingsRejected.join(' · ')}</span>`);
-  }
-  if (state.blocks && state.blocks.length) {
-    parts.push(`<span style="color:var(--gold)"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M3.8 3.8l8.4 8.4"/></svg> ระงับสัญญาณ: ${state.blocks.join(' · ')}</span>`);
-  }
-  if (state.strat && state.strat.ok && state.strat.level === 'bad') {
-    parts.push('<span style="color:var(--down)">⚠ ระบบสอบไม่ผ่านบนข้อมูลที่ไม่เคยเห็น — กฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ ดูรายละเอียดในแท็บผลทดสอบย้อนหลัง</span>');
-  }
-  $('candleState').innerHTML = parts.join('<br>');
-  renderPlainAdvice();
-}
-
-/**
- * คำแนะนำภาษาชาวบ้านสำหรับโหมดง่าย
- * ไม่ใช้ศัพท์เทคนิค ตอบแค่ว่า "ตอนนี้ควรทำอะไร" และ "ทำไม"
- */
-function renderPlainAdvice() {
-  const el = $('plainAdvice');
-  if (!el || !state.scored) return;
-  if (!state.scored.ready) {
-    el.innerHTML = '<div class="headline">กำลังโหลดข้อมูล…</div>';
-    return;
-  }
-  const side = Math.sign(state.combined.score);
-  const ex = explain({ ...state.scored, side: side || 1 });
-  const top3 = ex.pro.slice(0, 3).map((f) => `<li>${f.reason}</li>`).join('');
-
-  const failWarn = state.strat && state.strat.ok && state.strat.level === 'bad'
-    ? `<div class="next-step" style="background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.4)">
-        <b>⚠ อ่านก่อนตัดสินใจ:</b> ระบบทดสอบตัวเองกับข้อมูลที่ไม่เคยเห็นแล้ว<b>ขาดทุน</b>
-        แปลว่ากฎชุดนี้ยังไม่มีความได้เปรียบจริงกับตลาดช่วงนี้ — ใช้ดูเพื่อเรียนรู้ได้ แต่ยังไม่ควรเทรดตาม</div>`
-    : '';
-
-  if (state.action === 'buy' || state.action === 'sell') {
-    const prob = probabilityFor(state.combined.score, probSource().bt);
-    const s = state.setup;
-    el.innerHTML = failWarn + `
-      <div class="headline" style="color:${state.action === 'buy' ? 'var(--up)' : 'var(--down)'}">
-        ${state.action === 'buy' ? '🟢 ตอนนี้เข้าซื้อได้' : '🔴 ตอนนี้เข้าขายได้'}
-      </div>
-      <div>เพราะปัจจัยหลัก ๆ ชี้ไปทางเดียวกัน${prob.p !== null ? ` และสัญญาณแบบนี้ในอดีตทำกำไรได้ ${prob.p.toFixed(0)} จาก 100 ครั้ง` : ''}:</div>
-      <ul>${top3}</ul>
-      ${s ? `<div class="next-step"><b>ทำต่อยังไง:</b> เปิดโปรแกรมเทรด ตั้งคำสั่งรอที่ราคา <b>${s.entry.toFixed(2)}</b>
-        ตั้งจุดตัดขาดทุนที่ <b>${s.sl.toFixed(2)}</b> แล้วตั้งขายทำกำไรที่ <b>${s.tp1.toFixed(2)}</b>
-        <br>ตั้งเสร็จแล้วปิดจอไปทำอย่างอื่นได้เลย ไม่ต้องเฝ้า</div>` : ''}`;
-    return;
-  }
-
-  const blocked = (state.blocks || []).length > 0;
-  const watch = [];
-  if (state.scored.resistance) watch.push(`ราคาขึ้นทะลุ <b>${state.scored.resistance.toFixed(2)}</b> → มีโอกาสไปต่อขาขึ้น`);
-  if (state.scored.support) watch.push(`ราคาหลุดลงต่ำกว่า <b>${state.scored.support.toFixed(2)}</b> → มีโอกาสไปต่อขาลง`);
-  el.innerHTML = failWarn + `
-    <div class="headline" style="color:var(--text-2)">ตอนนี้ยังไม่ต้องทำอะไร</div>
-    <div>${blocked
-      ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ')
-      : 'สัญญาณยังไม่ชัดพอ การอยู่เฉย ๆ ก็คือการตัดสินใจที่ถูกต้องอย่างหนึ่ง'}</div>
-    ${watch.length ? `<div class="next-step"><b>รออะไรอยู่:</b><ul style="margin-top:4px">${watch.map((w) => `<li>${w}</li>`).join('')}</ul>
-      ถ้ามีสัญญาณ ระบบจะส่งเสียงเตือนให้เอง ไม่ต้องนั่งเฝ้า</div>` : ''}`;
+  const baht = xauToThaiBaht(px, settings.usdThb);
+  $('priceThb').textContent = `≈ ${Math.round(baht).toLocaleString('th-TH')} บาท/บาททองคำ`;
+  const inst = instrumentOf(state.key || settings.source, '');
+  const src = SOURCES[state.key];
+  $('priceSrc').textContent = `${inst ? inst.name : ''}${src ? ' · ' + src.label.split('·')[0].trim() : settings.source === 'demo' ? ' · จำลอง' : ''}`;
+  document.title = `${money(px)} · Gold Signal Lab`;
 }
 
 /*
- * สร้างแผนเทรดใหม่จากค่าตั้งค่าปัจจุบัน
- *
- * ต้องแยกออกมา เพราะตัวเลขอย่างทุน ความเสี่ยง สเปกโบรกเกอร์ และจุดตัดขาดทุน
- * ที่ผู้ใช้ตั้งเอง อยู่ในแผนที่ buildSetup คำนวณไว้แล้ว ไม่ได้คิดตอนวาดหน้าจอ
- * ถ้าเปลี่ยนค่าแล้ววาดใหม่เฉย ๆ จะได้แผนเดิมที่คิดจากค่าเก่า — ผู้ใช้กรอกแล้วเหมือนไม่มีอะไรเกิดขึ้น
+ * การ์ดตัดสินใจ — คำตอบเดียวว่าตอนนี้ควรทำอะไร
+ * สถานะมาจาก currentState() ซึ่งเดินกติกาเดียวกับทดสอบย้อนหลังมาจนถึงแท่งล่าสุด
  */
-function rebuildSetup() {
-  const at = state.setupAt;
-  if (!at || !state.ctx || !state.scored || !state.combined) { state.setup = null; return; }
-  const score = state.combined.score;
-  const side = state.hold ? state.hold.side : Math.sign(score);
+function renderDecision() {
+  const cur = state.cur, card = $('decision');
+  if (!cur) return;
+  const sig = cur.signal || {};
+  const bl = blocks();
+  const hard = bl.filter((b) => b.key !== 'demo');
+  const side = cur.trade ? cur.trade.side : sig.side;
+  let kind = cur.kind, chip = '', title = '', text = '';
+  let plan = null, size = null;
 
-  /*
-   * ถูกระงับสัญญาณ = ต้องไม่มีแผนให้กด ไม่ใช่แผนพร้อมป้ายเตือน
-   *
-   * เดิมตรงนี้ดูแค่คะแนนกับเกณฑ์ ไม่เคยดู state.blocks เลย
-   * ตอนตลาดปิด พาดหัวขึ้นถูกว่า "ตอนนี้ยังไม่ต้องทำอะไร" แต่ช่องแผนใต้พาดหัว
-   * ยังขึ้น "เข้าขาย" พร้อมราคาเข้า/SL/TP/จำนวนล็อตครบ และกราฟก็ลากเส้นแผนให้ด้วย
-   * ผู้ใช้เห็นตัวเลขพร้อมกดก่อนจะทันอ่านคำเตือน — ซึ่งคือสิ่งที่รายงานเข้ามาจริง
-   *
-   * เป็นรูปแบบเดียวกับที่เคยแก้ไปแล้วตอน "ไม้ที่เสี่ยงเกินเพดาน"
-   * แต่ตอนนั้นแก้เฉพาะเพดานความเสี่ยง ไม่ได้แก้ให้ครอบทุกเหตุที่ระงับสัญญาณ
-   */
-  const held = (state.blocks || []).length > 0;
-  state.setup = !held && state.scored.ready && (state.hold || Math.abs(score) >= settings.threshold) && side
-    ? buildSetup(state.ctx, at.index, { ...state.scored, side }, {
-        account: settings.account, riskPct: settings.riskPct, entryPrice: at.price, side,
-        targetR: activeTargetR(),
-        slAtrMult: settings.slAtr,
-        contractSize: settings.contractSize, minLot: settings.minLot, lotStep: settings.lotStep,
-        slPrice: settings.slManual,
-      })
-    : null;
+  if (cur.kind === 'entry') {
+    plan = planAt(side, state.price, sig.atr, RULE, costs());
+    size = sizePlan({ ...plan, account: settings.account, riskPct: settings.riskPct, broker: broker() });
+  }
+
+  switch (cur.kind) {
+    case 'entry':
+      kind = side > 0 ? 'entry-buy' : 'entry-sell';
+      chip = side > 0 ? '● สัญญาณซื้อ' : '● สัญญาณขาย';
+      title = side > 0 ? 'เข้าซื้อได้ตอนนี้' : 'เข้าขายได้ตอนนี้';
+      text = `${side > 0 ? 'เทรนด์ใหญ่ขาขึ้น และราคาย่อลงมาถึงจุดเข้าแล้ว' : 'เทรนด์ใหญ่ขาลง และราคาเด้งขึ้นมาถึงจุดเข้าแล้ว'} · สัญญาณนี้ใช้ได้ถึงแท่ง 4 ชม. ถัดไปปิด`;
+      break;
+    case 'holding': {
+      const t = cur.trade;
+      kind = t.side > 0 ? 'holding-buy' : 'holding-sell';
+      chip = t.side > 0 ? 'ระบบถือซื้ออยู่' : 'ระบบถือขายอยู่';
+      title = 'ระบบอยู่ในไม้แล้ว — ถ้ายังไม่ได้เข้า อย่าไล่ราคา';
+      text = `ระบบ${t.side > 0 ? 'ซื้อ' : 'ขาย'}ที่ <b>${f2(t.entry)}</b> เมื่อ ${thTime(t.t)} น. · ตอนนี้ <b>${sgn(t.rNow)}R</b> · ตัดขาดทุน ${f2(t.stop)} · ทำกำไร ${f2(t.target)} · `
+        + (t.barsLeft > 0 ? `ถ้าไม่ถึงไหน ระบบจะปิดทิ้งในอีก ${t.barsLeft * 4} ชม. ตลาดเปิด` : 'ครบกำหนดถือ 6 วันแล้ว ระบบจะปิดทิ้งตอนแท่งนี้ปิด');
+      break;
+    }
+    case 'cooldown': {
+      const lt = cur.lastTrade;
+      chip = 'พักหลังออกไม้';
+      title = 'เพิ่งออกไม้ รอให้ครบ 24 ชม. ก่อนหาจังหวะใหม่';
+      text = lt ? `ไม้ล่าสุด${lt.side > 0 ? 'ซื้อ' : 'ขาย'} ${lt.why === 'target' ? 'ถึงเป้า' : lt.why === 'stop' ? 'โดนตัดขาดทุน' : 'ปิดเพราะครบเวลา'} <b>${sgn(lt.r)}R</b> · พร้อมหาจังหวะใหม่ประมาณ ${thTime(cur.readyAt)} น.` : '';
+      break;
+    }
+    case 'wait': {
+      chip = 'รอราคา' + (sig.trend > 0 ? 'ย่อ' : 'เด้ง');
+      const lvl = sig.ema;
+      const dist = Number.isFinite(lvl) && Number.isFinite(state.price) ? Math.abs(state.price - lvl) : null;
+      title = sig.trend > 0 ? 'เทรนด์ใหญ่ขาขึ้น — รอราคาย่อก่อนซื้อ' : 'เทรนด์ใหญ่ขาลง — รอราคาเด้งก่อนขาย';
+      text = `จะเป็นสัญญาณเมื่อแท่ง 4 ชม. <b>ปิด${sig.trend > 0 ? 'ต่ำกว่า' : 'สูงกว่า'} ${f2(lvl)}</b> (เส้นค่าเฉลี่ย 20 แท่ง)${dist !== null ? ` · ตอนนี้ห่างอยู่ ${f2(dist)} ดอลลาร์` : ''}`;
+      break;
+    }
+    case 'no-trend':
+      chip = 'ไม่เทรด';
+      title = settings.sides === 'long' && sig.trend < 0 ? 'เทรนด์ใหญ่ขาลง — ตั้งไว้ให้เทรดเฉพาะฝั่งซื้อ' : 'เทรนด์ใหญ่ยังไม่ชัด — อยู่เฉย ๆ';
+      text = 'ระบบจะเทรดเฉพาะตอนที่กราฟรายวันยืนยันเทรนด์ครบทั้งสองข้อ การไม่เข้าเทรดในช่วงนี้คือส่วนหนึ่งของกติกาที่ทำให้ระบบได้เปรียบ';
+      break;
+    default:
+      chip = 'กำลังเตรียม';
+      title = 'ข้อมูลยังไม่พอให้เส้นค่าเฉลี่ยนิ่ง';
+      text = 'ต้องมีกราฟรายวันอย่างน้อยราว 60 วันและกราฟ 4 ชม. อย่างน้อย 20 แท่ง';
+  }
+
+  /* ด่านตายตัว: ตลาดปิด / ข้อมูลค้าง — สัญญาณกลายเป็นข้อมูลอ้างอิง ไม่ใช่สิ่งที่ให้กด */
+  let blockedTrade = false;
+  if ((cur.kind === 'entry') && hard.length) { blockedTrade = true; kind = 'blocked'; chip = 'ระงับสัญญาณ'; title = 'มีสัญญาณ แต่ตอนนี้ห้ามเข้า'; }
+  /* ทุนไม่พอ = ไม่มีแผนให้กด ไม่ใช่แผนพร้อมป้ายเตือน */
+  if (cur.kind === 'entry' && !blockedTrade && size && !size.tradeable) {
+    kind = 'blocked'; chip = 'ทุนไม่พอ'; blockedTrade = true;
+    title = `มีสัญญาณ${side > 0 ? 'ซื้อ' : 'ขาย'} แต่ไม้เล็กสุดเสี่ยงเกินทุน`;
+    text = `ไม้เล็กสุดที่ส่งได้ (${size.lots} ล็อต = ${size.oz.toFixed(2)} ออนซ์) ต้องเสี่ยง <b>${money(size.riskUsd)} ดอลลาร์ = ${size.riskPctActual.toFixed(0)}% ของทุน</b> ซึ่งเกินเพดาน ${size.ceilingPct}%`
+      + ` · แพ้ติดกัน ${size.lossesToHalf} ไม้ ทุนหายครึ่ง (ระบบเคยแพ้ติดกัน ${REFERENCE.stats.maxLossStreak} ไม้)`
+      + ` · ทุนที่ควรมีสำหรับไม้ขนาดนี้คือ <b>${money(size.capitalFor2pct)} ดอลลาร์</b> หรือใช้บัญชีที่ 1 ล็อต = 1 ออนซ์`;
+  }
+
+  card.dataset.kind = kind;
+  $('decChip').textContent = chip;
+  $('decTitle').textContent = title;
+  $('decText').innerHTML = text;
+  const capt = cur.kind === 'holding' || cur.kind === 'cooldown' ? '<li class="cap">เงื่อนไขสำหรับไม้ถัดไป</li>' : '';
+  $('decChecks').innerHTML = capt + (sig.checks || []).map((c) =>
+    `<li class="${c.ok === true ? 'ok' : c.ok === false ? 'no' : 'wait'}">${esc(c.text)}</li>`).join('');
+  const bb = $('decBlocks');
+  const showBlocks = bl.filter((b) => b.key !== 'demo' || cur.kind === 'entry');
+  bb.hidden = !showBlocks.length;
+  bb.innerHTML = showBlocks.map((b) => `<p>${esc(b.text)}</p>`).join('');
+
+  // ปุ่มลัด: รอย่อ → ตั้งเตือนราคา · ถือไม้อยู่ → เอาระดับของระบบมาบันทึก
+  const act = $('decActions');
+  act.innerHTML = '';
+  if (cur.kind === 'wait' && Number.isFinite(sig.ema)) {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = `เตือนฉันเมื่อราคา${sig.trend > 0 ? 'ลง' : 'ขึ้น'}ถึง ${f2(sig.ema)}`;
+    b.onclick = () => {
+      alerts.addRule({ type: sig.trend > 0 ? 'price_below' : 'price_above', value: +sig.ema.toFixed(2),
+        note: 'ราคาใกล้จุดเข้าแล้ว — ต้องรอให้แท่ง 4 ชม. ปิดเลยเส้นก่อน ถึงจะนับเป็นสัญญาณ' });
+      toast('ตั้งเตือนแล้ว — ต้องเปิดหน้านี้ค้างไว้ถึงจะเตือนได้');
+      unlockAudio();
+    };
+    act.appendChild(b);
+  }
+
+  const next = cur.nextCloseAt;
+  $('decNext').textContent = next ? `แท่ง 4 ชม. ปิดถัดไป ${thClock(next)} น. (${untilText(next)})` : '';
+
+  renderPlan(cur.kind === 'entry' && !blockedTrade ? { plan, size, side } : null);
 }
 
-function renderPlan() {
-  const box = $('planBox');
-  const sizeBox = $('sizeBox');
+function renderPlan(p) {
   const card = $('planCard');
-  if (card) card.classList.toggle('no-plan', !state.setup);
-  if (!state.setup) {
-    box.className = 'plan-empty';
-    /* เหตุผลต้องตรงกับความจริง ถ้าระงับเพราะตลาดปิด อย่าไปโทษว่าคะแนนไม่ถึงเกณฑ์ */
-    const why = (state.blocks || []).length ? 'ระบบระงับสัญญาณไว้เพราะ: ' + state.blocks.join(' · ') : null;
-    box.textContent = why || (state.scored && state.scored.ready
-      ? `คะแนนปัจจุบัน ${state.combined.score.toFixed(1)} ยังไม่ถึงเกณฑ์ ${settings.threshold} — การไม่เข้าเทรดคือการตัดสินใจอย่างหนึ่ง`
-      : 'ข้อมูลยังไม่พอสำหรับคำนวณ (ต้องการอย่างน้อย ~200 แท่ง)');
-    sizeBox.innerHTML = '';
-    sizeBox.style.display = 'none';
-    return;
-  }
-  const s = state.setup;
-
-  /*
-   * ไม้ที่เสี่ยงเกินเพดาน = ไม่มีแผนให้กด ไม่ใช่แผนพร้อมป้ายเตือน
-   *
-   * ผู้ใช้ส่งประวัติจริงมาให้ดู: ทุน $59 เข้าไม้ละ 1 ทรอยออนซ์ เสี่ยง 17% ต่อไม้
-   * แพ้ติดกันสามไม้ใน 50 นาที เหลือทุนครึ่งเดียว
-   * แอปเตือนถูกทุกข้อ แต่วางคำเตือนไว้ "ใต้" แผนที่มีราคาเข้า SL TP ครบพร้อมกด
-   * คนอ่านจึงเห็นแผนก่อน แล้วค่อยเห็นคำเตือน ซึ่งสายไปแล้ว
-   */
-  if (s.tradeable === false) {
-    if (card) card.classList.add('no-plan');
-    sizeBox.innerHTML = '';
-    sizeBox.style.display = 'none';
-    box.className = 'plan-blocked';
-    const r = s.ruin;
-    box.innerHTML = `
-      <div class="blk-head">ไม้นี้เทรดไม่ได้ด้วยทุนเท่านี้</div>
-      <p>ไม้เล็กที่สุดที่โบรกเกอร์รับคือ <b>${s.minLot}</b> ซึ่งเสี่ยง
-        <b class="num">$${s.riskActual.toFixed(2)}</b> = <b>${s.riskActualPct.toFixed(0)}%</b> ของทุน
-        (เพดานที่ปลอดภัยคือ ${s.riskCeiling}%)</p>
-      ${r ? `<ul class="blk-math">
-        <li>แพ้ติดกัน <b>${r.lossesToHalf}</b> ไม้ = ทุนหายครึ่งหนึ่ง</li>
-        <li>แพ้ติดกัน <b>${r.lossesToZero}</b> ไม้ = ทุนหมด</li>
-        <li>ทุนที่ต้องมีเพื่อเทรดขนาดนี้อย่างปลอดภัย: <b class="num">$${r.capitalNeeded}</b></li>
-      </ul>` : ''}
-      <p class="blk-why">ที่ความเสี่ยงระดับนี้ ต่อให้สัญญาณแม่นแค่ไหน คณิตศาสตร์ก็บอกว่าพอร์ตไปไม่รอด —
-        การแพ้ติดกันไม่กี่ไม้เป็นเรื่องปกติของทุกกลยุทธ์ ไม่ใช่เรื่องผิดปกติ
-        ระบบจึงไม่แสดงแผนให้ เพราะแผนที่ทำตามแล้วพอร์ตหมด ไม่ใช่แผนที่ดี</p>
-      <p class="blk-fix"><b>ทางเลือกที่มี:</b> เพิ่มทุนให้ถึงระดับข้างบน ·
-        หาโบรกเกอร์ที่สั่งขนาดเล็กกว่านี้ได้ (เช่น 0.01 ล็อต) ·
-        หรือใช้ระบบนี้ดูสัญญาณเฉย ๆ ไปก่อนโดยยังไม่ลงเงิน</p>`;
-    return;
-  }
-
-  /* ขนาดไม้และเงินเสี่ยงมาจาก buildSetup ที่เดียว — เดิมหน้านี้คำนวณเองอีกชุด
-     ซึ่งได้เลขที่ส่งคำสั่งไม่ได้ (เช่น 0.008 ล็อต) และบอกเงินเสี่ยงตามที่ "ตั้งใจ"
-     ไม่ใช่ตามขนาดไม้ที่เทรดได้จริง ตัวเลขบนหน้าจอกับที่เด้งเข้า Discord จึงไม่ตรงกัน */
-  const riskMoney = s.riskActual;
-  const lots = s.lots;
-  /*
-   * ตัวเลขประกอบแผง "ที่มาของตัวเลข" — ประกอบจากผลชุดเดียว
-   * ต้องมี best/outOfSample ให้ครบตามที่แผงข้างล่างอ่าน ไม่งั้นหน้าแผนพังทั้งหน้า
-   * (เคยพลาดมาแล้วตอนย้ายมาใช้ผลชุดเดียว — โหมดจำลองไม่เจอเพราะมักไม่มีสัญญาณให้วาดแผน)
-   */
-  const opt = state.strat && state.strat.ok ? {
-    ...state.strat.stage1,
-    best: {
-      slAtrMult: state.strat.strategy.slAtrMult,
-      targetR: state.strat.strategy.targetR,
-      expectancy: state.strat.inSample.expectancy,
-    },
-    outOfSample: { expectancy: state.strat.outSample.expectancy },
-  } : null;
-  const dir = s.side > 0 ? 'ซื้อ' : 'ขาย';
-  const sign = s.side > 0 ? '+' : '-';
-  const rr = Math.abs(s.tpMain - s.entry) / s.slDist;
-  const reach = opt ? opt.reachRates.find((x) => Math.abs(x.targetR - s.mainR) < 1e-9) : null;
-
-  box.className = 'plan-v2';
-  const orderType = s.side > 0 ? 'Buy' : 'Sell';
-  const hasPullback = s.entryIdeal !== null;
-  const gapToIdeal = hasPullback ? Math.abs(s.entry - s.entryIdeal) : 0;
-  const idealIsClose = hasPullback && gapToIdeal < s.slDist * 0.25;
-  /*
-   * บอกวิธีเข้าไม้ "วิธีเดียว" ตามที่วัดมา ไม่ใช่กางสองทางให้ผู้ใช้เลือกเอง
-   *
-   * ของเดิมโชว์ "ดีที่สุด: รอย่อ" คู่กับ "หรือ: เข้าเลย" ทุกครั้ง
-   * ซึ่งเป็นการโยนการตัดสินใจกลับไปให้คนอ่าน ทั้งที่ระบบวัดคำตอบไว้แล้ว
-   * และคำว่า "ดีที่สุด" ก็ไม่เคยผ่านการวัด — วัดแล้วพบว่าบ่อยครั้งแย่กว่าเข้าเลยด้วยซ้ำ
-   */
-  const waitForPullback = hasPullback && !idealIsClose && settings.entryMode === 'pullback';
-
-  const held = state.hold;
-  const ageMin = held ? Math.max(0, Math.round((Date.now() - held.startedAt) / 60000)) : null;
-  box.innerHTML = `
-    ${state.action === 'wait' ? '<div class="plan-gate">⚠ แผนอ้างอิงเท่านั้น — ยังไม่ใช่ไฟเขียวให้เข้า</div>' : ''}
-    ${held ? `<div class="sig-age${held.held ? ' fading' : ''}">
-      สัญญาณนี้เกิดมา <b>${ageMin === 0 ? 'ไม่ถึง 1' : ageMin}</b> นาที · คะแนนแรงสุดที่เคยไปถึง <b>${held.peak.toFixed(1)}</b>
-      ${held.held
-        ? '<span class="opt-why">ตอนนี้คะแนนอ่อนลงต่ำกว่าเกณฑ์แล้ว แต่ยังไม่ถึงขั้นยกเลิก — ถ้าจะเข้าให้รีบ หรือปล่อยผ่านก็ได้</span>'
-        : '<span class="opt-why">คะแนนยังยืนเหนือเกณฑ์ ไม่ต้องรีบกดแข่งกับเวลา</span>'}
-    </div>` : ''}
-    <div class="plan-main">
-      <div class="pm-row entry"><span class="pm-label">เข้า${dir}ที่</span>
-        <span class="pm-val">${s.entry.toFixed(2)}</span><span class="pm-note">ราคาตลาดตอนนี้</span></div>
-      <div class="pm-row sl"><span class="pm-label">ตัดขาดทุน</span>
-        <span class="pm-val">${s.sl.toFixed(2)}</span>
-        <span class="pm-note">${sign === '+' ? '-' : '+'}${s.slDist.toFixed(2)} · เสีย $${riskMoney.toFixed(2)}${s.riskActualPct === null ? '' : ` (${s.riskActualPct.toFixed(1)}% ของทุน)`}</span></div>
-      <div class="pm-row tp"><span class="pm-label">เป้าทำกำไร</span>
-        <span class="pm-val">${s.tpMain.toFixed(2)}</span>
-        <span class="pm-note">${sign}${Math.abs(s.tpMain - s.entry).toFixed(2)} · ได้ $${s.rewardActual.toFixed(2)}</span></div>
-    </div>
-    ${s.sizeForced ? `<div class="size-alarm">
-      <b>⚠ ทุนไม่พอสำหรับไม้นี้</b>
-      ไม้เล็กที่สุดที่โบรกเกอร์รับคือ <b>${s.minLot}</b> ล็อต ซึ่งเสี่ยง <b>$${s.riskActual.toFixed(2)}</b>
-      ${s.riskActualPct === null ? '' : `= <b>${s.riskActualPct.toFixed(0)}%</b> ของทุน`}
-      แทนที่จะเป็น $${s.riskMoney.toFixed(2)} ตามที่ตั้งไว้
-      <span class="opt-why">${s.riskActualPct !== null && s.riskActualPct >= 100
-        ? 'ไม้เดียวนี้เสี่ยงเกินทุนทั้งก้อน ชน SL คือล้างพอร์ต — ไม้นี้ไม่ควรเข้าด้วยทุนเท่านี้'
-        : 'ทางแก้: เพิ่มทุน ใช้บัญชีที่เทรดขนาดเล็กกว่านี้ได้ หรือข้ามไม้นี้ไป'}</span>
-    </div>` : ''}
-
-    <div class="entry-guide">
-      <h3>วิธีเข้าไม้ — ทำตามทีละขั้น</h3>
-
-      <div class="step"><span class="step-n">1</span><div>
-        <b>ตั้งคำสั่งที่ราคาไหน</b>
-        ${waitForPullback ? `
-          <div class="opt best"><span class="opt-tag">ทำแบบนี้</span>
-            ตั้ง <b>${orderType} Limit</b> ที่ <b class="num">${s.entryIdeal.toFixed(2)}</b> — รอราคาย่อกลับมาที่${s.entryIdealWhy}
-            <span class="opt-why">ระบบวัดข้อมูลย้อนหลังแล้วพบว่าการรอย่อได้ผลรวมดีกว่าเข้าเลยกับตลาดช่วงนี้
-              ถ้าราคาไม่ย่อกลับมาภายในไม่กี่แท่ง ก็ปล่อยไม้นี้ผ่านไป</span></div>` : `
-          <div class="opt best"><span class="opt-tag">ทำแบบนี้</span>
-            ตั้ง <b>${orderType}</b> ที่ราคาตลาด <b class="num">${s.entry.toFixed(2)}</b>
-            <span class="opt-why">${!hasPullback
-              ? 'ไม่มีแนวใกล้ ๆ ให้รอย่อ'
-              : idealIsClose
-                ? 'ราคาอยู่ในโซนที่ดีอยู่แล้ว ไม่ต้องรอย่อ'
-                : `ระบบวัดแล้วว่าการรอย่อได้ผลรวมแย่กว่า เพราะไม้ที่ราคาไม่ย่อกลับมา มักเป็นไม้ที่วิ่งไกลที่สุด (รอแล้วอดเข้าไม้ดี ๆ ไป)`}</span></div>`}
-        <div class="opt stop"><span class="opt-tag no">ห้ามเข้า</span>
-          ถ้าราคา${s.side > 0 ? 'วิ่งขึ้นเกิน' : 'วิ่งลงต่ำกว่า'} <b class="num">${s.entryLimit.toFixed(2)}</b>
-          <span class="opt-why">เลยจุดนี้ไป ได้:เสีย จะต่ำกว่า ${s.minRR} : 1 — ไม่คุ้มเสี่ยงแล้ว ปล่อยไม้นี้ผ่านไป</span></div>
-      </div></div>
-
-      <div class="step"><span class="step-n">2</span><div>
-        <b>ใส่ตัวเลขให้ครบก่อนกดยืนยัน</b>
-        <table class="order-table"><tbody>
-          <tr><td>Stop Loss</td><td class="num">${s.sl.toFixed(2)}</td><td class="hint">${s.slManual ? 'จุดที่คุณตั้งเอง' : `ระบบวางให้ (${s.slAtr.toFixed(1)}× ATR)`} · ห้ามข้ามเด็ดขาด</td></tr>
-          <tr><td>Take Profit</td><td class="num">${s.tpMain.toFixed(2)}</td><td class="hint">${s.mainR} เท่าของความเสี่ยง</td></tr>
-          <tr><td>ขนาด (Lot)</td><td class="num">${lots}</td><td class="hint">≈ ${s.oz.toFixed(2)} ออนซ์ · เสี่ยง $${s.riskActual.toFixed(2)}</td></tr>
-        </tbody></table>
-      </div></div>
-
-      <!-- ขั้น 3-4 เป็นกฎที่เหมือนกันทุกไม้ อ่านครั้งเดียวก็จำได้
-           บนมือถือจึงพับไว้ เพื่อให้ตัวเลขที่ต้องใช้จริง (ขั้น 1-2) ไม่ถูกดันลงไปไกล
-           บนจอคอมกางไว้ตามเดิม เพราะที่ทางเหลือเฟือ -->
-      <details class="step-fold"${window.innerWidth > 720 ? ' open' : ''}>
-        <summary>กฎหลังเข้าไม้แล้ว (เหมือนกันทุกไม้ — อ่านครั้งเดียวพอ)</summary>
-        <div class="step"><span class="step-n">3</span><div>
-          <b>หลังเข้าไม้แล้ว — ห้ามทำอะไรอีก</b>
-          <ul class="manage-list">${s.manage.map((m) => `<li>${m}</li>`).join('')}</ul>
-        </div></div>
-
-        <div class="step"><span class="step-n">4</span><div>
-          <b>กดยืนยันแล้วปิดจอไปได้เลย</b>
-          <span class="opt-why">ตั้ง SL/TP ไว้แล้ว โปรแกรมของโบรกเกอร์จะปิดไม้ให้เองทั้งกรณีกำไรและขาดทุน
-          ไม่ต้องนั่งเฝ้าจอ และไม่ต้องกดแข่งกับความเร็วตลาด</span>
-        </div></div>
-      </details>
-
-      <div class="invalidate"><b>แผนนี้ยกเลิกเมื่อไร</b>
-        <ul>
-          <li>ราคา${s.side > 0 ? 'ขึ้นเกิน' : 'ลงต่ำกว่า'} <b>${s.entryLimit.toFixed(2)}</b> ก่อนที่คุณจะได้เข้า</li>
-          <li>ราคา${s.side > 0 ? 'หลุด' : 'ทะลุ'} <b>${s.sl.toFixed(2)}</b> — สัญญาณนี้ผิดแล้ว ยอมรับแล้วไปไม้ถัดไป</li>
-          <li>สัญญาณบนหน้าจอเปลี่ยนทิศ หรือกลับไปเป็น "รอจังหวะ"</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="plan-size">
-      ได้:เสีย <b>${rr.toFixed(2)} : 1</b>
-      ${reach && reach.outSample !== null ? `· โอกาสถึงเป้า <b>${reach.outSample.toFixed(0)}%</b>` : ''}
-      ${(() => {
-        const be = (1 / (1 + rr)) * 100;
-        const p = reach && reach.outSample !== null ? reach.outSample : null;
-        return `<br><span class="be-line">ที่อัตราส่วนนี้ <b>ชนะเกิน ${be.toFixed(0)}% ก็กำไรแล้ว</b>`
-          + (p === null ? ''
-            : p > be ? ` — ตอนนี้ ${p.toFixed(0)}% <b style="color:var(--up)">ผ่านจุดคุ้มทุน</b>`
-                     : ` — ตอนนี้ ${p.toFixed(0)}% <b style="color:var(--down)">ยังไม่ถึงจุดคุ้มทุน</b>`)
-          + '</span>';
-      })()}
-    </div>
-    <details class="plan-why"${state.planDetailsOpen ? ' open' : ''}>
-      <summary>ดูที่มาของตัวเลขทั้งหมด</summary>
-      <div class="why-body">
-        ${opt ? `
-        <h4>ทำไมตัดขาดทุนตรงนี้</h4>
-        <p>${Number.isFinite(opt.best.slAtrMult)
-          ? `ระบบกวาดหาความกว้างหลายค่าแล้วพบว่า <b>${opt.best.slAtrMult} เท่าของระยะแกว่งเฉลี่ยต่อแท่ง</b> ให้ผลดีที่สุดในบรรดาค่าที่ลอง`
-          : 'ยังหาความกว้างที่ดีที่สุดไม่ได้ จึงใช้ค่าตั้งต้น'}</p>
-        ${opt.slAdvice && opt.slAdvice.level !== 'unknown'
-          ? `<p class="why-hint"><b>หมายเหตุจากข้อมูลทั้งหมด:</b> ${opt.slAdvice.text}</p>` : ''}
-        ${opt.maeWinners.n >= 10 ? `<p class="why-stat">ไม้ที่สุดท้ายชนะ เคยติดลบลึกสุดเท่าไร (เทียบกับระยะ SL):
-          ครึ่งหนึ่งไม่เกิน <b>${opt.maeWinners.p50.toFixed(2)}</b> ·
-          90% ไม่เกิน <b>${opt.maeWinners.p90.toFixed(2)}</b> ·
-          ลึกสุดที่เคยเจอ <b>${opt.maeWinners.max.toFixed(2)}</b>
-          <span class="why-hint">(ถ้าเกิน 1.00 แปลว่าไม้นั้นเกือบโดนเขี่ยออกก่อนวิ่ง)</span></p>` : ''}
-
-        <h4>ทำไมเป้าอยู่ตรงนี้</h4>
-        <p>ไม่ได้ตั้งเป็น 2 เท่าตายตัว แต่ลองทุกระยะแล้วเลือกระยะที่ให้ผลตอบแทนคาดหวังดีที่สุด
-          — ได้ <b>${s.mainR} เท่าของความเสี่ยง</b></p>
-        ${(() => {
-          const inE = opt.best.expectancy, outE = opt.outOfSample ? opt.outOfSample.expectancy : null;
-          const bad = outE !== null ? outE <= 0 : inE <= 0;
-          return `<p class="why-stat" style="${bad ? 'border-left:3px solid var(--down)' : 'border-left:3px solid var(--up)'}">
-            ผลตอบแทนคาดหวังต่อไม้ของชุดค่านี้: ช่วงเรียนรู้ <b>${inE >= 0 ? '+' : ''}${inE.toFixed(3)}</b> เท่าของเงินที่เสี่ยง
-            ${outE !== null ? `· ช่วงสอบจริง <b style="color:${outE > 0 ? 'var(--up)' : 'var(--down)'}">${outE >= 0 ? '+' : ''}${outE.toFixed(3)}</b>` : ''}
-            ${bad ? `<br><b style="color:var(--down)">⚠ ติดลบ = แม้จะเป็นชุดค่าที่ดีที่สุดเท่าที่หาได้ แต่ยังไม่มีชุดไหนทำกำไรได้กับข้อมูลช่วงนี้
-              — ตัวเลขในแผนใช้เรียนรู้ได้ แต่ยังไม่ควรเอาเงินจริงเข้าไป</b>` : ''}</p>`;
-        })()}
-        <table class="why-table"><thead><tr><th>ถ้าตั้งเป้าที่</th><th>ช่วงเรียนรู้</th><th>ช่วงสอบจริง</th></tr></thead><tbody>
-          ${opt.reachRates.map((x) => `<tr class="${Math.abs(x.targetR - s.mainR) < 1e-9 ? 'chosen' : ''}">
-            <td>${x.targetR} เท่า</td>
-            <td class="num">${x.inSample.toFixed(0)}%</td>
-            <td class="num">${x.outSample === null ? '—' : x.outSample.toFixed(0) + '%'}</td></tr>`).join('')}
-        </tbody></table>
-        <p class="why-hint">ตัวเลขคือ "กี่ % ของไม้ที่ราคาวิ่งไปถึงระยะนั้นก่อนโดนตัดขาดทุน"
-          เป้าใกล้ถึงบ่อยแต่ได้น้อย เป้าไกลได้เยอะแต่ถึงยาก — จุดที่คุ้มที่สุดคือจุดที่คูณกันแล้วสูงสุด</p>
-
-        <p class="why-stat">ระยะที่ราคาวิ่งไปได้จริง: ครึ่งหนึ่งของไม้ไปถึง <b>${opt.mfe.p50.toFixed(2)} เท่า</b> ·
-          หนึ่งในสี่ไปได้เกิน <b>${opt.mfe.p75.toFixed(2)} เท่า</b> ·
-          ไม้ที่วิ่งไกลสุด 10% ไปได้เกิน <b>${opt.mfe.p90.toFixed(2)} เท่า</b> (จาก ${opt.mfe.n} ไม้)</p>
-        ` : `<h4>ตัวเลขนี้มาจากไหน</h4>
-          <p>ยังหาค่าที่ดีที่สุดจากสถิติไม่ได้ จึงใช้ค่าตั้งต้น (จุดตัดขาดทุน 1.5 เท่าของระยะแกว่ง · เป้า 2 เท่าของความเสี่ยง)</p>
-          <p class="why-hint"><b>เหตุผล:</b> ${state.strat && state.strat.reason ? state.strat.reason : 'ยังไม่ได้ทดสอบย้อนหลัง'}</p>`}
-
-        <h4>บันไดเป้าหมายแบบอื่น</h4>
-        <table class="why-table"><tbody>
-          <tr><td>เป้าที่ 1 (1 เท่า)</td><td class="num">${s.tp1.toFixed(2)}</td></tr>
-          <tr><td>เป้าที่ 2 (2 เท่า)</td><td class="num">${s.tp2.toFixed(2)}</td></tr>
-          <tr><td>เป้าที่ 3 (${(Math.abs(s.tp3 - s.entry) / s.slDist).toFixed(1)} เท่า)</td><td class="num">${s.tp3.toFixed(2)}</td></tr>
-        </tbody></table>
-        <p class="why-hint">ถ้าชอบทยอยปิด: ปิดครึ่งที่เป้าที่ 1 แล้วเลื่อนจุดตัดขาดทุนมาที่ราคาเข้า
-          ที่เหลือปล่อยไปเป้าที่ 2</p>
-
-        ${s.notes.length ? `<h4>ข้อสังเกตของไม้นี้</h4><ul class="plan-notes">${s.notes.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
-      </div>
-    </details>`;
-
-  sizeBox.style.display = 'none';
-
-  // การ์ดนี้ถูกวาดใหม่ทุกรอบวิเคราะห์ ถ้าไม่จำไว้ รายละเอียดที่ผู้ใช้กางอ่านอยู่จะหุบเอง
-  const det = box.querySelector('.plan-why');
-  if (det) det.addEventListener('toggle', () => { state.planDetailsOpen = det.open; });
+  card.hidden = !p;
+  state.plan = p;
+  if (!p) return;
+  const { plan, size, side } = p;
+  $('planTitle').textContent = side > 0 ? 'แผนซื้อ (Buy)' : 'แผนขาย (Sell)';
+  $('planSub').textContent = `ตาม ${RULE.stopAtr}×ATR · เป้า ${RULE.targetR}R`;
+  const dStop = Math.abs(plan.entry - plan.stop), dTgt = Math.abs(plan.target - plan.entry);
+  $('planGrid').innerHTML = `
+    <div class="${side > 0 ? 'buy' : 'sell'}"><span>${side > 0 ? 'ซื้อที่ราคา' : 'ขายที่ราคา'}</span><b>${f2(plan.entry)}</b><small>ราคาตอนนี้</small></div>
+    <div class="stop"><span>ตัดขาดทุน</span><b>${f2(plan.stop)}</b><small>ห่าง ${f2(dStop)}</small></div>
+    <div class="tgt"><span>ทำกำไร</span><b>${f2(plan.target)}</b><small>ห่าง ${f2(dTgt)}</small></div>`;
+  $('planSize').innerHTML = `
+    <div>ขนาดไม้ <b>${size.lots} ล็อต</b> (${size.oz.toFixed(2)} ออนซ์)</div>
+    <div>ถ้าผิดทาง เสีย <b>${money(size.riskUsd)} ดอลลาร์</b> (${size.riskPctActual.toFixed(1)}% ของทุน) · ถ้าถูกทาง ได้ <b>${money(size.rewardUsd)} ดอลลาร์</b></div>`;
+  const w = $('planWarn');
+  const warn = [];
+  if (size.forced) warn.push(`ทุนน้อยกว่าที่ความเสี่ยง ${settings.riskPct}% จะรองรับ ไม้เล็กสุดจึงเสี่ยง ${size.riskPctActual.toFixed(1)}% แทน`);
+  const nfp = nextNFP(new Date());
+  if (nfp && nfp - Date.now() < 36 * 3600000 && nfp > Date.now()) warn.push(`ตัวเลขจ้างงานสหรัฐ (NFP) ออก ${thTime(nfp)} น. — ราคาอาจกระโดดข้ามจุดตัดขาดทุน`);
+  w.hidden = !warn.length;
+  w.innerHTML = warn.map(esc).join('<br>');
 }
 
-function renderReasons() {
-  const list = $('reasonList');
-  if (!state.scored || !state.scored.ready) { list.innerHTML = ''; return; }
-  const side = Math.sign(state.combined.score) || 1;
-  const ex = explain({ ...state.scored, side });
-  $('reasonCount').textContent = `(${ex.pro.length} สนับสนุน / ${ex.con.length} ค้าน)`;
-
-  let items = [];
-  if (state.reasonTab === 'pro') items = ex.pro.map((f) => ({ ...f, cls: 'pos' }));
-  else if (state.reasonTab === 'con') items = ex.con.map((f) => ({ ...f, cls: 'neg' }));
-  else {
-    const sess = sessionInfo(new Date());
-    const risk = riskWindow(new Date(), state.events, 30);
-    items = [
-      { name: `ช่วงตลาด: ${sess.label}`, reason: sess.detail, weight: null, cls: '' },
-      { name: `โครงสร้างราคา: ${state.scored.structure.label}`, reason: state.scored.structure.detail, weight: null, cls: '' },
-      ...state.combined.notes.map((n) => ({ name: 'หลายกรอบเวลา', reason: n, weight: null, cls: '' })),
-      ...ex.neutral.map((f) => ({ name: f.name, reason: f.reason, weight: null, cls: '' })),
-      ...(risk.upcoming.length ? [{ name: 'ข่าวที่กำลังจะมา', reason: risk.upcoming.map((e) => `${e.title} — ${thTime(e.time)}`).join(' · '), weight: null, cls: '' }] : []),
-      ...(state.blocks || []).map((b) => ({ name: '<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12M3.8 3.8l8.4 8.4"/></svg> เหตุผลที่ยังไม่ควรเข้า', reason: b, weight: null, cls: 'neg' })),
-    ];
-  }
-  list.innerHTML = items.map((f) => {
-    const n = toThai(f.name);
-    return `
-    <div class="reason ${f.cls}">
-      <div class="reason-head"><span>${n.th}${n.en ? ` <span class="en">${n.en}</span>` : ''}</span>${f.weight ? `<span class="w">${f.contribution > 0 ? '+' : ''}${f.contribution.toFixed(1)} / ${f.weight}</span>` : ''}</div>
-      <p>${f.reason}</p>
-    </div>`;
-  }).join('');
-}
-
-function renderMTF() {
-  const rows = [{ tf: state.tf, s: state.scored, main: true }];
-  for (const tf of [settings.htf1, settings.htf2]) {
-    if (tf === state.tf) continue;
-    rows.push({ tf, s: state.htf[tf] ? state.htf[tf].scored : null });
-  }
-  $('mtfBox').innerHTML = rows.map((r) => {
-    const sc = r.s && r.s.ready ? r.s.score : 0;
-    const w = Math.min(50, Math.abs(sc) / 2);
-    const color = sc > 0 ? 'var(--up)' : sc < 0 ? 'var(--down)' : 'var(--muted)';
-    return `<div class="mtf-row">
-      <span>${r.tf}${r.main ? ' ●' : ''}</span>
-      <div class="mtf-bar"><i style="background:${color}; ${sc >= 0 ? `left:50%;width:${w}%` : `left:${50 - w}%;width:${w}%`}"></i></div>
-      <span class="mtf-val" style="color:${color}">${r.s && r.s.ready ? sc.toFixed(0) : '—'}</span>
-    </div>`;
-  }).join('') + `<div class="tiny">คะแนนรวมถ่วงน้ำหนัก 55% / 30% / 15% = <b style="color:${state.combined && state.combined.score > 0 ? 'var(--up)' : 'var(--down)'}">${state.combined ? state.combined.score.toFixed(1) : '—'}</b></div>`;
-}
-
-// ── Backtest ────────────────────────────────────────────────────────────
-function doBacktest() {
-  if (!state.ctx || state.candles.length < 260) {
-    $('btStatus').textContent = 'ข้อมูลน้อยเกินไปสำหรับทดสอบย้อนหลัง (ต้องการ ~260 แท่งขึ้นไป)';
-    return;
-  }
-  $('btStatus').textContent = 'กำลังคำนวณ…';
-  setTimeout(() => {
-    const t0 = performance.now();
-    /*
-     * เครื่องวัดเดียว จุดแบ่งข้อมูลเดียว คำตัดสินเดียว
-     *
-     * เมื่อก่อนตรงนี้เรียกเครื่องวัดสามตัวแยกกัน แต่ละตัวแบ่งข้อมูลเอง
-     * แล้วให้คำตัดสินของตัวเอง ผู้ใช้จึงเห็นตัวเลขสามชุดที่ไม่ประกอบกัน
-     * และไม่มีชุดไหนตอบได้ว่า "ถ้าทำตามระบบนี้ทั้งระบบ จะได้เท่าไร"
-     */
-    state.strat = tuneStrategy(state.ctx, {
-      base: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter },
+/* ── กราฟ ─────────────────────────────────────────────────────────── */
+function renderChart() {
+  if (!state.sys) return;
+  const C = getComputedStyle(document.documentElement);
+  const brand = C.getPropertyValue('--brand').trim(), accent = C.getPropertyValue('--accent').trim();
+  const plan = state.plan ? { side: state.plan.side, entry: state.plan.plan.entry, stop: state.plan.plan.stop, target: state.plan.plan.target } : null;
+  const position = readPosition();
+  if (state.tf === '4h') {
+    const run = state.cur ? state.cur.run : null;
+    const trades = run ? [...run.trades, ...(run.open ? [run.open] : [])] : [];
+    chart.setData({
+      candles: state.h4, tfMs: H4, plan, position, trades,
+      lines: [{ values: state.sys.ema, color: brand, label: 'EMA20', width: 1.8 }],
     });
-    /*
-     * *** ผลการวัดเป็นข้อเสนอ ไม่ใช่คำสั่ง ***
-     *
-     * เคยเขียนให้เอาค่าที่วัดได้ไปตั้งทับเกณฑ์สัญญาณสดทันที ด้วยเหตุผลว่า
-     * "วัดได้แล้วยังให้ผู้ใช้เดาเองทำไม" ซึ่งฟังดูดีแต่ผิดในทางปฏิบัติ
-     *
-     * วัดจริงแล้วพบว่า 7 ใน 10 ครั้ง ตัวหาค่าเลือกเกณฑ์ต่ำสุดที่ค้นหา (20)
-     * เพราะตัวตัดสิน "กำไรเทียบความเจ็บ" ชอบไม้เยอะตราบใดที่ยังไม่เจ็บมาก
-     * เกณฑ์ 20 ยิงสัญญาณมากกว่าเกณฑ์ 35 ถึง 2.5 เท่า ซึ่งคือสัญญาณอ่อน ๆ
-     * ที่ผู้ใช้รู้สึกได้ทันทีว่า "ไม่แม่นแล้ว" — และเขารู้สึกถูก
-     *
-     * ที่แย่กว่านั้นคือมันเปลี่ยนทุกครั้งที่กดทดสอบ ระบบที่เกณฑ์ขยับเองไปมา
-     * เชื่อถือไม่ได้ ต่อให้แต่ละครั้งจะมีเหตุผลรองรับก็ตาม
-     *
-     * ตอนนี้จึงแค่ "เสนอ" ส่วนสัญญาณสดใช้ค่าที่ผู้ใช้ตั้งไว้ ซึ่งนิ่ง
-     */
-    /* ตารางไม้และสถิติรวม ต้องมาจากกลยุทธ์ชุดเดียวกับที่การ์ดข้างบนตัดสิน
-       ไม่งั้นก็กลับไปเป็นสองชุดตัวเลขที่ไม่ตรงกันเหมือนเดิม */
-    state.bt = state.strat.ok
-      ? runBacktest(state.strat.strategy.slAtrMult
-          ? { ...state.ctx, cfg: { ...state.ctx.cfg, slAtrMult: state.strat.strategy.slAtrMult } }
-          : state.ctx, toBacktestOpts(state.strat.strategy))
-      : runBacktest(state.ctx, {
-        threshold: settings.threshold, maxHold: settings.maxHold,
-        spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
-      });
-    $('btStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที · ข้อมูล ${state.candles.length} แท่ง (${TF[state.tf].label})`;
-    renderBacktest();
-    renderStrategy();
-    renderSignal();
-    /* ต้องคิดแผนใหม่ ไม่ใช่แค่วาดใหม่: ผลทดสอบที่เพิ่งได้คือหลักฐานที่ใช้ตัดสิน
-       ว่าจะเพิ่มขนาดไม้ไหม ถ้าวาดเฉย ๆ จะยังเห็น "ยังไม่มีผลทดสอบย้อนหลัง" ค้างอยู่ */
-    rebuildSetup();
-    renderPlan();
-    if ($('togMarkers').checked) {
-      chart.setData({ markers: state.bt.trades.map((t) => ({ index: t.index, side: t.side })) });
-      chart.render();
-    }
-  }, 20);
-}
-
-const EXIT_LABEL = {
-  partial: 'ปิดครึ่งที่ 1R', full: 'ถือเต็มไม้ถึงเป้า', 'full-be': 'ถือเต็มไม้ + กันทุน',
-  trail: 'ลากจุดตัดตามราคา', 'trail-1R': 'ปิดครึ่งแล้วลากที่เหลือ',
-};
-const ENTRY_LABEL = { market: 'เข้าที่ราคาตลาดทันที', pullback: 'ตั้ง limit รอราคาย่อ' };
-
-/**
- * การ์ดเดียวที่ตอบว่า "ถ้าทำตามระบบนี้ทั้งระบบ จะได้เท่าไร"
- *
- * เมื่อก่อนตรงนี้เป็นสามการ์ด — ตรวจแบบแบ่งข้อมูล, หาค่าที่ดีที่สุด, เทียบวิธีบริหารไม้
- * แต่ละใบแบ่งข้อมูลเองและให้คำตัดสินของตัวเอง คนอ่านจึงต้องเอาสามชุดมาปะติดปะต่อเอง
- * ทั้งที่คำถามจริงมีข้อเดียว ตอนนี้จึงเหลือชุดเดียว: เลือกจากช่วงเรียน สอบครั้งเดียว
- */
-function renderStrategy() {
-  const el = $('wfBox');
-  const st = state.strat;
-  if (!st) { el.innerHTML = ''; return; }
-  if (!st.ok) {
-    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังหากลยุทธ์ที่ดีที่สุดไม่ได้</div>
-      <div class="tiny" style="margin:0">${st.reason}</div></div>`;
-    return;
-  }
-  const num = (v, d = 3, suf = 'R') => (Number.isFinite(v) ? v.toFixed(d) + suf : '—');
-  const pct = (v) => (Number.isFinite(v) ? `${v.toFixed(1)}%` : '—');
-  const S = st.strategy;
-  const cls = st.level === 'good' ? 'good' : st.level === 'bad' ? 'bad' : 'weak';
-
-  const rows = st.combos.slice(0, 6).map((c) => {
-    const on = c.entryMode === S.entryMode && c.exitStyle === S.exitStyle;
-    return `<tr class="${on ? 'row-pick' : ''}">
-      <td>${ENTRY_LABEL[c.entryMode] || c.entryMode} + ${EXIT_LABEL[c.exitStyle] || c.exitStyle}${on ? ' <span class="tiny">← ที่เลือก</span>' : ''}</td>
-      <td class="num">${c.n}</td>
-      <td class="num">${c.missed || 0}</td>
-      <td class="num">${num(c.expectancy)}</td>
-      <td class="num"><b>${num(c.totalR, 0)}</b></td>
-    </tr>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div class="wf-card ${cls}">
-      <div class="wf-verdict">${st.verdict}</div>
-      <div class="strat-line">
-        <b>${st.level === 'bad' ? 'ผลทดสอบไม่ผ่าน — ไม่แนะนำกลยุทธ์นี้:' : 'ผลทดสอบเสนอว่า:'}</b>
-        ${st.describe}
-        <br><span class="tiny">${st.level === 'bad'
-          ? 'สัญญาณสดยังใช้เกณฑ์ที่ตั้งไว้เอง ไม่ได้เปลี่ยนตามผลนี้'
-          : `นี่คือ<b>ข้อเสนอ</b> ไม่ได้ตั้งทับให้อัตโนมัติ — สัญญาณสดยังใช้เกณฑ์ ${settings.threshold} ที่ตั้งไว้
-             ${st.strategy.threshold !== settings.threshold
-               ? `<button id="useStrat" class="btn" style="margin-top:8px">ใช้เกณฑ์ ${st.strategy.threshold} ตามผลทดสอบ</button>`
-               : ''}`}</span>
-      </div>
-      <div class="wf-compare">
-        <div class="wf-side">
-          <h4>ช่วงเรียนรู้ (ตัวเลขมักสวยเกินจริง)</h4>
-          <div class="big">${num(st.inSample.expectancy)}</div>
-          <div class="sub">${st.inSample.n} ไม้ · ชนะ ${pct(st.inSample.winRate)}</div>
-        </div>
-        <div class="wf-side trusted">
-          <h4><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg> ช่วงสอบจริง (ข้อมูลที่ไม่เคยเห็น)</h4>
-          <div class="big" style="color:${st.outSample.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${num(st.outSample.expectancy)}</div>
-          <div class="sub">${st.outSample.n} ไม้ · ชนะ <b>${pct(st.outSample.winRate)}</b>
-            <br>(เคยวิ่งไปแตะเป้า ${pct(st.outSample.reach1RRate)})</div>
-        </div>
-        <div class="wf-side">
-          <h4>ผลตกลงเท่าไร</h4>
-          <div class="big" style="color:${st.dropOff === null ? 'var(--muted)' : st.dropOff > 0.3 ? 'var(--down)' : 'var(--up)'}">${st.dropOff === null ? '—' : num(st.dropOff)}</div>
-          <div class="sub">ตกเยอะ = ระบบจำข้อมูลเก่า มากกว่าเข้าใจตลาด</div>
-        </div>
-      </div>
-      <details class="adv-box">
-        <summary>ดูวิธีอื่นที่ลองแล้วแพ้ (${st.combos.length} วิธี)</summary>
-        <table class="learn-table">
-          <thead><tr><th>วิธีเข้า + วิธีออก (ลองบนช่วงเรียน)</th><th class="num">ไม้</th><th class="num">อดเข้า</th><th class="num">R/ไม้</th><th class="num">R รวม</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      <div class="tiny" style="margin:8px 0 0">
-        <b>อ่านอัตราชนะยังไง:</b> "ชนะ" นับเฉพาะไม้ที่ปิดแล้ว<b>ได้เงินจริง</b>
-        ส่วน "เคยวิ่งไปแตะเป้า" คือไม้ที่ราคาไปถึงเป้าแล้วย้อนกลับมาก็นับ — สองเลขนี้ต่างกันได้มาก
-        และเลขแรกคือเลขที่ใช้ตัดสินใจ<br>
-        อัตราชนะต่ำไม่ได้แปลว่าแย่ ถ้าไม้ที่ชนะได้มากกว่าไม้ที่แพ้เสีย —
-        ชนะ 40% ที่ได้ไม้ละ 2R กินขาดชนะ 65% ที่ได้ไม้ละ 0.5R
-        ตัวเลข <b>R ต่อไม้</b> ข้างบนคือคำตอบสุดท้าย ไม่ใช่เปอร์เซ็นต์<br>
-        เลือกด้วย <b>กำไรเทียบความเจ็บ</b> (R รวม ÷ ขาดทุนสะสมลึกสุด) — ไม่ใช่ R ต่อไม้ เพราะการรอราคาย่อจะอดเข้าบางไม้
-        ซึ่งทำให้ R ต่อไม้ดูดีขึ้นได้ทั้งที่เก็บกำไรรวมได้น้อยลง คอลัมน์ "อดเข้า" คือไม้ที่เสียไปจากการรอ
-      </div>
-      </details>
-    </div>`;
-
-  /* เปลี่ยนเกณฑ์ต้องเป็นการตัดสินใจของผู้ใช้ ไม่ใช่ผลข้างเคียงของการกดทดสอบ */
-  const use = $('useStrat');
-  if (use) {
-    use.addEventListener('click', () => {
-      settings.threshold = st.strategy.threshold;
-      saveSettings();
-      $('setThreshold').value = settings.threshold;
-      analyze(true, false);
-      doBacktest();
-    });
-  }
-}
-
-/**
- * ตอบคำถาม "ข่าว + กราฟ ช่วยให้แม่นขึ้นจริงไหม" ด้วยการวัด
- *
- * ต้องวัดกับ *ช่วงสอบ* เท่านั้น
- * ถ้าดูไม้ทั้งชุดแล้วบอกว่า "กลุ่มที่ข่าวหนุนทำได้ดีกว่า" นั่นคือการเลือกกลุ่มที่สวยที่สุด
- * หลังจากเห็นคำตอบแล้ว ซึ่งได้ตัวเลขสวยเสมอและใช้กับอนาคตไม่ได้เลย
- */
-async function doNewsTest() {
-  const btn = $('runNewsTest');
-  if (!state.ctx || !state.bt || !state.bt.trades.length) {
-    $('newsTestStatus').textContent = 'ต้องมีผลทดสอบย้อนหลังก่อน — กดปุ่มทดสอบด้านบนแล้วลองใหม่';
-    return;
-  }
-  const candles = state.candles;
-  const from = candles[0].t, to = candles[candles.length - 1].t;
-  const days = (to - from) / 86400000;
-  btn.disabled = true;
-  $('newsTestStatus').textContent = `กำลังดึงข่าวย้อนหลัง ${days.toFixed(0)} วัน…`;
-
-  const news = await fetchHistoricalNews(from, to, {
-    onProgress: (p) => {
-      $('newsTestStatus').textContent =
-        `ดึงข่าว ${(p.done / p.total * 100).toFixed(0)}% · ${p.calls} คำขอ · ได้ ${p.got} ข่าว`;
-    },
-  });
-  btn.disabled = false;
-
-  if (!news.items.length) {
-    $('newsTestStatus').textContent = '';
-    $('newsTestBox').innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ดึงข่าวย้อนหลังไม่ได้</div>
-      <div class="tiny" style="margin:0">ยิงไป ${news.calls} คำขอแต่ไม่ได้ข่าวกลับมาเลย —
-      บริการอาจไม่ยอมให้เว็บเรียก หรือไม่มีข้อมูลย้อนหลังในช่วงนี้ ทดสอบต่อไม่ได้</div></div>`;
-    return;
-  }
-
-  // แบ่งช่วงเรียนรู้/ช่วงสอบเหมือนที่ใช้ทั้งระบบ แล้ววัดเฉพาะช่วงสอบ
-  const splitAt = candles[Math.floor(candles.length * 0.6)].t;
-  const index = buildNewsIndex(news.items);
-  const outTrades = state.bt.trades.filter((t) => t.t >= splitAt);
-  const res = evaluateNewsFilter(outTrades, index);
-  const verdict = newsVerdict(res);
-  state.newsTest = { res, verdict, news, splitAt };
-  $('newsTestStatus').textContent = `เสร็จ · ${news.items.length} ข่าว · ${news.calls} คำขอ`;
-  renderNewsTest();
-}
-
-function renderNewsTest() {
-  const T = state.newsTest;
-  if (!T) return;
-  const { res, verdict } = T;
-  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
-  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
-  const row = (label, g, note = '') => `<tr>
-      <td>${label}${note ? `<br><span class="tiny">${note}</span>` : ''}</td>
-      <td class="num">${g.n}</td>
-      <td class="num">${pct(g.winRate)}</td>
-      <td class="num">${r(g.avgWin)}</td>
-      <td class="num" style="color:${g.expectancy > 0 ? 'var(--up)' : g.expectancy < 0 ? 'var(--down)' : 'var(--text-2)'}">${r(g.expectancy)}</td>
-    </tr>`;
-  $('newsTestBox').innerHTML = `
-    <div class="wf-card ${verdict.level === 'good' ? 'good' : verdict.level === 'bad' ? 'bad' : 'ok'}">
-      <div class="wf-verdict">${verdict.text}</div>
-      <div class="tiny" style="margin:0">
-        วัดกับช่วงสอบเท่านั้น (40% หลังของข้อมูล) ข่าวถูกหน่วง 15 นาทีก่อนถือว่ารู้ได้ —
-        ข่าวครอบคลุม ${res.covered.toFixed(0)}% ของไม้ ที่เหลือคือช่วงที่ไม่มีข่าวเกี่ยวข้องเลย
-      </div>
-    </div>
-    <table class="learn-table"><thead><tr>
-      <th>กลุ่ม</th><th>ไม้</th><th>ชนะ ≥1R</th><th>กำไรเฉลี่ยตอนชนะ</th><th>ค่าคาดหวัง/ไม้</th>
-    </tr></thead><tbody>
-      ${row('ทั้งหมด (ไม่ใช้ข่าว)', res.all)}
-      ${row('ข่าวหนุนทิศเดียวกับไม้', res.agree)}
-      ${row('ข่าวค้านทิศ', res.against)}
-      ${row('ข่าวเงียบ', res.quiet, 'ไม่มีข่าวเกี่ยวข้อง — ต่างจาก "ค้าน"')}
-      ${row('ถ้าตัดไม้ที่ข่าวค้านออก', res.filtered)}
-    </tbody></table>
-    <p class="tiny">
-      อ่านยังไง: ถ้าแถว <b>ข่าวค้านทิศ</b> แย่กว่าแถว <b>ข่าวหนุน</b> อย่างชัดเจน
-      แปลว่าข่าวมีข้อมูลที่กราฟยังไม่รู้ และการกรองมีประโยชน์
-      แต่ถ้าสองแถวพอ ๆ กัน แปลว่าราคาซึมซับข่าวไปแล้วก่อนที่เราจะอ่านทัน
-      ซึ่งเป็นผลที่เจอบ่อยที่สุดในตลาดที่มีสภาพคล่องสูงอย่างทองคำ
-    </p>`;
-}
-
-/**
- * บอกผลการส่งเข้า Discord ครั้งล่าสุด
- *
- * จำเป็นเพราะช่องแจ้งเตือนที่ล้มเงียบ ๆ แย่กว่าไม่มีเลย —
- * ผู้ใช้จะนั่งรอสัญญาณที่ไม่มีวันมา โดยเชื่อว่าระบบเฝ้าให้อยู่
- */
-function renderWebhookStatus() {
-  const el = $('webhookStatus');
-  if (!el) return;
-  const r = alerts.lastWebhook;
-  if (!r) {
-    el.textContent = alerts.webhookUrl
-      ? (webhookProblem(alerts.webhookUrl) || 'ยังไม่เคยส่ง — กดทดสอบเพื่อยืนยันว่าใช้ได้')
-      : '';
-    el.style.color = 'var(--text-3)';
-    return;
-  }
-  const t = new Date(r.at).toLocaleTimeString('th-TH');
-  if (r.ok) {
-    el.textContent = `ส่งสำเร็จ ${t}${r.test ? ' (ข้อความทดสอบ)' : ''} · ${r.ms} มิลลิวินาที`;
-    el.style.color = 'var(--up)';
+    $('chartLegend').innerHTML = `<span><i style="background:${brand}"></i>เส้นค่าเฉลี่ย 20 แท่ง (จุดเข้า)</span>`;
   } else {
-    el.textContent = `ส่งไม่สำเร็จ ${t} — ${r.reason}`;
-    el.style.color = 'var(--down)';
-  }
-}
-
-/**
- * ดึงข่าวโลกแล้ววิเคราะห์ผลต่อทอง
- *
- * ดึงทุก 10 นาทีก็พอ — ข่าวไม่ได้ออกถี่กว่านั้น และ GDELT เป็นบริการฟรี
- * การถล่มคำขอใส่บริการฟรีคือวิธีที่เร็วที่สุดที่จะโดนบล็อก
- */
-const NEWS_REFRESH_MS = 600000;
-
-async function loadNews() {
-  const btn = $('refreshNews');
-  btn.disabled = true;
-  $('newsMeta').textContent = 'กำลังดึงข่าว…';
-  const res = await fetchNews({ hours: 24 });
-  btn.disabled = false;
-  state.news = res;
-  renderNews();
-}
-
-function armNewsTimer() {
-  clearInterval(state.newsTimer);
-  if (settings.newsAuto === false) return;
-  state.newsTimer = setInterval(loadNews, NEWS_REFRESH_MS);
-}
-
-const AGO = (ms) => {
-  const m = Math.round(ms / 60000);
-  if (m < 1) return 'เมื่อกี้';
-  if (m < 60) return `${m} นาทีที่แล้ว`;
-  const h = Math.round(m / 60);
-  return h < 24 ? `${h} ชั่วโมงที่แล้ว` : `${Math.round(h / 24)} วันที่แล้ว`;
-};
-
-function renderNews() {
-  const res = state.news;
-  const feed = $('newsFeed'), clim = $('newsClimate');
-  if (!res) { $('newsMeta').textContent = ''; return; }
-  /* ล้มแล้วต้องบอกให้ครบว่าลองเจ้าไหนไปบ้าง และแต่ละเจ้าติดตรงไหน
-     ไม่งั้นผู้ใช้ได้แค่ "ดึงข่าวไม่ได้" ซึ่งแก้อะไรไม่ได้เลย */
-  if (!res.ok) {
-    $('newsMeta').textContent = '';
-    clim.innerHTML = '';
-    const rows = (res.attempts || []).map((a) => `<tr>
-        <td>${a.label}</td>
-        <td style="color:${a.ok ? 'var(--up)' : 'var(--down)'}">${a.ok ? 'ใช้ได้' : 'ไม่ได้'}</td>
-        <td class="tiny">${a.reason || (a.ok ? `ได้ ${a.raw} ข่าว` : '')}</td>
-      </tr>`).join('');
-    feed.innerHTML = `<div class="wf-card weak">
-        <div class="wf-verdict">ดึงข่าวไม่สำเร็จทุกแหล่ง</div>
-        <div class="tiny" style="margin:0">ระบบลองเรียงตามลำดับแล้ว นี่คือผลของแต่ละเจ้า —
-        ถ้าทุกเจ้าขึ้น CORS แปลว่าเครือข่ายหรือเบราว์เซอร์ของคุณบล็อกคำขอข้ามโดเมนไว้</div>
-      </div>
-      <table class="learn-table"><thead><tr><th>แหล่งข่าว</th><th>ผล</th><th>รายละเอียด</th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
-    return;
-  }
-  const tried = (res.attempts || []).filter((a) => !a.ok).length;
-  $('newsMeta').textContent = `${res.items.length} ข่าวที่เกี่ยวข้อง · จาก ${res.label}`
-    + `${tried ? ` (ข้าม ${tried} แหล่งที่ใช้ไม่ได้)` : ''}`
-    + ` · อัปเดต ${new Date(res.at).toLocaleTimeString('th-TH')}`;
-
-  const c = res.climate;
-  const col = c.level === 'up' ? 'var(--up)' : c.level === 'down' ? 'var(--down)' : 'var(--text-2)';
-  clim.innerHTML = `
-    <div class="wf-card ${c.level === 'flat' ? 'ok' : c.level === 'up' ? 'good' : 'bad'}">
-      <div class="wf-verdict" style="color:${col}">${c.label}</div>
-      <div class="tiny" style="margin:0">
-        คำนวณจาก ${c.n} ข่าวใน 24 ชั่วโมง ถ่วงน้ำหนักตามความใหม่ (ข่าวเก่ากว่า 8 ชั่วโมงมีน้ำหนักครึ่งเดียว
-        เพราะตลาดรับรู้ไปแล้ว) — คะแนนเอียง ${(c.score * 100).toFixed(0)} จาก -100 ถึง +100
-      </div>
-    </div>`;
-
-  if (!res.items.length) {
-    feed.innerHTML = '<p class="tiny">ยังไม่มีข่าวที่แตะตัวขับราคาทองใน 24 ชั่วโมงที่ผ่านมา</p>';
-    return;
-  }
-  feed.innerHTML = res.items.slice(0, 20).map((it) => {
-    const a = it.analysis;
-    const dirLabel = a.dir > 0 ? 'หนุนทอง' : a.dir < 0 ? 'กดทอง' : 'สองทาง';
-    const dirCol = a.dir > 0 ? 'var(--up)' : a.dir < 0 ? 'var(--down)' : 'var(--warn)';
-    return `<article class="wn-item">
-      <div class="wn-head">
-        <span class="wn-dir" style="color:${dirCol};border-color:${dirCol}">${dirLabel}</span>
-        ${safeUrl(it.url)
-          ? `<a href="${safeUrl(it.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(it.title)}</a>`
-          : escapeHtml(it.title)}
-      </div>
-      <div class="wn-src">${escapeHtml(it.source || '')}${it.at ? ' · ' + AGO(Date.now() - it.at) : ''}${
-        a.conflicted ? ' · <b style="color:var(--warn)">ตัวขับขัดกันเอง ทิศไม่ชัด</b>' : ''}</div>
-      ${a.drivers.map((d) => `<div class="wn-why">
-        <b style="color:${d.dir > 0 ? 'var(--up)' : 'var(--down)'}">${d.label}${d.inverted ? ' (ทิศกลับ)' : ''}</b>
-        ${d.why}</div>`).join('')}
-    </article>`;
-  }).join('');
-}
-
-/**
- * ลิงก์จากภายนอกต้องถูกตรวจก่อนใส่ลง href — คืนค่าว่างถ้าไม่ปลอดภัย
- *
- * ข่าวมาจาก Reddit และ GDELT ซึ่งใครก็ส่ง URL เข้าไปได้
- * ถ้าเอาใส่ href ตรง ๆ จะเปิดช่องสองทาง:
- *   1. อัญประกาศใน URL ทำให้หลุดออกจากแอตทริบิวต์ แล้วแทรก HTML ของตัวเองได้
- *   2. สคีมอย่าง javascript: ทำให้คลิกเดียวรันโค้ดของคนอื่นในหน้าเรา
- * จึงอนุญาตเฉพาะ http/https และหนีอักขระเสมอ
- */
-function safeUrl(u) {
-  try {
-    const parsed = new URL(String(u));
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
-    return escapeHtml(parsed.href);
-  } catch (e) { return ''; }
-}
-
-/** ข้อความจากภายนอกต้องหนีอักขระก่อนใส่ลงหน้าเว็บเสมอ */
-function escapeHtml(t) {
-  return String(t).replace(/[&<>"']/g, (ch) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-}
-
-/**
- * ยิงทดสอบทุกแหล่งข้อมูลจากเบราว์เซอร์ผู้ใช้
- *
- * ต้องทำที่นี่ ไม่ใช่ตอนพัฒนา เพราะคำถามจริงคือ
- * "เครือข่ายและเบราว์เซอร์ของ*คุณ* ยิงถึงเจ้าไหนบ้าง"
- * ซึ่งขึ้นกับผู้ให้บริการเน็ต ประเทศ และนโยบาย CORS ของแต่ละเจ้า
- */
-async function doTestSources() {
-  const btn = $('testSources');
-  btn.disabled = true;
-  $('srcStatus').textContent = 'กำลังยิงทดสอบทุกแหล่งพร้อมกัน…';
-  const results = await testAllSources({
-    interval: state.tf, tfMs: TF[state.tf].ms, apiKey: settings.apiKey, limit: 120,
-  });
-  btn.disabled = false;
-  const good = results.filter((r) => r.ok).length;
-  $('srcStatus').textContent = `ใช้ได้ ${good} จาก ${results.length} แหล่ง`;
-  state.srcResults = results;
-  renderSourceResults();
-}
-
-function renderSourceResults() {
-  const el = $('srcResults');
-  const results = state.srcResults;
-  if (!results) { el.innerHTML = ''; return; }
-  const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
-  el.innerHTML = `<table class="learn-table"><thead><tr>
-      <th>แหล่งข้อมูล</th><th>ใกล้ทองจริง</th><th>ผล</th><th>ราคาล่าสุด</th><th>ตอบใน</th>
-    </tr></thead><tbody>
-    ${results.map((r) => {
-      const src = SOURCES[r.key];
-      const state_ = r.ok ? 'ใช้ได้' : r.needsKey ? 'ต้องใส่คีย์' : r.unsupported ? 'ไม่มีกรอบเวลานี้' : 'ใช้ไม่ได้';
-      const col = r.ok ? 'var(--up)' : r.needsKey || r.unsupported ? 'var(--gold)' : 'var(--down)';
-      return `<tr>
-        <td><b>${src.label}</b><br><span class="tiny">${src.kind}</span></td>
-        <td class="num" title="ยิ่งดาวมาก ยิ่งใกล้ราคาทองคำสปอตจริง" style="color:var(--gold)">${stars(src.accuracy)}</td>
-        <td style="color:${col}"><b>${state_}</b>${r.reason ? `<br><span class="tiny">${r.reason}</span>` : ''}</td>
-        <td class="num">${r.lastPrice ? r.lastPrice.toFixed(2) : '—'}</td>
-        <td class="num">${r.ms ? r.ms + ' มิลลิวินาที' : '—'}</td>
-      </tr>`;
-    }).join('')}
-    </tbody></table>
-    <p class="tiny">
-      ถ้ามีหลายแหล่งที่ใช้ได้ ให้เทียบ<b>ราคาล่าสุด</b>ในตารางกับราคาทองที่โบรกเกอร์คุณแสดง
-      อันไหนใกล้ที่สุดก็เลือกอันนั้นในช่อง "แหล่งข้อมูล" ด้านบนของหน้าจอ<br>
-      ขึ้นว่า "ใช้ไม่ได้" มักไม่ใช่ความผิดของคุณ — เจ้านั้นอาจไม่อนุญาตให้เว็บอื่นเรียก
-      หรือถูกบล็อกจากประเทศ/ผู้ให้บริการเน็ตของคุณ ลองเจ้าอื่นในตารางได้เลย
-    </p>`;
-}
-
-/**
- * ให้ระบบศึกษาตลาดที่โหลดมา แล้วจูนกลยุทธ์เอง
- *
- * งานหนักพอจะทำให้หน้าจอค้างได้ (จำลองการเทรดหลายร้อยรอบ)
- * จึงหน่วงหนึ่งเฟรมให้เบราว์เซอร์วาดข้อความ "กำลังศึกษา" ก่อน
- */
-function doAdapt() {
-  if (!state.ctx || state.candles.length < 1200) {
-    $('adaptStatus').textContent = `ต้องมีข้อมูลอย่างน้อย ~1,200 แท่งถึงจะแบ่งหลายช่วงได้ (ตอนนี้ ${state.candles.length}) — `
-      + 'ไปที่แท็บตั้งค่าแล้วเพิ่มจำนวนแท่งย้อนหลัง หรือเปลี่ยนไปกรอบเวลาที่เล็กลง';
-    return;
-  }
-  $('adaptStatus').textContent = 'กำลังศึกษาตลาด… จูนใหม่ทีละช่วงแล้วสอบทุกช่วง ใช้เวลาสักครู่';
-  $('applyAdapt').hidden = true;
-  setTimeout(() => {
-    const t0 = performance.now();
-    state.adapt = autoTune(state.ctx, {
-      folds: 4,
-      anchored: $('togAnchored').checked,
-      maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle,
+    const c = state.d1.map((b) => b.c);
+    chart.setData({
+      candles: state.d1, tfMs: D1, plan: null, position, trades: [],
+      lines: [
+        { values: ema(c, RULE.trendFast), color: brand, label: 'EMA20', width: 1.8 },
+        { values: ema(c, RULE.trendSlow), color: accent, label: 'EMA50', width: 1.8 },
+      ],
     });
-    $('adaptStatus').textContent = `ศึกษาเสร็จใน ${((performance.now() - t0) / 1000).toFixed(1)} วินาที`;
-    renderAdapt();
-  }, 30);
+    $('chartLegend').innerHTML = `<span><i style="background:${brand}"></i>เส้น 20 วัน</span><span><i style="background:${accent}"></i>เส้น 50 วัน</span>`;
+  }
 }
 
-function applyAdapt(params) {
-  if (params) {
-    // จำค่าที่ผู้ใช้ตั้งไว้ก่อนหน้า เพื่อให้กด "กลับไปใช้ค่าตั้งต้น" แล้วได้ของเดิมจริง ๆ
-    // ไม่ใช่ค่ากลางที่ผู้ใช้ไม่เคยเลือก
-    if (!settings.adaptPrev) settings.adaptPrev = { threshold: settings.threshold, slAtr: settings.slAtr };
-    settings.threshold = params.threshold;
-    settings.slAtr = params.slAtrMult;
-    settings.adaptParams = { threshold: params.threshold, slAtrMult: params.slAtrMult, targetR: params.targetR };
+/* ── ผลบนข้อมูลสด: ไม้ล่าสุดของระบบ ─────────────────────────────────── */
+function renderLiveRecord() {
+  const run = state.cur && state.cur.run;
+  if (!run) return;
+  const trades = run.trades;
+  const days = state.h4.length ? Math.round((state.h4[state.h4.length - 1].t - state.h4[0].t) / D1) : 0;
+  $('liveSub').textContent = `บนข้อมูลที่โหลดมา ${days} วัน`;
+  const st = statsOf(trades);
+  let html = '';
+  if (run.open) {
+    const t = run.open;
+    html += `<div class="note info">ตอนนี้ระบบ<b>${t.side > 0 ? 'ถือซื้อ' : 'ถือขาย'}</b>อยู่ที่ ${f2(t.entry)} · ${sgn(t.rNow)}R</div>`;
+  }
+  if (!st.n) {
+    html += '<p class="muted small">ช่วงข้อมูลที่โหลดมายังไม่มีไม้ที่ปิดแล้ว — ระบบนี้เทรดราว 3-4 ไม้ต่อเดือนเท่านั้น</p>';
   } else {
-    const prev = settings.adaptPrev;
-    if (prev) { settings.threshold = prev.threshold; settings.slAtr = prev.slAtr; }
-    settings.adaptParams = null;
-    settings.adaptPrev = null;
+    html += `<p class="small muted">${st.n} ไม้ · ชนะ ${st.win.toFixed(0)}% · รวม ${sgn(st.totalR)}R — ตัวอย่างแค่นี้ยังสรุปอะไรไม่ได้ ใช้ดูว่าระบบทำงานถูกต้อง ไม่ใช่วัดฝีมือ</p>`;
+    html += '<table><thead><tr><th>เข้าเมื่อ</th><th>ฝั่ง</th><th>ออกเพราะ</th><th style="text-align:right">ผล</th></tr></thead><tbody>'
+      + trades.slice(-8).reverse().map((t) => `<tr><td>${thTime(t.t)}</td><td><span class="tag ${t.side > 0 ? 'buy' : 'sell'}">${t.side > 0 ? 'ซื้อ' : 'ขาย'}</span></td>`
+        + `<td>${t.why === 'target' ? 'ถึงเป้า' : t.why === 'stop' ? 'ตัดขาดทุน' : 'ครบเวลา'}</td><td class="num ${t.r > 0 ? 'up' : 'down'}">${sgn(t.r)}R</td></tr>`).join('')
+      + '</tbody></table>';
   }
-  // ช่องกรอกต้องขยับตาม ไม่งั้นผู้ใช้เห็นเลขเก่าแต่ระบบใช้เลขใหม่
-  $('setThreshold').value = settings.threshold;
-  $('setSlAtr').value = settings.slAtr;
-  saveSettings();
-  analyze(false, false);
-  doBacktest();
-  renderAdapt();
+  $('liveRecord').innerHTML = html;
 }
 
-function renderAdapt() {
-  const el = $('adaptBox');
-  const A = state.adapt;
-  const using = !!settings.adaptParams;
-  $('resetAdapt').hidden = !using;
-  if (!A) {
-    el.innerHTML = using
-      ? `<div class="wf-card ok"><div class="wf-verdict">กำลังใช้ค่าที่ระบบเรียนรู้มา</div>
-         <div class="tiny" style="margin:0">คะแนนขั้นต่ำ ${settings.adaptParams.threshold} ·
-         จุดตัดขาดทุน ${settings.adaptParams.slAtrMult} เท่าของ ATR · เป้า ${settings.adaptParams.targetR} เท่าของความเสี่ยง</div></div>`
-      : '';
-    return;
-  }
-  if (!A.ok || !A.rwf.ok) {
-    $('applyAdapt').hidden = true;
-    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังศึกษาตลาดไม่ได้</div>
-      <div class="tiny" style="margin:0">${A.reason || A.rwf.reason}</div></div>`;
-    return;
-  }
-  const rwf = A.rwf;
-  /*
-   * ให้ใช้ได้เฉพาะเมื่อ "วัดแล้วดีกว่าจริง" เท่านั้น — เสมอก็ไม่ให้ใช้
-   *
-   * เดิมยอมให้ใช้ตอนผลเสมอด้วย ซึ่งผิด: การทดสอบกับข้อมูลที่เหมือนตลาดจริง
-   * (ความผันผวนเกาะกลุ่ม หางอ้วน เทรนด์ค่อย ๆ เปลี่ยน) พบว่าการจูนใหม่ทุกช่วง
-   * ไม่ได้ช่วย และมีแนวโน้มเสียนิดหน่อยด้วยซ้ำ (-0.027 R/ไม้)
-   * เพราะเมื่อตลาดเปลี่ยนแบบค่อยเป็นค่อยไป ค่าที่ดีที่สุดแทบไม่เปลี่ยน
-   * การจูนใหม่จึงเพิ่มแต่ความแปรปรวน
-   *
-   * ดังนั้นเมื่อเสมอ ให้ค่าตั้งต้นชนะเสมอ — ของใหม่ต้องพิสูจน์ตัวเอง ไม่ใช่ของเดิม
-   */
-  const usable = rwf.verdict.level === 'good' && rwf.stability.level !== 'unstable';
-  $('applyAdapt').hidden = !usable || using;
-  $('applyAdapt').className = rwf.verdict.level === 'good' ? 'btn primary' : 'btn';
+/* ── ผลอ้างอิง 4 ปี (วาดครั้งเดียว) ───────────────────────────────── */
+function renderReference() {
+  const R = REFERENCE, S = R.stats;
+  const thYear = (d) => { const [y, m] = d.split('-'); return `${['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][+m - 1]} ${+y + 543}`; };
+  $('refPeriod').textContent = `${thYear(R.from)} – ${thYear(R.to)} · ${S.n} ไม้`;
+  $('refKpis').innerHTML = [
+    { k: 'กำไรรวม', v: `${sgn(S.totalR, 1)}R`, s: 'หลังหักค่าสเปรด', cls: 'good' },
+    { k: 'ได้เฉลี่ยต่อไม้', v: `${sgn(S.avgR)}R`, s: `โอกาสเป็นบวกจริง ${(S.pPos * 100).toFixed(1)}%`, cls: 'good' },
+    { k: 'อัตราชนะ', v: `${S.win.toFixed(0)}%`, s: `ช่วงที่เป็นไปได้ ${S.ciLow.toFixed(0)}–${S.ciHigh.toFixed(0)}%` },
+    { k: 'แพ้ติดกันมากสุด', v: `${S.maxLossStreak} ไม้`, s: `ติดลบลึกสุด ${S.maxDD.toFixed(1)}R`, cls: 'bad' },
+  ].map((x) => `<div class="kpi ${x.cls || ''}"><span>${x.k}</span><b>${x.v}</b><small>${x.s}</small></div>`).join('');
 
-  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
-  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
-  const d = (ts) => (ts ? new Date(ts).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '—');
-  const good = rwf.folds.filter((f) => f.ok);
+  // เส้นกำไรสะสม (หน่วย R)
+  const pts = [0, ...R.trades.reduce((a, t) => { a.push((a.length ? a[a.length - 1] : 0) + t[2]); return a; }, [])];
+  const W = 600, Hh = 150, lo = Math.min(...pts), hi = Math.max(...pts);
+  const X = (i) => (i / (pts.length - 1)) * W, Y = (v) => Hh - 8 - ((v - lo) / (hi - lo || 1)) * (Hh - 16);
+  const path = pts.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  $('refCurve').innerHTML = `<p class="cap">กำไรสะสมทีละไม้ (หน่วยเป็นเท่าของเงินที่เสี่ยง)</p>
+    <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="กราฟกำไรสะสม">
+      <line x1="0" x2="${W}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line-2)" stroke-dasharray="4 4"/>
+      <path d="${path} L${W},${Hh} L0,${Hh} Z" fill="var(--up-soft)"/>
+      <path d="${path}" fill="none" stroke="var(--up)" stroke-width="2.2" stroke-linejoin="round"/>
+    </svg>`;
 
-  const foldRows = good.map((f) => `<tr>
-      <td>${f.fold}</td>
-      <td class="tiny">${d(f.t0)} – ${d(f.t1)}</td>
-      <td class="num">${f.params.threshold}</td>
-      <td class="num">${f.params.slAtrMult}</td>
-      <td class="num">${f.params.targetR}</td>
-      <td class="num">${f.adapt.n}</td>
-      <td class="num" style="color:${f.adapt.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${r(f.adapt.expectancy)}</td>
-      <td class="num" style="color:var(--muted)">${r(f.fixed.expectancy)}</td>
-    </tr>`).join('');
+  $('refYears').innerHTML = `<p class="cap">แยกรายปี</p><div class="year-grid">${R.byYear.map((y) => `
+    <div class="year"><span>${y.year + 543}</span><b class="${y.avgR >= 0 ? 'up' : 'down'}">${sgn(y.avgR)}R</b><small>${y.n} ไม้<br>ชนะ ${y.win.toFixed(0)}%</small></div>`).join('')}</div>`;
 
-  const stabLabel = { stable: 'นิ่ง', mixed: 'แกว่งปานกลาง', unstable: 'แกว่งมาก', unknown: 'บอกไม่ได้' }[rwf.stability.level];
-  const stabColor = { stable: 'var(--up)', mixed: 'var(--gold)', unstable: 'var(--down)', unknown: 'var(--muted)' }[rwf.stability.level];
+  const sell = R.bySide.find((s) => s.side === 'sell'), buy = R.bySide.find((s) => s.side === 'buy');
+  $('refExplain').innerHTML = `
+    <p><b>ชนะไม่ถึงครึ่ง แต่ได้กำไร</b> — เพราะตอนชนะได้ ${RULE.targetR} เท่าของตอนแพ้ ระบบนี้ต้องชนะแค่ราว 35% ก็เท่าทุนแล้ว ไม่มีระบบไหนชนะทุกไม้</p>
+    <p><b>ต้องทนช่วงแย่ให้ได้</b> — ${S.monthsNegative} จาก ${S.monthsTraded} เดือนเป็นเดือนขาดทุน และเคยนานถึง ${S.longestFlatDays} วันกว่าจะทำกำไรสูงสุดใหม่ ถ้าหยุดกลางทาง จะได้แต่ส่วนที่ขาดทุน</p>
+    <p><b>เทรดน้อย</b> — เฉลี่ย ${S.perMonth.toFixed(1)} ไม้ต่อเดือน ถือไม้ละ ~${Math.round(S.avgHoldBars * 4 / 24 * 10) / 10} วัน</p>
+    <p><b>ฝั่งซื้อเป็นตัวทำเงิน</b> — ซื้อ ${buy.n} ไม้ ${sgn(buy.avgR)}R ต่อไม้ · ขาย ${sell.n} ไม้ ${sgn(sell.avgR)}R ต่อไม้ (4 ปีนี้ทองขึ้นแรง ฝั่งขายยังไม่มีหลักฐานว่าได้เปรียบ)</p>
+    <p class="muted">ข้อมูล: ${esc(R.source)} · ค่าสเปรด $${R.costs.spread} + สลิปเพจ $${R.costs.slip} ต่อไม้ · ผลในอดีต ไม่ใช่คำสัญญาของอนาคต ให้คาดไว้ต่ำกว่านี้</p>`;
 
-  const story = explainAdaptation(A).map((sec) => `
-    <div class="adapt-sec">
-      <h4>${sec.title}</h4>
-      <p>${sec.body.replace(/\n\n/g, '<br><br>')}</p>
-    </div>`).join('');
+  $('refCompare').innerHTML = '<table><thead><tr><th>วิธี</th><th style="text-align:right">ไม้</th><th style="text-align:right">ต่อไม้</th></tr></thead><tbody>'
+    + R.compare.map((c) => `<tr><td>${esc(c.label)}<br><span class="muted small">${esc(c.note)}</span></td><td class="num">${c.n}</td><td class="num ${c.avgR >= 0 ? 'up' : 'down'}">${sgn(c.avgR, 3)}R</td></tr>`).join('')
+    + '</tbody></table><p class="muted small">ระบบเดิมขาดทุนเพราะไม่สนเทรนด์ใหญ่ — เปิดขายสวนตลาดขาขึ้น 1,927 ครั้ง เสียไป 176R และกราฟ 15 นาทีค่าสเปรดกินกำไรหมด</p>';
 
-  el.innerHTML = `
-    <div class="wf-card ${rwf.verdict.level === 'good' ? 'good' : rwf.verdict.level === 'bad' ? 'bad' : 'ok'}">
-      <div class="wf-verdict">${rwf.verdict.text}</div>
-      <div class="wf-compare">
-        <div class="wf-side ${rwf.verdict.level === 'good' ? 'trusted' : ''}">
-          <h4>ระบบปรับตัวเอง (ทุกช่วงจูนจากอดีตล้วน)</h4>
-          <div class="big" style="color:${rwf.adapt.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${r(rwf.adapt.expectancy)}</div>
-          <div class="sub">${rwf.adapt.n} ไม้ · ชนะ ${pct(rwf.adapt.winRate)} · รวม ${r(rwf.adapt.totalR)}</div>
-        </div>
-        <div class="wf-side">
-          <h4>ค่าคงที่ (ช่วงเวลาเดียวกันเป๊ะ)</h4>
-          <div class="big">${r(rwf.fixed.expectancy)}</div>
-          <div class="sub">${rwf.fixed.n} ไม้ · ชนะ ${pct(rwf.fixed.winRate)} · รวม ${r(rwf.fixed.totalR)}</div>
-        </div>
-        <div class="wf-side">
-          <h4>สิ่งที่เรียนรู้นิ่งแค่ไหน</h4>
-          <div class="big" style="color:${stabColor}">${stabLabel}</div>
-          <div class="sub">ค่าที่จูนได้ต่างกันระหว่างช่วงเฉลี่ย ${rwf.stability.avgCv === null ? '—' : (rwf.stability.avgCv * 100).toFixed(0) + '%'}</div>
-        </div>
-      </div>
-    </div>
+  const all = R.robust.flatMap((g) => g.rows);
+  $('refRobust').innerHTML = `<p class="small">เปลี่ยนค่าทีละอย่าง ${all.length} แบบ: <b>กำไร ${all.filter((r) => r.avgR > 0).length} แบบ</b> · กำไรทุกปี ${all.filter((r) => r.allYears).length} แบบ — ถ้ากำไรมาจากค่าที่บังเอิญเข้าล็อกพอดี เปลี่ยนนิดเดียวผลจะพัง</p>`
+    + R.robust.map((g) => `<p class="small" style="margin:10px 0 4px"><b>${esc(g.group)}</b></p><table><tbody>${g.rows.map((r) =>
+      `<tr><td>${esc(r.label)}</td><td class="num">${r.n} ไม้</td><td class="num ${r.avgR >= 0 ? 'up' : 'down'}">${sgn(r.avgR, 3)}R</td><td class="small muted">${r.allYears ? 'กำไรทุกปี' : ''}</td></tr>`).join('')}</tbody></table>`).join('');
 
-    <table class="learn-table"><thead><tr>
-      <th>ช่วงสอบ</th><th>ช่วงเวลา</th><th>คะแนนขั้นต่ำ</th><th>SL (×ATR)</th><th>เป้า (×เสี่ยง)</th>
-      <th>ไม้</th><th>ผล (ปรับเอง)</th><th>ผล (คงที่)</th>
-    </tr></thead><tbody>${foldRows}</tbody></table>
-    <p class="tiny">
-      ทุกแถวคือช่วงที่ระบบ<b>ไม่เคยเห็นตอนจูน</b> — ค่าในคอลัมน์กลางจูนจากข้อมูลก่อนหน้าช่วงนั้นเท่านั้น
-      และหยุดรับไม้ก่อนถึงเส้นแบ่ง ${settings.maxHold} แท่ง เพื่อให้ไม้ทุกไม้ที่ใช้จูนปิดก่อนเส้นแบ่งแน่นอน
-    </p>
-
-    <div class="adapt-story">${story}</div>`;
+  $('refTrades').innerHTML = '<table><thead><tr><th>เข้าเมื่อ</th><th>ฝั่ง</th><th>ออกเพราะ</th><th style="text-align:right">ผล</th></tr></thead><tbody>'
+    + R.trades.slice().reverse().map(([t, side, r, why]) => `<tr><td>${thTime(t)}</td><td><span class="tag ${side > 0 ? 'buy' : 'sell'}">${side > 0 ? 'ซื้อ' : 'ขาย'}</span></td>`
+      + `<td>${why === 'p' ? 'ถึงเป้า' : why === 's' ? 'ตัดขาดทุน' : 'ครบเวลา'}</td><td class="num ${r > 0 ? 'up' : 'down'}">${sgn(r)}R</td></tr>`).join('')
+    + '</tbody></table>';
+  $('sidesHelp').textContent = `ใน 4 ปีที่ทดสอบ ฝั่งซื้อ ${buy.n} ไม้ ${sgn(buy.avgR)}R/ไม้ · ฝั่งขาย ${sell.n} ไม้ ${sgn(sell.avgR)}R/ไม้ — เลือก "เฉพาะฝั่งซื้อ" ถ้าอยากเทรดน้อยลงและใช้เฉพาะฝั่งที่มีหลักฐาน`;
 }
 
-/**
- * เรียนรู้น้ำหนักปัจจัยจากข้อมูลจริงของผู้ใช้ แล้วสอบกับช่วงที่ไม่เคยเห็น
- *
- * เหตุผลที่ต้องทำในเบราว์เซอร์ ไม่ใช่ฝังตัวเลขมาให้:
- * น้ำหนักที่ "ดีที่สุด" ขึ้นกับสินทรัพย์ กรอบเวลา และช่วงตลาดที่คุณโหลดมา
- * ตัวเลขที่ฟิตจากข้อมูลชุดอื่นแล้วฝังมา ก็คือการเดาอีกแบบหนึ่ง
- */
-function doLearn() {
-  if (!state.ctx || state.candles.length < 600) {
-    $('learnStatus').textContent = 'ต้องมีข้อมูลอย่างน้อย ~600 แท่งถึงจะแบ่งช่วงเรียนรู้/ช่วงสอบได้ (ตอนนี้ ' + state.candles.length + ')';
-    return;
-  }
-  $('learnStatus').textContent = 'กำลังเรียนรู้และสอบ… (สุ่มทดสอบซ้ำหลายพันรอบ ใช้เวลาสักครู่)';
-  $('applyLearn').hidden = true;
-  setTimeout(() => {
-    const t0 = performance.now();
-    // ฟิตกับน้ำหนัก "ตั้งต้นจากตำรา" เสมอ ไม่ใช่กับน้ำหนักที่เพิ่งใช้อยู่
-    // ไม่งั้นกดซ้ำ ๆ น้ำหนักจะไหลไปเรื่อย ๆ โดยไม่มีอะไรพิสูจน์รอบใหม่
-    const baseCtx = { ...state.ctx, cfg: { ...state.ctx.cfg, weights: undefined } };
-    state.learn = learnAndValidate(baseCtx, {
-      keys: Object.keys(WEIGHTS), baseWeights: WEIGHTS, threshold: settings.threshold,
-      backtest: { maxHold: settings.maxHold, spread: settings.spread, useFilters: settings.volFilter, exitStyle: settings.exitStyle },
-    });
-    $('learnStatus').textContent = `เสร็จใน ${(performance.now() - t0).toFixed(0)} มิลลิวินาที`;
-    renderLearn();
-  }, 20);
+/* ── ไม้ของฉัน ───────────────────────────────────────────────────── */
+function readPosition() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(LS_POS) || 'null'); } catch (e) { raw = null; }
+  if (!raw || checkPosition(raw).length) return null;
+  return raw;
 }
-
-function applyLearned(weights) {
-  settings.learnedWeights = weights || null;
-  saveSettings();
-  analyze(false, false);   // คำนวณใหม่ทั้งระบบด้วยน้ำหนักชุดใหม่
-  doBacktest();
-  renderLearn();
-}
-
-const FACTOR_NAMES = {
-  emaTrend: 'เส้นค่าเฉลี่ย', adxTrend: 'ความแรงแนวโน้ม', macdMom: 'แรงส่งของราคา',
-  rsiMom: 'แรงซื้อ-แรงขาย', structure: 'โครงสร้างราคา', patterns: 'รูปแบบแท่งเทียน',
-  volume: 'ปริมาณซื้อขาย', bands: 'กรอบความผันผวน', levels: 'แนวรับ-แนวต้าน',
-  divergence: 'สัญญาณแรงหมด', vwap: 'เทียบต้นทุนเฉลี่ย', stoch: 'จุดตัดระยะสั้น',
-};
-
-function renderLearn() {
-  const el = $('learnBox');
-  const L = state.learn;
-  const using = !!settings.learnedWeights;
-  $('resetLearn').hidden = !using;
-  if (!L) {
-    el.innerHTML = using ? '<div class="wf-card ok"><div class="wf-verdict">กำลังใช้น้ำหนักชุดที่เรียนรู้ไว้</div></div>' : '';
-    return;
-  }
-  if (!L.ok) {
-    $('applyLearn').hidden = true;
-    el.innerHTML = `<div class="wf-card weak"><div class="wf-verdict">ยังเรียนรู้น้ำหนักไม่ได้</div>
-      <div class="tiny" style="margin:0">${L.reason}</div></div>`;
-    return;
-  }
-  $('applyLearn').hidden = !L.verdict.apply || using;
-
-  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
-  const r = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(3)}R`);
-  const a = L.outBase, b = L.outNew;
-  const rows = L.coefficients.map((c) => {
-    const d = c.delta;
-    const arrow = Math.abs(d) < 0.3 ? '=' : d > 0 ? '▲' : '▼';
-    const col = Math.abs(d) < 0.3 ? 'var(--muted)' : d > 0 ? 'var(--up)' : 'var(--down)';
-    return `<tr>
-      <td>${FACTOR_NAMES[c.key] || c.key}</td>
-      <td class="num">${c.base.toFixed(0)}</td>
-      <td class="num" style="color:${col}">${c.weight.toFixed(1)} ${arrow}</td>
-      <td class="num" title="สุ่มข้อมูลซ้ำแล้วปัจจัยนี้ยังช่วยทำนายไปทางเดิมกี่เปอร์เซ็นต์ของรอบ">
-        ${c.live ? (c.posFrac * 100).toFixed(0) + '%' : '—'}</td>
-    </tr>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div class="wf-card ${L.verdict.level === 'better' ? 'good' : L.verdict.level === 'worse' ? 'bad' : 'ok'}">
-      <div class="wf-verdict">${L.verdict.text}</div>
-      <div class="wf-compare">
-        <div class="wf-side">
-          <h4>ช่วงสอบ · น้ำหนักเดิม</h4>
-          <div class="big">${pct(a.winRate)}</div>
-          <div class="sub">${a.n} ไม้ · ค่าคาดหวัง ${r(a.expectancy)}</div>
-        </div>
-        <div class="wf-side ${L.verdict.apply ? 'trusted' : ''}">
-          <h4>ช่วงสอบ · น้ำหนักที่เรียนรู้</h4>
-          <div class="big">${pct(b.winRate)}</div>
-          <div class="sub">${b.n} ไม้ · ค่าคาดหวัง ${r(b.expectancy)}</div>
-        </div>
-        <div class="wf-side">
-          <h4>เชื่อได้แค่ไหน</h4>
-          <div class="big">${L.verdict.probBetter === null || L.verdict.probBetter === undefined ? '—' : (L.verdict.probBetter * 100).toFixed(0) + '%'}</div>
-          <div class="sub">สุ่มทดสอบซ้ำ 2,000 รอบ ชุดใหม่ชนะกี่เปอร์เซ็นต์ของรอบ (ต้องการ ≥ 90%)</div>
-        </div>
-      </div>
-      <div class="tiny" style="margin:.6rem 0 0">
-        เรียนรู้จาก <b>${L.rows} ไม้</b> ในช่วงแรกของข้อมูล (ใช้เกณฑ์คะแนน ${L.learnThreshold} เพื่อเก็บตัวอย่างให้มากพอ)
-        แล้วสอบด้วยเกณฑ์จริง ${L.threshold} · ข้อมูลเท่านี้มีสิทธิ์ขยับน้ำหนักได้ <b>${(L.blend * 100).toFixed(0)}%</b>
-        ที่เหลือยังยึดน้ำหนักเดิม — ยิ่งเก็บไม้ได้มาก ข้อมูลยิ่งมีสิทธิ์มากขึ้นเอง
-      </div>
-    </div>
-    <table class="learn-table"><thead><tr>
-      <th>ปัจจัย</th><th>น้ำหนักเดิม</th><th>ที่เรียนรู้ได้</th><th>ความนิ่ง</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-function renderFactorTable() {
-  const el = $('btFactors');
-  if (!el || !state.bt || !state.bt.factors) return;
-  const names = {
-    emaTrend: 'เส้นค่าเฉลี่ย', adxTrend: 'ความแรงแนวโน้ม', macdMom: 'แรงส่งของราคา',
-    rsiMom: 'แรงซื้อ-แรงขาย', structure: 'โครงสร้างราคา', patterns: 'รูปแบบแท่งเทียน',
-    volume: 'ปริมาณซื้อขาย', bands: 'กรอบความผันผวน', levels: 'แนวรับ-แนวต้าน',
-    divergence: 'สัญญาณแรงหมด', vwap: 'เทียบต้นทุนเฉลี่ย', stoch: 'จุดตัดระยะสั้น',
-  };
-  const rows = state.bt.factors.filter((f) => f.nAgree + f.nAgainst >= 8);
-  el.innerHTML = rows.length ? `<table><thead><tr>
-      <th>ปัจจัย</th><th>ตอนมันเห็นด้วย</th><th>ตอนมันค้าน</th><th>ส่วนต่าง</th></tr></thead><tbody>
-    ${rows.map((f) => `<tr>
-      <td>${names[f.key] || f.key}</td>
-      <td class="num">${f.winAgree === null ? '—' : f.winAgree.toFixed(0) + '%'} <span style="color:var(--muted)">(${f.nAgree})</span></td>
-      <td class="num">${f.winAgainst === null ? '—' : f.winAgainst.toFixed(0) + '%'} <span style="color:var(--muted)">(${f.nAgainst})</span></td>
-      <td class="num" style="color:${f.edge === null ? 'var(--muted)' : f.edge > 5 ? 'var(--up)' : f.edge < -5 ? 'var(--down)' : 'var(--muted)'}">
-        ${f.edge === null ? '—' : (f.edge > 0 ? '+' : '') + f.edge.toFixed(0)}</td>
-    </tr>`).join('')}</tbody></table>
-    <p class="tiny">อ่านยังไง: ส่วนต่างเป็นบวกมาก = เวลาปัจจัยนี้เห็นด้วยกับทิศทางที่เข้า ไม้มักชนะกว่าตอนมันค้าน
-    แปลว่าปัจจัยนี้ทำนายได้จริง · ส่วนต่างติดลบ = ปัจจัยนี้ให้สัญญาณสวนทางความจริงในข้อมูลชุดนี้
-    ควรลดน้ำหนักลงในแท็บตั้งค่า (ตัวเลขในวงเล็บคือจำนวนไม้ ยิ่งน้อยยิ่งเชื่อได้น้อย)</p>`
-    : '<p class="tiny">ยังมีไม้ไม่พอจะแยกผลงานรายปัจจัย</p>';
-}
-
-function renderBacktest() {
-  const bt = state.bt;
-  if (!bt) return;
-  const s = bt.stats;
-  if (!s.n) {
-    $('btSummary').innerHTML = '<div class="stat"><b>0</b><span>ไม่พบสัญญาณที่ผ่านเกณฑ์ในข้อมูลชุดนี้ — ลองลดคะแนนขั้นต่ำ</span></div>';
-    $('btBands').innerHTML = ''; $('btSessions').innerHTML = ''; $('btTrades').innerHTML = '';
-    drawEquity();
-    return;
-  }
-  const ci = wilsonInterval(bt.trades.filter((t) => t.hit1R).length, s.n);
-  const stat = (label, value, cls = '') => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
-  $('btSummary').innerHTML = [
-    stat('จำนวนไม้ที่ระบบเข้า', s.n),
-    stat('ชนะจริง (กำไร ≥ 1R)', `${s.realWinRate === null ? '—' : s.realWinRate.toFixed(1) + '%'}`,
-      s.expectancy > 0 ? 'good' : 'bad'),
-    stat('กำไรเฉลี่ยตอนชนะ', s.avgWin === null ? '—' : `${s.avgWin.toFixed(2)}R`, s.avgWin >= 1 ? 'good' : 'bad'),
-    stat('ไม้ที่กำไรน้อยกว่าทุน', s.smallWinShare === null ? '—' : `${s.smallWinShare.toFixed(1)}%`,
-      s.smallWinShare > 15 ? 'bad' : ''),
-    stat('แตะเป้า 1R', `${s.winRate.toFixed(1)}%`),
-    stat('ช่วงเชื่อมั่น 95%', ci ? `${ci.low.toFixed(0)}–${ci.high.toFixed(0)}%` : '—'),
-    stat('ค่าคาดหวังต่อไม้', `${s.expectancy.toFixed(3)}R`, s.expectancy > 0 ? 'good' : 'bad'),
-    stat('กำไรรวม', `${s.totalR.toFixed(1)}R`, s.totalR > 0 ? 'good' : 'bad'),
-    stat('Profit Factor', s.profitFactor ? s.profitFactor.toFixed(2) : '∞', s.profitFactor >= 1.3 ? 'good' : 'bad'),
-    stat('ขาดทุนสูงสุดสะสม', `-${s.maxDD.toFixed(1)}R`, s.maxDD > 8 ? 'bad' : ''),
-    stat('แพ้ติดกันสูงสุด', `${s.maxLossStreak} ไม้`),
-    stat('เฉลี่ยถือกี่แท่ง', s.avgBars.toFixed(0)),
-    stat('ไม้ที่ชนะวิ่งไปเฉลี่ย', s.avgMaxFavWinners ? `${s.avgMaxFavWinners.toFixed(2)}R` : '—'),
-  ].join('');
-
-  const beNote = `<p class="tiny" style="grid-column:1/-1;margin-top:2px">
-    <b>อัตราชนะต่ำไม่ได้แปลว่าแย่</b> — สิ่งที่ตัดสินว่ากำไรหรือขาดทุนคือ "ค่าคาดหวังต่อไม้"
-    ที่อัตราส่วนได้:เสีย 1:1 ต้องชนะเกิน 50% · ที่ 2:1 ชนะแค่ 34% ก็กำไร · ที่ 3:1 ชนะแค่ 25% ก็พอ
-    ระบบนี้ชนะ ${s.winRate.toFixed(0)}% และค่าคาดหวัง ${s.expectancy >= 0 ? '+' : ''}${s.expectancy.toFixed(3)} เท่าของเงินที่เสี่ยง —
-    <b style="color:${s.expectancy > 0 ? 'var(--up)' : 'var(--down)'}">${s.expectancy > 0 ? 'เป็นบวก คือใช้ได้' : 'ติดลบ คือยังไม่ได้'}</b></p>`;
-
-  const expl = s.expectancy > 0.05
-    ? `<p class="tiny" style="color:var(--up)">ค่าคาดหวัง +${s.expectancy.toFixed(3)}R ต่อไม้ หมายความว่าถ้าเสี่ยง $${(settings.account * settings.riskPct / 100).toFixed(0)} ต่อไม้ ระบบนี้ให้ผลเฉลี่ย ~$${(settings.account * settings.riskPct / 100 * s.expectancy).toFixed(2)} ต่อไม้ในข้อมูลชุดนี้ — และเคยขาดทุนติดกันสูงสุด ${s.maxLossStreak} ไม้ ต้องมีทุนและใจพอทนช่วงนั้น</p>`
-    : `<p class="tiny" style="color:var(--down)">ค่าคาดหวังติดลบในข้อมูลชุดนี้ — ยังไม่ควรเทรดตามเกณฑ์ปัจจุบัน ลองเพิ่มคะแนนขั้นต่ำ เปลี่ยนกรอบเวลา หรือดูตารางช่วงเวลาว่าควรเลี่ยงชั่วโมงไหน</p>`;
-  $('btSummary').innerHTML += beNote + `<div style="grid-column:1/-1">${expl}</div>`;
-
-  const maxN = Math.max(...bt.bands.map((b) => b.n), 1);
-  /*
-   * ตารางนี้เคยเน้นช่วงที่ "อัตราชนะสูงสุด" โดยขอแค่ 10 ไม้ขึ้นไป
-   *
-   * ซึ่งอันตราย: ชนะ 7 จาก 10 ขึ้นเป็น 70% ตัวใหญ่ ๆ พร้อมไฮไลต์ว่าดีที่สุด
-   * ทั้งที่ข้อมูลเท่านั้นบอกได้แค่ว่าอัตราชนะจริงอยู่ราว 39%-89% = ยังไม่รู้อะไรเลย
-   * ผู้ใช้เห็นแล้วก็ไปตั้งเกณฑ์ตามช่วงนั้น ซึ่งคือการไล่ตามความบังเอิญ
-   *
-   * ตอนนี้จึงโชว์ "ช่วงที่เป็นไปได้จริง" ทุกแถว และจะเน้นช่วงไหนได้
-   * ก็ต่อเมื่อมันแยกออกจากช่วงอื่นจริงทางสถิติ ไม่ใช่แค่ตัวเลขบังเอิญสูงกว่า
-   */
-  const cv = bt.conviction || { level: 'unknown', text: '' };
-  const hiLabel = cv.level === 'helps' && cv.high ? cv.high.label : null;
-  $('btBands').innerHTML = `<table><thead><tr><th>ช่วงคะแนน</th><th>จำนวนไม้</th><th>อัตราชนะ</th><th>ช่วงที่เป็นไปได้จริง</th><th>ค่าคาดหวัง</th></tr></thead><tbody>
-    ${bt.bands.map((b) => `<tr class="${hiLabel && b.label === hiLabel ? 'best' : ''}">
-      <td>${b.label}</td>
-      <td class="num bar-cell"><i style="width:${(b.n / maxN) * 100}%"></i>${b.n}</td>
-      <td class="num">${b.winRate !== null ? b.winRate.toFixed(1) + '%' : '—'}</td>
-      <td class="num tiny">${b.ci ? `${b.ci.low.toFixed(0)}–${b.ci.high.toFixed(0)}%` : '—'}</td>
-      <td class="num">${b.avgR !== null ? b.avgR.toFixed(2) + 'R' : '—'}</td>
-    </tr>`).join('')}</tbody></table>
-    <div class="wf-card ${cv.level === 'helps' ? 'good' : cv.level === 'hurts' ? 'bad' : 'weak'}" style="margin-top:8px">
-      <div class="wf-verdict">${cv.level === 'helps' ? 'เลือกเฉพาะไม้คะแนนสูง — ช่วยได้จริงในข้อมูลชุดนี้'
-        : cv.level === 'hurts' ? 'เลือกเฉพาะไม้คะแนนสูง — ไม่ช่วย และแย่กว่าเดิม'
-        : cv.level === 'no-evidence' ? 'ยังไม่มีหลักฐานว่าคะแนนสูงชนะมากกว่า'
-        : 'ข้อมูลยังไม่พอจะตัดสิน'}</div>
-      <div class="sub">${cv.text}</div>
-    </div>
-    <p class="tiny">"ช่วงที่เป็นไปได้จริง" คือขอบเขตที่อัตราชนะจริงน่าจะอยู่ (ความเชื่อมั่น 95%) —
-      ยิ่งไม้น้อยช่วงยิ่งกว้าง ถ้าสองช่วงทับกัน แปลว่าข้อมูลยังแยกไม่ออกว่าอันไหนดีกว่า
-      ต่อให้ตัวเลขอัตราชนะจะต่างกันก็ตาม</p>`;
-
-  const bestSess = bt.sessions.filter((x) => x.n >= 8).sort((a, b) => (b.winRate || 0) - (a.winRate || 0))[0];
-  $('btSessions').innerHTML = `<table><thead><tr><th>ช่วงเวลา</th><th>ไม้</th><th>อัตราชนะ</th><th>ค่าคาดหวัง</th></tr></thead><tbody>
-    ${bt.sessions.map((b) => `<tr class="${bestSess && b.key === bestSess.key ? 'best' : ''}">
-      <td>${b.label}</td><td class="num">${b.n}</td>
-      <td class="num">${b.winRate !== null ? b.winRate.toFixed(1) + '%' : '—'}</td>
-      <td class="num">${b.avgR !== null ? b.avgR.toFixed(2) + 'R' : '—'}</td>
-    </tr>`).join('')}</tbody></table>
-    ${bestSess ? `<p class="tiny">ช่วงที่ระบบทำผลงานดีที่สุดในข้อมูลชุดนี้คือ <b>${bestSess.label}</b> (${bestSess.winRate.toFixed(0)}% จาก ${bestSess.n} ไม้) — ใช้เป็นแนวทางเลือก "จังหวะเวลา" เข้าเทรด</p>` : ''}
-    <table style="margin-top:10px"><thead><tr><th>ทิศทาง</th><th>ไม้</th><th>อัตราชนะ</th><th>ค่าคาดหวัง</th></tr></thead><tbody>
-    ${bt.bySide.map((b) => `<tr><td>${b.side > 0 ? 'ฝั่งซื้อ (Long)' : 'ฝั่งขาย (Short)'}</td><td class="num">${b.n}</td>
-      <td class="num">${b.winRate !== null ? b.winRate.toFixed(1) + '%' : '—'}</td>
-      <td class="num">${b.avgR !== null ? b.avgR.toFixed(2) + 'R' : '—'}</td></tr>`).join('')}</tbody></table>`;
-
-  const recent = bt.trades.slice(-12).reverse();
-  $('btTrades').innerHTML = `<h3 style="margin-top:16px">12 ไม้ล่าสุดที่ระบบเข้า</h3>
-    <table><thead><tr><th>เวลา (ไทย)</th><th>ทิศทาง</th><th>คะแนน</th><th>เข้า</th><th>SL</th><th>ผล</th><th>R</th></tr></thead><tbody>
-    ${recent.map((t) => `<tr>
-      <td>${thTime(t.t)}</td>
-      <td style="color:${t.side > 0 ? 'var(--up)' : 'var(--down)'}">${t.side > 0 ? 'ซื้อ' : 'ขาย'}</td>
-      <td class="num">${t.score.toFixed(0)}</td>
-      <td class="num">${t.entry.toFixed(2)}</td>
-      <td class="num">${t.sl.toFixed(2)}</td>
-      <td>${t.result === 'loss' ? 'โดน SL' : t.result === 'timeout' ? 'หมดเวลาถือ' : t.result === 'win2R' ? 'ถึง 2R' : t.result === 'trail-win' ? 'ลากจุดตัดจนออก (กำไร)' : t.result === 'be' ? 'ออกที่ทุน' : 'ถึง 1R แล้วกลับมาทุน'}</td>
-      <td class="num" style="color:${t.rMultiple > 0 ? 'var(--up)' : 'var(--down)'}">${t.rMultiple.toFixed(2)}</td>
-    </tr>`).join('')}</tbody></table>`;
-  renderFactorTable();
-  drawEquity();
-}
-
-function drawEquity() {
-  const cv = $('equityCanvas');
-  const g = equityCtx;
-  if (!g) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth || 300, h = 150;
-  cv.width = w * dpr; cv.height = h * dpr;
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, w, h);
-  const eq = state.bt ? state.bt.equity : [];
-  if (!eq.length) {
-    g.fillStyle = '#94a3b8'; g.font = '12px system-ui'; g.textAlign = 'center';
-    g.fillText('ยังไม่มีผลทดสอบ', w / 2, h / 2); g.textAlign = 'left';
-    return;
-  }
-  const vals = eq.map((e) => e.eq);
-  const min = Math.min(0, ...vals), max = Math.max(0.5, ...vals);
-  const x = (i) => 8 + (i / Math.max(1, eq.length - 1)) * (w - 16);
-  const y = (v) => 12 + ((max - v) / (max - min)) * (h - 28);
-  g.strokeStyle = 'rgba(148,163,184,0.25)';
-  g.beginPath(); g.moveTo(8, y(0)); g.lineTo(w - 8, y(0)); g.stroke();
-  g.beginPath();
-  g.moveTo(x(0), y(vals[0]));
-  vals.forEach((v, i) => g.lineTo(x(i), y(v)));
-  g.strokeStyle = vals[vals.length - 1] >= 0 ? '#22c55e' : '#ef4444';
-  g.lineWidth = 1.8; g.stroke();
-  g.lineTo(x(vals.length - 1), y(0)); g.lineTo(x(0), y(0)); g.closePath();
-  g.fillStyle = vals[vals.length - 1] >= 0 ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)';
-  g.fill();
-  g.fillStyle = '#94a3b8'; g.font = '10px ui-monospace, monospace';
-  g.fillText(`${max.toFixed(1)}R`, 10, 12);
-  g.fillText(`${min.toFixed(1)}R`, 10, h - 6);
-}
-
-// ── บริบทตลาด ───────────────────────────────────────────────────────────
-function renderContextTab() {
-  const now = new Date();
-  const sess = sessionInfo(now);
-  const risk = riskWindow(now, state.events, 30);
-  $('sessionBox').innerHTML = `
-    <div class="kv"><span>ช่วงตลาด</span><span>${sess.label}</span></div>
-    <div class="kv"><span>คุณภาพสภาพคล่อง</span><span>${(sess.quality * 100).toFixed(0)}%</span></div>
-    <div class="kv"><span>เวลาไทยตอนนี้</span><span>${now.toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })}</span></div>
-    <p class="tiny">${sess.detail}</p>`;
-
-  const nfp = nextNFP(now);
-  $('newsBox').innerHTML = [
-    risk.blocked ? `<div class="news-item"><span class="badge hot">กำลังอยู่ในช่วงข่าว</span><span>${risk.active.map((e) => escapeHtml(e.title)).join(', ')}</span></div>` : '',
-    `<div class="news-item"><span>US Non-Farm Payrolls (คำนวณอัตโนมัติ)</span><span>${nfp ? thTime(nfp) : '—'}</span></div>`,
-    ...state.events.slice().sort((a, b) => new Date(a.time) - new Date(b.time)).map((e, i) => `
-      <div class="news-item"><span>${escapeHtml(e.title)}</span><span>${thTime(e.time)} <button class="btn tiny-btn" data-ev="${i}">ลบ</button></span></div>`),
-  ].join('');
-  $('newsBox').querySelectorAll('[data-ev]').forEach((b) => b.addEventListener('click', () => {
-    const idx = +b.dataset.ev;
-    const sorted = state.events.slice().sort((a, b2) => new Date(a.time) - new Date(b2.time));
-    state.events = state.events.filter((e) => e !== sorted[idx]);
-    saveEvents(); renderContextTab();
-  }));
-
-  if (state.scored && state.scored.ready) {
-    const sc = state.scored;
-    $('regimeBox').innerHTML = `
-      <div class="kv"><span>โหมดตลาด</span><span>${sc.regime === 'trend' ? 'มีเทรนด์' : 'ออกข้าง'}</span></div>
-      <div class="kv"><span>ADX(14)</span><span>${sc.adx ? sc.adx.toFixed(1) : '—'}</span></div>
-      <div class="kv"><span>RSI(14)</span><span>${sc.rsi ? sc.rsi.toFixed(1) : '—'}</span></div>
-      <div class="kv"><span>ATR(14)</span><span>${sc.atr.toFixed(2)} (${sc.atrPct.toFixed(2)}%)</span></div>
-      <div class="kv"><span>โครงสร้าง</span><span>${sc.structure.label}</span></div>
-      <div class="kv"><span>แนวรับใกล้สุด</span><span>${sc.support ? sc.support.toFixed(2) : '—'}</span></div>
-      <div class="kv"><span>แนวต้านใกล้สุด</span><span>${sc.resistance ? sc.resistance.toFixed(2) : '—'}</span></div>
-      ${fibHtml()}
-      <p class="tiny">ATR คือระยะแกว่งเฉลี่ยต่อแท่ง ใช้ตั้ง SL ให้กว้างพอไม่โดน noise เขี่ยออก และใช้ประเมินว่าเป้าหมายที่ตั้งไว้ "ไปถึงได้จริงไหมในเวลาที่ถือ"</p>`;
-  }
-
-  if (state.candles.length) {
-    const c = state.candles;
-    const first = c[0], last = c[c.length - 1];
-    const highs = c.map((x) => x.h), lows = c.map((x) => x.l);
-    const hi = Math.max(...highs), lo = Math.min(...lows);
-    const rets = c.slice(1).map((x, i) => Math.log(x.c / c[i].c));
-    const sd = Math.sqrt(rets.reduce((a, r) => a + r * r, 0) / rets.length) * 100;
-    $('statsBox').innerHTML = `
-      <div class="kv"><span>ช่วงข้อมูล</span><span>${thTime(first.t)} → ${thTime(last.t)}</span></div>
-      <div class="kv"><span>จำนวนแท่ง</span><span>${c.length} (${TF[state.tf].label})</span></div>
-      <div class="kv"><span>สูงสุด / ต่ำสุด</span><span>${hi.toFixed(2)} / ${lo.toFixed(2)}</span></div>
-      <div class="kv"><span>ผลตอบแทนรวม</span><span style="color:${last.c >= first.c ? 'var(--up)' : 'var(--down)'}">${(((last.c - first.c) / first.c) * 100).toFixed(2)}%</span></div>
-      <div class="kv"><span>ผันผวนต่อแท่ง (SD)</span><span>${sd.toFixed(3)}%</span></div>
-      <div class="kv"><span>ราคาทองไทยโดยประมาณ</span><span>${Math.round(xauToThaiBaht(last.c, settings.usdThb)).toLocaleString('th-TH')} บาท</span></div>
-      <p class="tiny">ราคาทองไทยคำนวณจาก XAU/USD × ความบริสุทธิ์ 96.5% × น้ำหนัก 15.244 กรัม/บาท × อัตรา USD/THB ที่ตั้งไว้ — เป็นค่าอ้างอิงเชิงคำนวณ ไม่รวมค่ากันเหนียว/ส่วนต่างผู้ค้า จึงต่างจากราคาประกาศของสมาคมค้าทองคำได้</p>`;
-  }
-}
-
-/** ระดับ Fibonacci ของขาล่าสุด — โซนที่ราคามักย่อมาแล้วไปต่อ (จังหวะเข้าไม้ที่ความเสี่ยงต่ำกว่าไล่ราคา) */
-function fibHtml() {
-  if (!state.ctx) return '';
-  const i = state.candles.length - 1;
-  const fib = fibLevels(state.ctx.pivots, i);
-  if (!fib) return '';
-  const price = state.candles[i].c;
-  const rows = fib.levels.map((l) => {
-    const hit = Math.abs(l.price - price) < (state.scored && state.scored.atr ? state.scored.atr * 0.4 : 0);
-    return `<div class="kv"><span>${hit ? '→ ' : ''}Fib ${(l.ratio * 100).toFixed(1)}%</span><span${hit ? ' style="color:var(--gold)"' : ''}>${l.price.toFixed(2)}</span></div>`;
-  }).join('');
-  return `<div style="margin-top:8px"><b style="font-size:11.5px;color:var(--muted)">แนวย่อ Fibonacci ของขา${fib.direction === 'up' ? 'ขึ้น' : 'ลง'}ล่าสุด (${fib.from.toFixed(2)} → ${fib.to.toFixed(2)})</b>${rows}</div>`;
-}
-
-function renderWeights() {
-  const total = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
-  const names = {
-    emaTrend: 'การเรียงตัวเส้นค่าเฉลี่ย', adxTrend: 'ความแรงเทรนด์ (ADX/DI)', macdMom: 'โมเมนตัม MACD',
-    rsiMom: 'RSI ตามสภาพตลาด', structure: 'โครงสร้าง Swing (HH/HL)', patterns: 'รูปแบบแท่งเทียน',
-    volume: 'ปริมาณซื้อขายยืนยัน', bands: 'Bollinger (บีบตัว/ขอบแบนด์)', levels: 'แนวรับ-แนวต้าน',
-    divergence: 'RSI Divergence', vwap: 'ตำแหน่งเทียบ VWAP', stoch: 'Stochastic ตัดกัน',
-  };
-  $('weightBox').innerHTML = Object.entries(WEIGHTS).map(([k, w]) => `
-    <div class="mtf-row"><span class="wt-num">${w}</span>
-      <div class="mtf-bar"><i style="background:var(--accent);left:0;width:${(w / 20) * 100}%"></i></div>
-      <span class="wt-name">${names[k]}</span>
-    </div>`).join('') + `<p class="tiny">น้ำหนักรวม ${total} — คะแนน 100 คือทุกปัจจัยเห็นตรงกันเต็มที่ (แทบไม่เกิดขึ้นจริง คะแนน 45+ ถือว่าแข็งแรงมากแล้ว)</p>`;
-}
-
-// ── แจ้งเตือน UI ────────────────────────────────────────────────────────
-function renderAlertUI() {
-  $('togSound').checked = alerts.sound;
-  $('togSpeak').checked = alerts.speak;
-  $('webhookInput').value = alerts.webhookUrl;
-  renderWebhookStatus();
-  $('cooldownInput').value = alerts.cooldownMs / 60000;
-  renderRules();
-  renderLog();
-}
-
-function renderRules() {
-  const labels = { price_above: 'ราคา ≥', price_below: 'ราคา ≤', rsi_above: 'RSI ≥', rsi_below: 'RSI ≤' };
-  $('ruleList').innerHTML = alerts.rules.length
-    ? alerts.rules.map((r) => `<div class="rule-item">
-        <span>${labels[r.type]} <b>${r.value}</b> ${r.once ? '(ครั้งเดียว)' : '(ทุกครั้ง)'} ${r.active ? '' : '<span class="badge">ทำงานแล้ว</span>'}</span>
-        <button class="btn tiny-btn" data-rid="${r.id}">ลบ</button></div>`).join('')
-    : '<p class="tiny">ยังไม่มีกฎ — เช่น ตั้งเตือนเมื่อราคาทะลุแนวต้านสำคัญ เพื่อไม่ต้องเฝ้าจอ</p>';
-  $('ruleList').querySelectorAll('[data-rid]').forEach((b) => b.addEventListener('click', () => {
-    alerts.removeRule(+b.dataset.rid); renderRules();
-  }));
-}
-
-function renderLog() {
-  $('logList').innerHTML = alerts.log.length
-    ? alerts.log.map((l) => `<div class="log-item ${l.kind}">
-        <div class="lh"><span>${l.title}</span><span class="lt">${new Date(l.ts).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })}</span></div>
-        <div class="lb">${(l.body || '').replace(/\n/g, '<br>')}</div></div>`).join('')
-    : '<p class="tiny">ยังไม่มีการแจ้งเตือน</p>';
-}
-
-function toast(entry) {
-  const el = document.createElement('div');
-  el.className = 'toast ' + (entry.kind || 'info');
-  el.innerHTML = `<b>${entry.title}</b><p>${(entry.body || '').replace(/\n/g, '<br>')}</p>`;
-  $('toastWrap').appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; setTimeout(() => el.remove(), 400); }, 9000);
-}
-
-/**
- * เฝ้าดูว่าราคายังไหลอยู่หรือค้างไปแล้ว
- *
- * ไม่ใช่แค่เตือน — ถ้าค้างจริงต้องพยายามต่อใหม่ให้ด้วย
- * เพราะสาเหตุที่พบบ่อยที่สุด (WebSocket ครึ่งใบ) แก้ได้ด้วยการต่อใหม่เท่านั้น
- */
-let staleSince = 0;
-function checkFreshness(force = false) {
-  const f = feed.freshness();
-  const bar = $('staleBar');
-  if (!bar) return;
-  if (!f.stale && !f.frozen) {
-    if (staleSince) {   // เพิ่งกลับมาปกติ — คำนวณใหม่ทันที ไม่ต้องรอแท่งถัดไป
-      staleSince = 0;
-      bar.hidden = true;
-      analyze(false, false);
-    }
-    if (force && f.unknown) return;
-    return;
-  }
-  const secs = Math.round(f.ageMs / 1000);
-  bar.hidden = false;
-  /*
-   * ราคาค้างทั้งที่คำขอยังผ่าน — ต่อใหม่ไม่ช่วยอะไรเลย เพราะการเชื่อมต่อไม่ได้เสีย
-   * บอกไปตรง ๆ ว่าเกิดอะไรขึ้นและต้องทำอะไร ดีกว่าขึ้น "กำลังต่อใหม่…" ค้างไว้เฉย ๆ
-   */
-  if (!f.stale && f.frozen) {
-    bar.textContent = `⚠ ราคาไม่ขยับมา ${Math.round(f.moveMs / 60000)} นาที ทั้งที่ยังดึงข้อมูลได้ — `
-      + 'ตลาดปิดอยู่ หรือแหล่งข้อมูลส่งค่าเดิมซ้ำ · ระบบระงับสัญญาณไว้แล้ว ลองเปลี่ยนแหล่งข้อมูลดู';
-    if (!staleSince) { staleSince = Date.now(); analyze(false, false); }
-    return;   // ไม่ต้องกระหน่ำต่อใหม่ ปัญหาไม่ได้อยู่ที่การเชื่อมต่อ
-  }
-  bar.textContent = `⚠ ราคาหยุดอัปเดตมา ${secs > 90 ? Math.round(secs / 60) + ' นาที' : secs + ' วินาที'} — `
-    + 'ตัวเลขบนจออาจไม่ใช่ราคาปัจจุบัน ระบบระงับสัญญาณไว้แล้ว กำลังต่อใหม่…';
-  if (!staleSince) {
-    staleSince = Date.now();
-    analyze(false, false);   // ให้ตัวกรอง "ข้อมูลค้าง" มีผลทันที
-  }
-  // ต่อใหม่ทุก 20 วินาทีระหว่างที่ยังค้าง แต่ไม่ถี่กว่านั้น จะได้ไม่กระหน่ำเซิร์ฟเวอร์
-  if (force || Date.now() - staleSince > 20000) {
-    staleSince = Date.now();
-    reload();
-  }
-}
-
-function setStatus(stateName, msg) {
-  const dot = $('statusDot');
-  dot.className = 'dot ' + (stateName === 'live' ? 'live' : stateName === 'error' ? 'error' : stateName === 'demo' ? 'demo' : '');
-  $('statusText').textContent = msg;
-}
-
-init();
-
-/* ══════════════════════════════════════════════════════════════════════
-   ไม้ที่ถืออยู่จริง — คิดกำไรขาดทุนสดจากราคาล่าสุด
-   ══════════════════════════════════════════════════════════════════════ */
-/*
- * อ่าน/เขียนไม้ที่บันทึกไว้
- *
- * เคยพลาดมาแล้ว: ประกาศ LS_POS ไว้ท้ายไฟล์ แต่ bindPosition() ทำงานตอนเปิดแอป
- * const ที่ยังไม่ถึงบรรทัดประกาศจะโยน ReferenceError ซึ่ง try/catch ก้อนนี้กลืนไป
- * ผลคือ "ไม้ที่บันทึกไว้หายทุกครั้งที่รีเฟรช" โดยไม่มี error ให้เห็นสักตัว
- * จึงต้องดักเฉพาะความผิดพลาดของที่เก็บข้อมูลจริง ๆ ไม่ใช่ดักทุกอย่าง
- */
-function loadPosition() {
-  let raw;
-  try { raw = localStorage.getItem(LS_POS); } catch (e) { return null; }   // โหมดส่วนตัว/ปิดคุกกี้
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch (e) { return null; }               // ข้อมูลเสีย
-}
-function savePosition(p) {
+function writePosition(p) {
   try { p ? localStorage.setItem(LS_POS, JSON.stringify(p)) : localStorage.removeItem(LS_POS); } catch (e) { /* เขียนไม่ได้ */ }
 }
-
-const money = (v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`;
-
-/**
- * วาดสถานะไม้ที่เปิดอยู่
- *
- * เรียกทุกครั้งที่ราคาขยับ ไม่ใช่เฉพาะตอนแท่งปิด — คนที่ถือไม้อยู่
- * อยากรู้ตอนนี้ ไม่ใช่ตอนอีก 12 นาทีข้างหน้าเมื่อแท่งปิด
- */
+let posSide = 1;
 function renderPosition() {
-  const box = $('posLive');
-  const card = $('posCard');
-  if (!box) return;
-  const p = state.position;
-  if (chart && (!p || checkPosition(p).length)) { chart.setData({ position: null }); chart.invalidate(); }
-  if (!p) {
-    card.classList.add('idle');
-    box.innerHTML = '<p class="tiny" style="margin:0">ยังไม่ได้บันทึกไม้ไหนไว้ — เปิดหัวข้อข้างล่างเพื่อกรอกไม้ที่เปิดอยู่ '
-      + 'แล้วระบบจะบอกกำไรขาดทุนให้ตลอดเวลา โดยไม่ต้องสลับไปแอปโบรกเกอร์</p>';
-    return;
-  }
-  const problems = checkPosition(p);
-  if (problems.length) {
-    card.classList.remove('idle');
-    box.innerHTML = `<div class="pos-warn">ตัวเลขที่กรอกยังใช้คำนวณไม่ได้:<br>• ${problems.join('<br>• ')}</div>`;
-    return;
-  }
-  const px = state.candles && state.candles.length ? state.candles[state.candles.length - 1].c : NaN;
-  const st = positionStatus(p, px, settings.account || 0);
-  if (!st.ok) {
-    card.classList.remove('idle');
-    box.innerHTML = '<p class="tiny" style="margin:0">รอราคาสด…</p>';
-    return;
-  }
-  card.classList.remove('idle');
-  /* กราฟต้องเห็นไม้ด้วย ไม่ใช่แค่การ์ด — เส้นบนกราฟคือที่ที่คนมองอยู่แล้ว
-     ต้องส่งทุกครั้งที่วาดใหม่ ไม่งั้นเส้นจะค้างที่ราคาเก่าเมื่อผู้ใช้แก้ตัวเลข */
-  if (chart) { chart.setData({ position: p }); chart.invalidate(); }
-  const ad = positionAdvice(st);
-  const mins = st.heldMs === null ? null : Math.round(st.heldMs / 60000);
-  const num = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '—');
-
-  box.innerHTML = `
-    <div class="pos-live">
-      <div class="pos-head">
-        <span class="pos-side ${st.side > 0 ? 'buy' : 'sell'}">${st.side > 0 ? 'ซื้อ' : 'ขาย'} @ ${st.entry.toFixed(2)}</span>
-        ${mins === null ? '' : `<span class="tiny">ถือมา ${mins < 60 ? `${mins} นาที` : `${Math.floor(mins / 60)} ชม. ${mins % 60} นาที`}</span>`}
-      </div>
-      <div class="pos-head">
-        <span class="pos-pl ${st.state}">${money(st.pl)}</span>
-        ${st.r === null ? '' : `<span class="pos-r">${st.r >= 0 ? '+' : '−'}${Math.abs(st.r).toFixed(2)}R</span>`}
-        ${st.plPct === null ? '' : `<span class="tiny">${st.plPct >= 0 ? '+' : '−'}${Math.abs(st.plPct).toFixed(1)}% ของทุน</span>`}
-      </div>
-      ${st.progress === null ? '' : `
-        <div>
-          <div class="pos-track"><i style="left:calc(${(st.progress * 100).toFixed(1)}% - 1.5px)"></i></div>
-          <div class="pos-ends"><span>ตัดขาดทุน ${p.sl.toFixed(2)}</span><span>ราคาตอนนี้ ${px.toFixed(2)}</span><span>เป้า ${p.tp.toFixed(2)}</span></div>
-        </div>`}
-      <div class="pos-rows">
-        ${st.toSL === null ? '' : `<div class="pos-row"><span>เหลือถึง SL</span><b>${num(st.toSL)}</b></div>`}
-        ${st.toTP === null ? '' : `<div class="pos-row"><span>เหลือถึงเป้า</span><b>${num(st.toTP)}</b></div>`}
-        ${st.risk === null ? '' : `<div class="pos-row"><span>เสี่ยงไว้</span><b>$${num(st.risk)}</b></div>`}
-        <div class="pos-row"><span>ราคาขยับ</span><b>${st.move >= 0 ? '+' : '−'}${Math.abs(st.move).toFixed(2)}</b></div>
-      </div>
-      ${ad ? `<div class="pos-note ${ad.level}">${ad.text}</div>` : ''}
-    </div>`;
+  const p = readPosition();
+  const out = $('posOut');
+  if (!p) { out.innerHTML = ''; return; }
+  const st = positionStatus(p, state.price, settings.account);
+  if (!st.ok) { out.innerHTML = `<p class="small">${esc(st.problems.join(' · '))}</p>`; return; }
+  const adv = positionAdvice(st);
+  out.innerHTML = `
+    <div class="small muted">${p.side > 0 ? 'ซื้อ' : 'ขาย'} ${p.size} ล็อต ที่ ${f2(p.entry)}</div>
+    <div class="pos-pl ${st.pl >= 0 ? 'up' : 'down'}">${st.pl >= 0 ? '+' : ''}${money(st.pl)} <span class="small">USD</span></div>
+    <div class="pos-line">${st.r !== null ? `${sgn(st.r)}R · ` : ''}${st.plPct !== null ? `${sgn(st.plPct)}% ของทุน` : ''}</div>
+    ${st.progress !== null ? `<div class="bar"><i style="left:${(st.progress * 100).toFixed(1)}%"></i></div>
+      <div class="bar-labels"><span>SL ${f2(p.sl)}</span><span>TP ${f2(p.tp)}</span></div>` : ''}
+    <p class="pos-line">${esc(adv.text)}</p>`;
+}
+function fillPositionForm(p) {
+  posSide = p ? p.side : 1;
+  document.querySelectorAll('#posForm .seg button').forEach((b) => b.classList.toggle('on', +b.dataset.side === posSide));
+  $('posEntry').value = p ? p.entry : '';
+  $('posSL').value = p && p.sl ? p.sl : '';
+  $('posTP').value = p && p.tp ? p.tp : '';
+  $('posSize').value = p ? p.size : settings.minLot;
 }
 
-/** ต่อปุ่มและช่องกรอกของกล่องไม้ที่ถืออยู่ */
-function bindPosition() {
-  if (!$('posSave')) return;
-  state.position = loadPosition();
-  const fill = (p) => {
-    if (!p) return;
-    $('posSide').value = String(p.side);
-    $('posEntry').value = p.entry || '';
-    $('posSl').value = p.sl || '';
-    $('posTp').value = p.tp || '';
-    $('posSize').value = p.size;
-    $('posContract').value = p.contractSize;
+/* ── แจ้งเตือน ────────────────────────────────────────────────────── */
+function seenKeys() {
+  try { return JSON.parse(localStorage.getItem(LS_SEEN) || '[]'); } catch (e) { return []; }
+}
+function maybeAlert() {
+  const cur = state.cur;
+  if (!cur || cur.kind !== 'entry') return;
+  const side = cur.trade ? cur.trade.side : cur.signal.side;
+  const barT = state.h4[cur.closedIndex] ? state.h4[cur.closedIndex].t : 0;
+  const key = `${barT}:${side}`;
+  const seen = seenKeys();
+  if (seen.includes(key)) return;
+  try { localStorage.setItem(LS_SEEN, JSON.stringify([key, ...seen].slice(0, 50))); } catch (e) { /* ignore */ }
+  /* สัญญาณที่ค้างอยู่ตั้งแต่ก่อนเปิดหน้า ไม่ต้องส่งเสียง — ผู้ใช้เห็นบนจออยู่แล้ว */
+  if (state.firstCalc) return;
+  const hard = blocks().filter((b) => b.key !== 'demo');
+  if (hard.length || settings.source === 'demo') return;
+  const plan = planAt(side, state.price, cur.signal.atr, RULE, costs());
+  const size = sizePlan({ ...plan, account: settings.account, riskPct: settings.riskPct, broker: broker() });
+  const inst = instrumentOf(state.key, '');
+  const title = size.tradeable ? `${side > 0 ? '🟢 สัญญาณซื้อ' : '🔴 สัญญาณขาย'}ทองคำ` : 'มีสัญญาณ แต่ทุนไม่พอสำหรับไม้นี้';
+  const body = size.tradeable
+    ? `เข้า ${f2(plan.entry)} · ตัดขาดทุน ${f2(plan.stop)} · ทำกำไร ${f2(plan.target)} · ${size.lots} ล็อต`
+    : `ไม้เล็กสุดเสี่ยง ${money(size.riskUsd)} ดอลลาร์ = ${size.riskPctActual.toFixed(0)}% ของทุน`;
+  alerts.sound = settings.sound;
+  alerts.fire({
+    kind: side > 0 ? 'buy' : 'sell', title, body, price: state.price,
+    discord: buildSignalMessage({
+      action: size.tradeable ? (side > 0 ? 'buy' : 'sell') : 'nocap', price: state.price,
+      instrument: inst ? inst.name : 'ทองคำ', plan: size.tradeable ? plan : null, size: size.tradeable ? size : null,
+      checks: cur.signal.checks, notes: size.tradeable ? [] : [body], stats: REFERENCE.stats,
+    }),
+  });
+}
+
+/* ── แบนเนอร์ / ข้อผิดพลาด ───────────────────────────────────────── */
+function renderBanner() {
+  const b = $('banner');
+  const msgs = [];
+  if (feed.fellBackFrom && SOURCES[feed.fellBackFrom] && SOURCES[state.key]) {
+    msgs.push(`ดึงราคาจาก ${SOURCES[feed.fellBackFrom].label} ไม่ได้ จึงใช้ ${SOURCES[state.key].label} แทนชั่วคราว`);
+  }
+  if (settings.source === 'demo') msgs.push('โหมดจำลอง — ราคาในหน้านี้ไม่ใช่ราคาจริง ใช้ดูว่าหน้าจอทำงานยังไงเท่านั้น');
+  b.hidden = !msgs.length;
+  b.className = 'banner';
+  b.textContent = msgs.join(' · ');
+}
+function renderError() {
+  const card = $('decision');
+  card.dataset.kind = 'blocked';
+  $('decChip').textContent = 'ต่อราคาไม่ได้';
+  $('decTitle').textContent = 'ดึงราคาทองไม่ได้เลยสักแหล่ง';
+  $('decText').textContent = 'มักเกิดจากเน็ตหลุด หรือเครือข่ายบล็อกเว็บราคาคริปโต ระบบจะลองใหม่เองทุก 30 วินาที';
+  $('decChecks').innerHTML = '';
+  $('decBlocks').hidden = false;
+  $('decBlocks').innerHTML = `<p>${esc(state.error).replace(/\n/g, '<br>')}</p>`;
+  const act = $('decActions');
+  act.innerHTML = '';
+  const retry = document.createElement('button');
+  retry.className = 'btn primary'; retry.textContent = 'ลองใหม่ตอนนี้'; retry.onclick = () => loadAll();
+  const demo = document.createElement('button');
+  demo.className = 'btn'; demo.textContent = 'ดูแบบจำลองไปก่อน';
+  demo.onclick = () => { settings.source = 'demo'; saveSettings(); loadAll(); };
+  act.append(retry, demo);
+  $('planCard').hidden = true;
+  const b = $('banner');
+  b.hidden = false; b.className = 'banner bad';
+  b.textContent = 'ยังไม่มีราคาจริง — ตัวเลขทุกตัวในหน้านี้ยังใช้ไม่ได้';
+}
+
+/* ── ตั้งค่า ──────────────────────────────────────────────────────── */
+function openSettings() {
+  $('setAccount').value = settings.account;
+  $('setRisk').value = settings.riskPct;
+  $('setContract').value = String(settings.contractSize);
+  if ($('setContract').value !== String(settings.contractSize)) {
+    const o = document.createElement('option'); o.value = String(settings.contractSize); o.textContent = `${settings.contractSize} ออนซ์`;
+    $('setContract').appendChild(o); $('setContract').value = String(settings.contractSize);
+  }
+  $('setMinLot').value = settings.minLot;
+  $('setLotStep').value = settings.lotStep;
+  $('setSpread').value = settings.spread;
+  $('setSides').value = settings.sides;
+  $('setUsdThb').value = settings.usdThb;
+  const sel = $('setSource');
+  sel.innerHTML = Object.entries(SOURCES).map(([k, s]) => `<option value="${k}">${esc(s.label)}${s.needsKey ? ' (ต้องมีคีย์)' : ''}</option>`).join('')
+    + '<option value="demo">โหมดจำลอง (ไม่ใช่ราคาจริง)</option>';
+  sel.value = settings.source;
+  $('setApiKey').value = settings.apiKey;
+  syncSourceHelp();
+  $('setSound').checked = settings.sound;
+  $('setDesktop').checked = alerts.desktop;
+  $('setWebhook').value = alerts.webhookUrl;
+  $('setTheme').value = settings.theme;
+  $('settings').showModal();
+}
+function syncSourceHelp() {
+  const k = $('setSource').value, s = SOURCES[k];
+  $('apiKeyRow').hidden = !(s && s.needsKey);
+  $('sourceHelp').textContent = s ? s.note : 'ราคาสุ่มขึ้นมาเพื่อดูว่าหน้าจอทำงานอย่างไร ห้ามใช้ตัดสินใจเทรด';
+}
+function saveFromForm() {
+  const num = (id, key) => {
+    const v = Number(String($(id).value).replace(/,/g, ''));
+    const [lo, hi] = RANGE[key];
+    if (Number.isFinite(v) && v >= lo && v <= hi) settings[key] = v;
   };
-  fill(state.position);
+  num('setAccount', 'account'); num('setRisk', 'riskPct'); num('setContract', 'contractSize');
+  num('setMinLot', 'minLot'); num('setLotStep', 'lotStep'); num('setSpread', 'spread'); num('setUsdThb', 'usdThb');
+  settings.sides = $('setSides').value === 'long' ? 'long' : 'both';
+  const prevSource = settings.source, prevKey = settings.apiKey;
+  settings.source = $('setSource').value;
+  settings.apiKey = $('setApiKey').value.trim();
+  settings.sound = $('setSound').checked;
+  settings.theme = $('setTheme').value;
+  alerts.webhookUrl = $('setWebhook').value.trim();
+  alerts.save();
+  saveSettings();
+  applyTheme();
+  if (settings.source !== prevSource || settings.apiKey !== prevKey) loadAll(); else recompute();
+  toast('บันทึกแล้ว');
+}
+function applyTheme() {
+  if (settings.theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = settings.theme;
+  chart.setTheme();
+  renderReference();
+  if (state.sys) renderChart();
+}
 
-  const read = () => ({
-    side: +$('posSide').value === -1 ? -1 : 1,
-    entry: +$('posEntry').value, sl: +$('posSl').value || 0, tp: +$('posTp').value || 0,
-    size: +$('posSize').value, contractSize: +$('posContract').value,
-    /* เก็บเวลาเปิดเดิมไว้ถ้าแค่แก้ตัวเลข จะได้ไม่รีเซ็ต "ถือมานานแค่ไหน" ทุกครั้งที่แตะ */
-    openedAt: (state.position && state.position.openedAt) || Date.now(),
-  });
+/* ── เบ็ดเตล็ด ────────────────────────────────────────────────────── */
+let toastTimer = null;
+function toast(text) {
+  const t = $('toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
+}
+function thClock(t) {
+  const d = new Date(t + 7 * 3600000);
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+function untilText(t) {
+  const m = Math.max(0, Math.round((t - Date.now()) / 60000));
+  if (m < 60) return `อีก ${m} นาที`;
+  return `อีก ${Math.floor(m / 60)} ชม. ${m % 60} นาที`;
+}
+/* เบราว์เซอร์บนมือถือไม่ยอมเล่นเสียงจนกว่าผู้ใช้จะแตะจอ — ปลดล็อกไว้ตั้งแต่แตะครั้งแรก */
+function unlockAudio() {
+  try {
+    alerts.audioCtx = alerts.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (alerts.audioCtx.state === 'suspended') alerts.audioCtx.resume();
+  } catch (e) { /* ไม่มีเสียงก็ข้าม */ }
+}
 
-  $('posSave').addEventListener('click', () => {
-    state.position = read();
-    savePosition(state.position);
-    renderPosition();
+function bind() {
+  $('btnSettings').onclick = openSettings;
+  $('setSource').onchange = syncSourceHelp;
+  $('setForm').addEventListener('submit', (e) => {
+    if (e.submitter && e.submitter.value === 'save') saveFromForm();
   });
-  /* กากบาทบนกราฟกับปุ่มในการ์ด ต้องทำสิ่งเดียวกัน ไม่ใช่คนละเส้นทางที่หลุดกันได้ */
-  const clearPos = () => {
-    state.position = null;
-    savePosition(null);
-    ['posEntry', 'posSl', 'posTp'].forEach((id) => { $(id).value = ''; });
-    renderPosition();
+  $('setDesktop').onchange = async (e) => {
+    if (e.target.checked) {
+      const r = await alerts.requestDesktopPermission();
+      if (r !== 'granted') { e.target.checked = false; toast('เบราว์เซอร์ไม่อนุญาตให้แจ้งเตือน'); }
+    } else { alerts.desktop = false; alerts.save(); }
   };
-  if (chart) chart.onClosePosition = clearPos;
-  $('posClear').addEventListener('click', clearPos);
-  /* ดึงจากแผนที่ระบบเพิ่งคำนวณ — คนส่วนใหญ่เข้าตามแผนอยู่แล้ว
-     พิมพ์เลขสี่ตัวใหม่ด้วยมือบนมือถือคือที่ที่พิมพ์ผิดได้ง่ายที่สุด */
-  $('posFromPlan').addEventListener('click', () => {
-    const s = state.setup;
-    if (!s || s.tradeable === false) {
-      toast({ kind: 'info', title: 'ยังไม่มีแผนให้ดึง', body: 'ต้องมีสัญญาณที่เทรดได้อยู่บนหน้าจอก่อน' });
-      return;
-    }
-    $('posSide').value = String(s.side);
-    $('posEntry').value = s.entry.toFixed(2);
-    $('posSl').value = s.sl.toFixed(2);
-    $('posTp').value = s.tpMain.toFixed(2);
-    $('posSize').value = s.lots;
-    $('posContract').value = settings.contractSize || 100;
-    state.position = read();
-    state.position.openedAt = Date.now();
-    savePosition(state.position);
-    renderPosition();
+  $('btnTestWebhook').onclick = async () => {
+    alerts.webhookUrl = $('setWebhook').value.trim();
+    const problem = webhookProblem(alerts.webhookUrl);
+    if (problem) { $('webhookStatus').textContent = problem; return; }
+    $('webhookStatus').textContent = 'กำลังส่ง…';
+    const r = await alerts.testWebhook(buildTestMessage());
+    $('webhookStatus').textContent = r.ok ? 'ส่งสำเร็จ — ไปดูข้อความในห้อง Discord ได้เลย' : `ส่งไม่สำเร็จ: ${r.reason}`;
+    alerts.save();
+  };
+
+  document.querySelectorAll('#tfSeg button').forEach((b) => {
+    b.onclick = () => {
+      state.tf = b.dataset.tf;
+      document.querySelectorAll('#tfSeg button').forEach((x) => x.classList.toggle('on', x === b));
+      chart.reset(state.tf === '4h' ? 90 : 120);
+      renderChart();
+    };
   });
-  ['posSide', 'posEntry', 'posSl', 'posTp', 'posSize', 'posContract'].forEach((id) =>
-    $(id).addEventListener('input', () => {
-      if (!state.position) return;      // ยังไม่กดบันทึก = ยังไม่ติดตาม
-      state.position = read();
-      savePosition(state.position);
-      renderPosition();
-    }));
-  renderPosition();
+  chart.onView = (away) => { $('btnLatest').hidden = !away; };
+  $('btnLatest').onclick = () => chart.reset();
+
+  $('btnCopyPlan').onclick = async () => {
+    if (!state.plan) return;
+    const { plan, size, side } = state.plan;
+    const text = `${side > 0 ? 'BUY' : 'SELL'} XAUUSD ${size.lots} lot @ ${f2(plan.entry)} | SL ${f2(plan.stop)} | TP ${f2(plan.target)}`;
+    try { await navigator.clipboard.writeText(text); toast('คัดลอกแล้ว'); } catch (e) { toast(text); }
+  };
+  $('btnSavePlan').onclick = () => {
+    if (!state.plan) return;
+    const { plan, size, side } = state.plan;
+    const p = { side, entry: +plan.entry.toFixed(2), sl: +plan.stop.toFixed(2), tp: +plan.target.toFixed(2),
+      size: size.lots, contractSize: settings.contractSize, openedAt: Date.now(), note: 'จากแผนของระบบ' };
+    writePosition(p); fillPositionForm(p); renderPosition(); renderChart();
+    toast('บันทึกเป็นไม้ของคุณแล้ว');
+    $('posCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  document.querySelectorAll('#posForm .seg button').forEach((b) => {
+    b.onclick = () => { posSide = +b.dataset.side; document.querySelectorAll('#posForm .seg button').forEach((x) => x.classList.toggle('on', x === b)); };
+  });
+  $('posForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const n = (id) => Number(String($(id).value).replace(/,/g, '')) || 0;
+    const p = { side: posSide, entry: n('posEntry'), sl: n('posSL'), tp: n('posTP'), size: n('posSize'),
+      contractSize: settings.contractSize, openedAt: Date.now(), note: '' };
+    const bad = checkPosition(p);
+    if (bad.length) { toast(bad[0]); return; }
+    writePosition(p); renderPosition(); renderChart(); toast('บันทึกไม้แล้ว');
+  });
+  $('posClear').onclick = () => { writePosition(null); fillPositionForm(null); renderPosition(); renderChart(); };
+
+  window.addEventListener('resize', () => chart.resize());
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => chart.resize()).observe($('chart'));
+  document.addEventListener('pointerdown', unlockAudio, { once: true });
+  document.addEventListener('visibilitychange', () => {
+    /* มือถือพักจอแล้วกลับมา = จังหวะที่ข้อมูลค้างบ่อยที่สุด โหลดใหม่ทั้งชุด */
+    if (document.visibilityState === 'visible' && Date.now() - state.loadedAt > 60000) loadAll();
+  });
+  if (matchMedia) matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme());
 }
 
-/**
- * ปรับความสูงกราฟให้พอดีกับที่ว่างจริงบนจอ
- *
- * ทำไมค่าตายตัวไม่พอ: หัวจอสูงไม่เท่ากันในแต่ละสถานการณ์ — คำเตือนโหมดจำลอง
- * ขึ้นสองบรรทัดบ้างบรรทัดเดียวบ้าง ปุ่ม "ล่าสุด" โผล่มาเพิ่มอีกแถวเมื่อเลื่อนกราฟ
- * ผู้ใช้บนไอแพดจึงเจอขอบล่างของกราฟ (แผง MACD กับแกนเวลา) ถูกตัดหายไปกับขอบจอ
- *
- * บนจอกว้าง กราฟอยู่ใต้หัวจอพอดี จึงคิดจาก "ที่เหลือใต้หัวจอ" เพื่อให้เห็นครบ
- * โดยไม่ต้องเลื่อน ส่วนบนมือถือกราฟถูกจัดลำดับให้อยู่ใต้การ์ดสัญญาณอยู่แล้ว
- * ต้องเลื่อนมาดูอยู่ดี จึงใช้ความสูงคงที่ที่อ่านสบายแทน
- */
-function fitChart() {
-  const wrap = document.querySelector('.canvas-wrap');
-  if (!wrap) return;
-  if (window.innerWidth <= 720) { wrap.style.height = ''; return; }   // มือถือใช้ค่าจาก CSS
+/* ── เริ่มทำงาน ───────────────────────────────────────────────────── */
+bind();
+applyTheme();
+fillPositionForm(readPosition());
+chart.resize();
+loadAll();
+setInterval(() => { if (state.error) loadAll(); }, 30000);
+setInterval(() => { if (!state.error && Date.now() - state.loadedAt > 180000) loadAll(); }, 30000);
+setInterval(() => {
+  alerts.checkRules({ price: state.price });
+  if (state.cur) { renderLiveState(); renderDecision(); }
+}, 15000);
 
-  const headerH = (document.querySelector('header.topbar') || {}).offsetHeight || 0;
-  const toolbarH = (document.querySelector('.chart-toolbar') || {}).offsetHeight || 0;
-  /* เผื่อขอบล่างไว้หน่อย ให้เห็นว่ายังมีเนื้อหาต่อข้างล่าง
-     กราฟที่กินเต็มพอดีเป๊ะทำให้คนไม่รู้ว่าต้องเลื่อนต่อ */
-  const room = window.innerHeight - headerH - toolbarH - 24;
-  wrap.style.height = `${Math.round(Math.max(300, Math.min(460, room)))}px`;
-}
+/* เปิดให้ตรวจอาการจากคอนโซลได้: __gsl.state, __gsl.feed.freshness() */
+window.__gsl = { state, settings, feed, chart, recompute, loadAll, renderAll };

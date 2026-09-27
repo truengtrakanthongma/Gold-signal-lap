@@ -10,7 +10,7 @@
  */
 
 /** สีของแถบข้างซ้ายใน Discord (ตัวเลขฐานสิบ) */
-const COLOR = { buy: 0x26a96a, sell: 0xdc4c4c, wait: 0x667085, warn: 0xc99a2e };
+const COLOR = { buy: 0x26a96a, sell: 0xdc4c4c, wait: 0x667085, warn: 0xc99a2e, nocap: 0xc99a2e };
 
 /**
  * บอกว่า URL ของ webhook ผิดตรงไหน — คืน null ถ้าใช้ได้
@@ -114,99 +114,71 @@ function clip(text, max) {
 }
 
 /**
- * แปลงสัญญาณเป็นข้อความ Discord
+ * แปลงสถานะระบบเป็นข้อความ Discord
  *
- * ใส่เฉพาะสิ่งที่ต้องใช้ตัดสินใจ: ทำอะไร ที่ราคาไหน ตัดขาดทุนตรงไหน เป้าตรงไหน
- * และเหตุผลสั้น ๆ — ไม่ใช่ยัดทุกอย่างลงไปจนอ่านบนมือถือไม่ไหว
+ * ใส่เฉพาะสิ่งที่ต้องใช้ตัดสินใจ: ทำอะไร ราคาไหน ตัดขาดทุนตรงไหน เป้าตรงไหน เสี่ยงเท่าไร
+ * และเช็คลิสต์สามข้อของกติกา — ไม่ยัดทุกอย่างลงไปจนอ่านบนมือถือไม่ไหว
+ *
+ * o = { action: 'buy'|'sell'|'wait'|'warn', price, instrument, plan, size, checks, blocks, notes, stats }
  */
 export function buildSignalMessage(o) {
-  const { action, score, price, instrument, setup, reasons = [], prob, tf, blocks = [] } = o;
+  const { action, price, instrument, plan, size, checks = [], blocks = [], notes = [], stats } = o;
   const isTrade = action === 'buy' || action === 'sell';
-  /* warn ต้องมีหัวเรื่องของตัวเอง ไม่งั้นข้อความ "ดึงราคาไม่ได้" จะพาดหัวว่า
-     "ยังไม่มีสัญญาณ" ซึ่งอ่านแล้วเข้าใจว่าตลาดเงียบ ทั้งที่จริงคือระบบมองไม่เห็นตลาด */
-  const title = action === 'buy' ? 'สัญญาณซื้อ (BUY)'
-    : action === 'sell' ? 'สัญญาณขาย (SELL)'
-    : action === 'warn' ? 'ระบบมีปัญหา — ยังทำงานไม่ได้'
-    : 'ยังไม่มีสัญญาณ';
+  /* 'nocap' = มีสัญญาณจริงแต่ทุนไม่พอ ต้องมีหัวเรื่องของตัวเอง
+     ถ้าไปใช้หัว "ยังไม่มีสัญญาณ" คนอ่านหัวแล้วจะเข้าใจผิดว่าตลาดเงียบ ทั้งที่เนื้อความบอกว่ามี */
+  const title = action === 'buy' ? '🟢 สัญญาณซื้อ (BUY)'
+    : action === 'sell' ? '🔴 สัญญาณขาย (SELL)'
+    : action === 'nocap' ? '⛔ มีสัญญาณ แต่ทุนไม่พอสำหรับไม้นี้'
+    : action === 'warn' ? '⚠️ ระบบมีปัญหา — ยังทำงานไม่ได้'
+    : '⏸ ยังไม่มีสัญญาณ';
 
   const fields = [];
-  if (setup && isTrade) {
+  if (plan && isTrade) {
     fields.push(
-      { name: 'ราคาเข้า', value: '`' + setup.entry.toFixed(2) + '`', inline: true },
-      { name: 'ตัดขาดทุน', value: '`' + setup.sl.toFixed(2) + '`', inline: true },
-      { name: `เป้าหมาย (${setup.mainR}R)`, value: '`' + setup.tpMain.toFixed(2) + '`', inline: true },
+      { name: action === 'buy' ? 'ซื้อที่' : 'ขายที่', value: '`' + plan.entry.toFixed(2) + '`', inline: true },
+      { name: 'ตัดขาดทุน', value: '`' + plan.stop.toFixed(2) + '`', inline: true },
+      { name: `ทำกำไร (${plan.targetR}R)`, value: '`' + plan.target.toFixed(2) + '`', inline: true },
     );
-    if (setup.lots) {
-      fields.push({ name: 'ขนาดไม้', value: '`' + setup.lots + '` ล็อต', inline: true });
+    if (size) {
+      /* เงินจริง ไม่ใช่แค่ R — คนตัดสินใจด้วยจำนวนเงินที่ยอมเสีย */
+      fields.push({ name: 'ขนาดไม้', value: '`' + size.lots + '` ล็อต (' + size.oz.toFixed(2) + ' ออนซ์)', inline: true });
+      fields.push({ name: 'เสี่ยง', value: '`' + size.riskUsd.toFixed(2) + '` USD'
+        + (size.riskPctActual === null ? '' : ` (${size.riskPctActual.toFixed(1)}%)`), inline: true });
+      fields.push({ name: 'ลุ้นได้', value: '`' + size.rewardUsd.toFixed(2) + '` USD', inline: true });
     }
-    fields.push({ name: 'ได้:เสีย', value: '`' + setup.rrNow.toFixed(2) + ':1`', inline: true });
-
-    /*
-     * เงินจริง ไม่ใช่แค่ R
-     *
-     * คนตัดสินใจด้วยจำนวนเงินที่ยอมเสีย ไม่ใช่ด้วยตัวคูณความเสี่ยง
-     * และเป็นตัวเลขเดียวที่บอกได้ว่าไม้นี้ใหญ่เกินทุนหรือเปล่า
-     */
-    if (setup.riskActual !== undefined && setup.rewardActual !== undefined) {
-      const pct = setup.riskActualPct === null || setup.riskActualPct === undefined
-        ? '' : ` (${setup.riskActualPct.toFixed(1)}% ของทุน)`;
-      fields.push({ name: 'เสี่ยงจริง', value: '`' + setup.riskActual.toFixed(2) + '` USD' + pct, inline: true });
-      fields.push({ name: 'ลุ้นได้', value: '`' + setup.rewardActual.toFixed(2) + '` USD', inline: true });
-    }
-
-    /*
-     * เข้าได้ถึงราคาไหน
-     *
-     * สัญญาณมาถึงมือช้ากว่าที่ราคาวิ่งเสมอ คำถามแรกของคนอ่านคือ
-     * "ตอนนี้ยังเข้าทันไหม" ซึ่งตอบไม่ได้ถ้าบอกมาแค่ราคาเข้าจุดเดียว
-     * ตัวเลขนี้คือราคาที่แย่ที่สุดที่อัตราส่วนได้:เสีย ยังคุ้มอยู่ เลยไปแล้วให้ปล่อยผ่าน
-     */
-    /* กฎหลังเข้าไม้ — ที่ที่คนเสียไม้จริง ไม่ใช่ตอนเลือกจังหวะเข้า */
-    if (setup.manage && setup.manage.length) {
-      fields.push({ name: 'หลังเข้าไม้แล้ว',
-        value: clip(setup.manage.map((m) => '• ' + m).join('\n'), 1000), inline: false });
-    }
-
-    if (setup.entryLimit !== undefined && setup.entryLimit !== null) {
-      fields.push({ name: `ยังเข้าได้ถึง (ได้:เสีย ≥ ${setup.minRR})`,
-        value: '`' + setup.entryLimit.toFixed(2) + '` — เลยราคานี้ไปแล้วอย่าไล่ราคา', inline: false });
-    }
+    fields.push({ name: 'หลังเข้าไม้', value: 'ตั้ง SL/TP ไว้กับโบรกเกอร์เลย แล้วปล่อยให้ปิดเอง · ถ้า 6 วันยังไม่ถึงไหน ให้ปิดทิ้ง', inline: false });
   }
-  if (prob && prob.p !== null && prob.p !== undefined) {
-    fields.push({ name: 'อัตราชนะในอดีต', value: `\`${prob.p.toFixed(0)}%\` (${prob.n} ไม้)`, inline: true });
+  if (checks.length) {
+    fields.push({ name: 'เช็คลิสต์ของกติกา',
+      value: clip(checks.map((c) => `${c.ok === true ? '✅' : c.ok === false ? '❌' : '⏳'} ${c.text}`).join('\n'), 1000) });
   }
-  if (blocks.length) {
-    fields.push({ name: 'เหตุผลที่ยังไม่ควรเข้า', value: clip(blocks.join('\n'), 1000) });
+  if (blocks.length) fields.push({ name: 'ทำไมยังไม่ควรเข้า', value: clip(blocks.join('\n'), 1000) });
+  if (notes.length) fields.push({ name: 'ต้องรู้', value: clip(notes.join('\n'), 1000) });
+  if (stats) {
+    fields.push({ name: 'ผลของกติกานี้บนทองจริง 4 ปี',
+      value: `${stats.n} ไม้ · ชนะ ${stats.win.toFixed(0)}% · เฉลี่ย ${stats.avgR >= 0 ? '+' : ''}${stats.avgR.toFixed(2)}R ต่อไม้ · แพ้ติดกันมากสุด ${stats.maxLossStreak} ไม้` });
   }
-  const warnings = (setup && setup.notes ? setup.notes : []).filter((n) => /⚠|⛔/.test(n));
-  if (warnings.length) {
-    fields.push({ name: 'ต้องอ่านก่อนเข้า', value: clip(warnings.join('\n\n'), 1000) });
-  }
-  if (reasons.length) {
-    fields.push({ name: 'ปัจจัยสนับสนุน', value: clip(reasons.slice(0, 5).map((r) => '• ' + r).join('\n'), 1000) });
-  }
-
   return {
     username: 'Gold Signal Lab',
     embeds: [{
       title: clip(title, 256),
-      description: `**${instrument || 'ทองคำ'}** · กรอบ ${tf || '—'} · ราคา \`${price ? price.toFixed(2) : '—'}\``
-        + `\nคะแนนสัญญาณ **${score === null || score === undefined ? '—' : score.toFixed(1)}**`,
+      description: `**${instrument || 'ทองคำ'}** · ราคา \`${price ? price.toFixed(2) : '—'}\` · ตามเทรนด์รายวัน เข้าที่กราฟ 4 ชม.`,
       color: COLOR[action] || COLOR.wait,
       fields: fields.slice(0, 25),
-      footer: { text: 'เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน' },
+      footer: { text: 'เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน · ผลในอดีตไม่รับประกันอนาคต' },
       timestamp: new Date().toISOString(),
     }],
   };
 }
 
-/** ข้อความทดสอบ ให้ผู้ใช้เห็นหน้าตาจริงก่อนใช้งาน */
 export function buildTestMessage() {
   return buildSignalMessage({
-    action: 'buy', score: 62.4, price: 3345.18, instrument: 'PAXG/USD (ทดสอบ)', tf: '15 นาที',
-    setup: { entry: 3345.18, sl: 3332.40, tpMain: 3370.74, mainR: 2, lots: 0.78, rrNow: 2.0 },
-    prob: { p: 41, n: 86 },
-    reasons: ['นี่คือข้อความทดสอบ — ถ้าเห็นข้อความนี้แปลว่าเชื่อมต่อสำเร็จ',
-              'สัญญาณจริงจะมีเหตุผลจากปัจจัยที่ระบบตรวจพบจริง'],
+    action: 'buy', price: 4472.54, instrument: 'PAXG/USD (ข้อความทดสอบ)',
+    plan: { entry: 4472.84, stop: 4421.10, target: 4576.32, targetR: 2 },
+    size: { lots: 0.01, oz: 1, riskUsd: 51.74, rewardUsd: 103.48, riskPctActual: 5.2 },
+    checks: [
+      { ok: true, text: 'นี่คือข้อความทดสอบ — ถ้าเห็นข้อความนี้แปลว่าเชื่อมต่อ Discord สำเร็จ' },
+      { ok: null, text: 'สัญญาณจริงจะแสดงเช็คลิสต์สามข้อของกติกาตรงนี้' },
+    ],
   });
 }

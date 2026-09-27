@@ -2,483 +2,239 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gold Signal Lab — วิเคราะห์ทองคำเรียลไทม์</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d111a'/%3E%3Cpath d='M6 22.5L11.5 13l5 6 4-7L26 22.5' fill='none' stroke='%23c9a227' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<meta name="theme-color" content="#080b12">
-<meta name="description" content="เครื่องมือวิเคราะห์ราคาทองคำเรียลไทม์ พร้อมเหตุผลประกอบทุกสัญญาณ ทดสอบย้อนหลังแบบแบ่งข้อมูล และระบบแจ้งเตือน">
-<meta name="color-scheme" content="dark">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gold Signal Lab — ระบบตามเทรนด์ทองคำ</title>
+<meta name="description" content="ระบบสัญญาณทองคำที่ผ่านการทดสอบบนข้อมูลจริง 4 ปี: ตามเทรนด์กราฟรายวัน รอราคาย่อบนกราฟ 4 ชั่วโมง พร้อมแผนเทรด ขนาดไม้ และสถิติที่ตรวจสอบได้">
+<meta name="theme-color" content="#07090e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307090e'/%3E%3Cpath d='M6 22l6-8 5 5 4-6 5 9' fill='none' stroke='%23d9ae3b' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1020'/%3E%3Cpath d='M5 22l6-9 5 6 4-6 7 9z' fill='%23f0b429'/%3E%3Ccircle cx='24' cy='8' r='3' fill='%23f0b429'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="topbar">
   <div class="brand">
-    <span class="dot" id="statusDot"></span>
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M6 22l6-8 5 5 4-6 5 9"/></svg>
     <div>
-      <h1><span class="wm-1">GOLD</span><span class="wm-2">SIGNAL</span></h1>
-      <p id="statusText">กำลังเริ่มระบบ…</p>
+      <div class="brand-name">Gold Signal Lab</div>
+      <div class="brand-sub">ตามเทรนด์ใหญ่ · รอราคาย่อ</div>
     </div>
   </div>
-
-  <div class="price-block">
-    <div class="price-main">
-      <span id="livePrice">—</span>
-      <span class="unit" id="priceUnit">USD / ออนซ์</span>
-    </div>
-    <div class="price-sub">
-      <span id="priceChange" class="chg">—</span>
-      <span id="thbPrice" class="thb">—</span>
-    </div>
-    <div class="instrument-line" id="instrumentLine"></div>
-  </div>
-
-  <div class="controls">
-    <label data-adv>แหล่งข้อมูล
-      <select id="sourceSel">
-        <option value="kraken_paxg">Kraken PAXG/USD (ฟรี · แนะนำ · ใช้ได้ในไทย)</option>
-        <option value="binance">Binance PAXG/USDT (เร็วที่สุด · มักถูกบล็อกในไทย)</option>
-        <option value="bitfinex_xaut">Bitfinex XAUT/USD (ฟรี · ใกล้ทองจริงกว่า)</option>
-        <option value="okx_paxg">OKX PAXG/USDT (ฟรี · สำรอง)</option>
-        <option value="twelvedata">Twelve Data XAU/USD (ทองจริง · ต้องมี API key)</option>
-        <option value="demo">โหมดจำลอง (ไม่มีเน็ตก็ใช้ได้)</option>
-      </select>
-    </label>
-    <label data-adv>สัญลักษณ์
-      <select id="symbolSel">
-        <option value="PAXGUSDT">PAXG/USDT</option>
-        <option value="XAUTUSDT">XAUT/USDT</option>
-      </select>
-    </label>
-    <button id="reloadBtn" class="btn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3"/></svg> โหลดใหม่</button>
-    <button id="tourBtn" class="btn" title="พาชมหน้าจอทีละจุด"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6a2 2 0 1 1 2.7 1.9c-.5.2-.7.6-.7 1.1v.4M8 11.6v.01"/></svg> สอนใช้</button>
-    <button id="modeToggle" class="btn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11M6 2.5v4M11 9.5v4"/></svg> โหมดเต็ม</button>
+  <div class="top-actions">
+    <span class="live" id="live" data-state="loading"><i></i><span id="liveText">กำลังเชื่อมต่อ</span></span>
+    <button class="icon-btn" id="btnSettings" aria-label="ตั้งค่า">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
   </div>
 </header>
 
-<div id="staleBar" class="stale-bar" hidden></div>
-<main>
-  <section class="chart-area">
-    <div class="chart-toolbar">
-      <div class="tf-group" id="tfGroup"></div>
-      <div class="countdown" id="countdown" title="เวลาที่เหลือก่อนแท่งเทียนปัจจุบันจะปิด">แท่งนี้ปิดในอีก <b>—</b></div>
-      <div class="spacer"></div>
-      <span data-adv style="display:contents">
-        <label class="chk"><input type="checkbox" id="togBB" checked> Bollinger</label>
-        <label class="chk"><input type="checkbox" id="togLevels" checked> แนวรับ-ต้าน</label>
-        <label class="chk"><input type="checkbox" id="togRSI" checked> RSI</label>
-        <label class="chk"><input type="checkbox" id="togMACD" checked> MACD</label>
-        <label class="chk"><input type="checkbox" id="togMarkers" checked> จุดสัญญาณย้อนหลัง</label>
-      </span>
-      <button id="resetZoom" class="btn small">⟲ ล่าสุด</button>
+<div class="banner" id="banner" hidden></div>
+
+<main class="layout">
+  <section class="col-main">
+
+    <div class="price-hero">
+      <div class="price-row">
+        <span class="price" id="price">—</span>
+        <span class="chg" id="priceChg"></span>
+      </div>
+      <div class="price-meta">
+        <span id="priceThb"></span>
+        <span class="dot-sep" aria-hidden="true">·</span>
+        <span id="priceSrc"></span>
+      </div>
     </div>
-    <div class="canvas-wrap"><canvas id="chart"></canvas></div>
-    <div class="legend">
-      <span><i style="background:#facc15"></i>EMA20</span>
-      <span><i style="background:#38bdf8"></i>EMA50</span>
-      <span><i style="background:#f472b6"></i>EMA200</span>
-      <span><i style="background:#a78bfa"></i>VWAP</span>
-      <span class="hint hint-desk">เลื่อนล้อ = ซูม · ลาก = เลื่อนกราฟ · ลากที่แถบราคา = ยืด/บีบแกนราคา</span><span class="hint hint-touch">สองนิ้วหุบ/กาง = ซูม · ลาก = เลื่อน · <b>ลากที่แถบราคา = ยืดแท่งให้สูงขึ้น</b> · แตะค้าง = ดูค่าแท่งนั้น · แตะสองครั้ง = รีเซ็ต</span>
-    </div>
+
+    <article class="card decision" id="decision" data-kind="loading" aria-live="polite">
+      <div class="dec-head">
+        <span class="chip" id="decChip">กำลังคำนวณ</span>
+        <span class="dec-next" id="decNext"></span>
+      </div>
+      <h1 class="dec-title" id="decTitle">กำลังโหลดข้อมูลราคา…</h1>
+      <p class="dec-text" id="decText"></p>
+      <ul class="checks" id="decChecks"></ul>
+      <div class="dec-blocks" id="decBlocks" hidden></div>
+      <div class="dec-actions" id="decActions"></div>
+    </article>
+
+    <article class="card plan" id="planCard" hidden>
+      <header class="card-head">
+        <h2 id="planTitle">แผนเทรด</h2>
+        <span class="muted small" id="planSub"></span>
+      </header>
+      <div class="plan-grid" id="planGrid"></div>
+      <div class="plan-size" id="planSize"></div>
+      <div class="note warn" id="planWarn" hidden></div>
+      <ol class="rules-after">
+        <li>ตั้งจุดตัดขาดทุนและทำกำไร<b>ไว้กับโบรกเกอร์ตั้งแต่ตอนส่งคำสั่ง</b> แล้วปล่อยให้ปิดเอง</li>
+        <li>ห้ามขยับจุดตัดขาดทุนเข้าหาราคาเข้าระหว่างที่ไม้ยังวิ่ง — ระบบทดสอบมาโดยไม่ขยับ</li>
+        <li>ถ้าผ่านไป 6 วัน (36 แท่ง 4 ชม.) ยังไม่ถึงไหน ให้ปิดที่ราคาตลาด</li>
+      </ol>
+      <div class="row-btns">
+        <button class="btn" id="btnCopyPlan">คัดลอกแผน</button>
+        <button class="btn primary" id="btnSavePlan">บันทึกเป็นไม้ของฉัน</button>
+      </div>
+    </article>
+
+    <article class="card mypos" id="posCard">
+      <header class="card-head">
+        <h2>ไม้ของฉัน</h2>
+        <span class="muted small">ติดตามกำไรขาดทุนแบบสด</span>
+      </header>
+      <div id="posOut" class="pos-out"></div>
+      <form id="posForm" class="pos-form" autocomplete="off">
+        <div class="seg" role="radiogroup" aria-label="ทิศทาง">
+          <button type="button" data-side="1" class="on">ซื้อ</button>
+          <button type="button" data-side="-1">ขาย</button>
+        </div>
+        <label>ราคาเข้า<input id="posEntry" inputmode="decimal" placeholder="เช่น 4472.54"></label>
+        <label>ตัดขาดทุน<input id="posSL" inputmode="decimal" placeholder="ไม่บังคับ"></label>
+        <label>ทำกำไร<input id="posTP" inputmode="decimal" placeholder="ไม่บังคับ"></label>
+        <label>ขนาด (ล็อต)<input id="posSize" inputmode="decimal" value="0.01"></label>
+        <div class="row-btns">
+          <button type="button" class="btn" id="posClear">ล้าง</button>
+          <button type="submit" class="btn primary">บันทึกไม้</button>
+        </div>
+      </form>
+    </article>
   </section>
 
-  <aside class="sidebar">
-    <!-- การ์ดสัญญาณหลัก -->
-    <div class="card signal-card" id="signalCard">
-      <div class="signal-head">
-        <div class="action" id="actionText">รอสัญญาณ</div>
-        <div class="grade" id="gradeText" data-adv>—</div>
-      </div>
-      <div class="gauge" data-adv>
-        <div class="gauge-bar"><div class="gauge-fill" id="gaugeFill"></div><div class="gauge-zero"></div></div>
-        <div class="gauge-labels"><span>ขาย -100</span><span id="scoreText">0</span><span>+100 ซื้อ</span></div>
-      </div>
-      <div class="prob-row" data-adv>
-        <div class="prob">
-          <span class="prob-label">โอกาสถึงเป้าแรก (1R) ก่อนโดน SL</span>
-          <span class="prob-value" id="probValue">—</span>
+  <section class="col-side">
+    <article class="card chart-card">
+      <header class="card-head">
+        <div class="seg small" id="tfSeg" role="tablist" aria-label="กรอบเวลา">
+          <button data-tf="4h" class="on" role="tab">4 ชั่วโมง</button>
+          <button data-tf="1d" role="tab">รายวัน</button>
         </div>
-        <div class="prob-note" id="probNote">ยังไม่ได้ทดสอบย้อนหลัง</div>
+        <div class="legend" id="chartLegend"></div>
+      </header>
+      <div class="chart-wrap">
+        <canvas id="chart" aria-label="กราฟราคาทอง"></canvas>
+        <button class="btn tiny latest" id="btnLatest" hidden>ล่าสุด ›</button>
       </div>
-      <div class="candle-state" id="candleState" data-adv></div>
-      <div class="plain-advice" id="plainAdvice"></div>
-    </div>
+      <p class="hint">ลากเพื่อเลื่อน · สองนิ้วเพื่อซูม · แตะค้างเพื่ออ่านค่า · ลากที่แถบราคาเพื่อยืดแท่ง · ▲▼ คือไม้ที่ระบบเคยเข้า</p>
+    </article>
 
-    <!-- แผนเทรด -->
-    <!-- ไม้ที่เปิดอยู่จริง — วางไว้เหนือแผน เพราะไม้ที่ลงเงินไปแล้วสำคัญกว่าไม้ที่ยังไม่ได้ลง -->
-    <div class="card pos-card" id="posCard">
-      <h2>ไม้ที่ถืออยู่ตอนนี้</h2>
-      <div id="posLive"></div>
-      <details id="posForm" class="pos-form">
-        <summary>บันทึก / แก้ไขไม้ที่เปิดอยู่</summary>
-        <div class="pos-grid">
-          <label>ทิศทาง
-            <select id="posSide">
-              <option value="1">ซื้อ (Buy)</option>
-              <option value="-1">ขาย (Sell)</option>
-            </select>
-          </label>
-          <label>ราคาที่เข้า<input type="number" id="posEntry" step="0.01" placeholder="เช่น 4472.54"></label>
-          <label>จุดตัดขาดทุน (SL)<input type="number" id="posSl" step="0.01" placeholder="เช่น 4463.23"></label>
-          <label>เป้าทำกำไร (TP)<input type="number" id="posTp" step="0.01" placeholder="เช่น 4493.23"></label>
-          <label>ขนาดไม้<input type="number" id="posSize" step="0.01" value="1" min="0"></label>
-          <label>ขนาดสัญญา (ออนซ์ต่อ 1 หน่วย)<input type="number" id="posContract" step="1" value="1" min="0"></label>
-        </div>
-        <div class="pos-btns">
-          <button id="posFromPlan" class="btn">ดึงตัวเลขจากแผนด้านล่าง</button>
-          <button id="posSave" class="btn primary">บันทึกไม้นี้</button>
-          <button id="posClear" class="btn">ปิดไม้ / ล้าง</button>
-        </div>
-        <p class="tiny" style="margin:9px 0 0">ระบบไม่ได้ต่อกับโบรกเกอร์ — กรอกเองครั้งเดียวแล้วมันจะคิดกำไรขาดทุนให้ตามราคาสด
-          ใช้ได้กับทุกโบรกเกอร์ และไม่ต้องให้สิทธิ์เข้าบัญชีใคร</p>
+    <article class="card record" id="recordCard">
+      <header class="card-head">
+        <h2>ผลของกติกานี้บนทองจริง</h2>
+        <span class="muted small" id="refPeriod"></span>
+      </header>
+      <div class="kpis" id="refKpis"></div>
+      <div class="curve" id="refCurve"></div>
+      <div class="years" id="refYears"></div>
+      <div class="explain" id="refExplain"></div>
+      <details class="more">
+        <summary>ระบบเดิมกับระบบใหม่ ต่างกันแค่ไหน</summary>
+        <div id="refCompare"></div>
       </details>
-    </div>
-
-    <div class="card" id="planCard">
-      <h2>แผนเข้า–ออก</h2>
-      <div id="planBox" class="plan-empty">ยังไม่มีแผน — รอคะแนนถึงเกณฑ์</div>
-      <div class="risk-inputs">
-        <label>ทุน (USD)<input type="number" id="accountInput" value="1000" min="10" step="10"></label>
-        <label>ความเสี่ยง/ไม้ (%)<input type="number" id="riskInput" value="1" min="0.1" max="10" step="0.1"></label>
-        <label class="wide">จุดตัดขาดทุนของฉัน (ว่างไว้ = ให้ระบบวางให้)
-          <input type="number" id="slManualInput" placeholder="เช่น 4362.50" step="0.01"></label>
-      </div>
-      <details class="broker-box">
-        <summary>ตั้งค่าโบรกเกอร์ของคุณ — ถ้าไม่ตรง จำนวนไม้จะผิดทุกครั้ง</summary>
-        <p class="tiny">
-          ค่าพวกนี้ต่างกันไปตามโบรกเกอร์และชนิดบัญชี ระบบเดาแทนคุณไม่ได้
-          ดูได้จากรายละเอียดสัญลักษณ์ (Symbol Specification) ในโปรแกรมเทรดของคุณ
-        </p>
-        <div class="risk-inputs">
-          <label>1 ล็อต = กี่ออนซ์<input type="number" id="contractInput" value="100" min="0.01" step="1"></label>
-          <label>ไม้เล็กที่สุด<input type="number" id="minLotInput" value="0.01" min="0.0001" step="0.001"></label>
-          <label>ขั้นของขนาดไม้<input type="number" id="lotStepInput" value="0.01" min="0.0001" step="0.001"></label>
-        </div>
-        <p class="tiny">
-          บัญชีมาตรฐานมักเป็น 100 ออนซ์ / 0.01 / 0.01 — ส่วนบัญชี cent หรือ micro
-          มักเล็กกว่านั้นมาก ซึ่งเป็นเหตุผลเดียวที่ทำให้ทุนน้อย ๆ เทรดทองได้จริง
-        </p>
+      <details class="more">
+        <summary>เปลี่ยนค่าแล้วยังกำไรไหม (ความทนทาน)</summary>
+        <div id="refRobust"></div>
       </details>
-      <div id="sizeBox" class="size-box"></div>
-    </div>
+      <details class="more">
+        <summary>ดูทุกไม้ที่ระบบเคยเทรด</summary>
+        <div id="refTrades" class="trades-list"></div>
+      </details>
+    </article>
 
-    <!-- เหตุผล -->
-    <div class="card">
-      <h2>เหตุผลประกอบ <small id="reasonCount" data-adv></small></h2>
-      <div class="reason-tabs">
-        <button class="rtab active" data-r="pro">สนับสนุน</button>
-        <button class="rtab" data-r="con">ค้าน</button>
-        <button class="rtab" data-r="ctx">บริบท</button>
-      </div>
-      <div id="reasonList" class="reason-list"></div>
-    </div>
-
-    <!-- หลายกรอบเวลา -->
-    <div class="card" data-adv>
-      <h2>หลายกรอบเวลา (Multi-Timeframe)</h2>
-      <div id="mtfBox" class="mtf-box"></div>
-      <p class="tiny">กรอบใหญ่บอก "กระแสน้ำ" กรอบเล็กบอก "จังหวะกระโดดลงน้ำ" — เทรดสวนกรอบใหญ่คืออัตราชนะที่ต่ำลง</p>
-    </div>
-  </aside>
+    <article class="card live-record" id="liveCard">
+      <header class="card-head">
+        <h2>ไม้ล่าสุดของระบบ</h2>
+        <span class="muted small" id="liveSub"></span>
+      </header>
+      <div id="liveRecord"></div>
+    </article>
+  </section>
 </main>
 
-<section class="narration">
-  <div class="narration-head">
-    <h2><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2.8h4a2 2 0 0 1 2 2v8.4a1.6 1.6 0 0 0-1.6-1.6H3zM13 2.8H9a2 2 0 0 0-2 2v8.4a1.6 1.6 0 0 1 1.6-1.6H13z"/></svg> กราฟตอนนี้กำลังบอกอะไร</h2>
-    <div class="narration-meta">
-      <span id="narrationTime"></span>
-      <button id="toggleNarration" class="btn small">ย่อ</button>
-    </div>
-  </div>
-  <div id="narrationBody" class="narration-body"></div>
-  <p class="tiny">คำอธิบายนี้สร้างจากตัวเลขจริงบนกราฟ ณ วินาทีนี้ และอัปเดตตัวเองตลอดเวลา — ใช้สำหรับเรียนรู้ว่าแต่ละตัวชี้วัดกำลังบอกอะไร ไม่ใช่คำแนะนำให้ซื้อขาย</p>
-</section>
+<footer class="foot">
+  <p>เครื่องมือเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน · ผลในอดีตไม่รับประกันอนาคต · ราคาจากเหรียญทอง (PAXG/XAUT) อาจต่างจากราคาทองของโบรกเกอร์เล็กน้อย</p>
+  <p><a href="tradingview.html">ใช้กติกาเดียวกันใน TradingView</a> · <a href="gold-signal-lab.html" download>ดาวน์โหลดไฟล์เดียวเก็บไว้ในเครื่อง</a></p>
+</footer>
 
-<section class="tabs-section" data-adv>
-  <div class="tabbar">
-    <button class="tab active" data-tab="backtest"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13.5v-5M6.5 13.5v-9M10.5 13.5v-6M14 13.5v-3"/></svg> ผลทดสอบย้อนหลัง</button>
-    <button class="tab" data-tab="alerts"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.2 6.8a3.8 3.8 0 0 1 7.6 0c0 3 1.2 3.9 1.2 3.9H3s1.2-.9 1.2-3.9M6.6 12.8a1.6 1.6 0 0 0 2.8 0"/></svg> แจ้งเตือน</button>
-    <button class="tab" data-tab="context"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4A6.2 6.2 0 0 0 8 1.8M1.8 8h12.4M8 1.8c1.6 1.7 2.4 3.8 2.4 6.2S9.6 12.5 8 14.2C6.4 12.5 5.6 10.4 5.6 8S6.4 3.5 8 1.8"/></svg> บริบทตลาด &amp; ข่าว</button>
-    <button class="tab" data-tab="settings"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10.1a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2M12.9 9.9l.9.7-1.1 1.9-1.1-.4a4.9 4.9 0 0 1-1.2.7L10.1 14H7.9l-.3-1.2a4.9 4.9 0 0 1-1.2-.7l-1.1.4-1.1-1.9.9-.7a5 5 0 0 1 0-1.4l-.9-.7 1.1-1.9 1.1.4c.4-.3.8-.5 1.2-.7L7.9 2h2.2l.3 1.2c.4.2.8.4 1.2.7l1.1-.4 1.1 1.9-.9.7a5 5 0 0 1 0 1.8"/></svg> ตั้งค่า</button>
-    <button class="tab" data-tab="howto"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2.8h4a2 2 0 0 1 2 2v8.4a1.6 1.6 0 0 0-1.6-1.6H3zM13 2.8H9a2 2 0 0 0-2 2v8.4a1.6 1.6 0 0 1 1.6-1.6H13z"/></svg> วิธีใช้ &amp; ข้อจำกัด</button>
-  </div>
+<dialog class="sheet" id="settings" aria-labelledby="setTitle">
+  <form method="dialog" class="sheet-inner" id="setForm">
+    <header class="sheet-head">
+      <h2 id="setTitle">ตั้งค่า</h2>
+      <button class="icon-btn" value="close" aria-label="ปิด"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
 
-  <div class="tab-panel active" id="tab-backtest">
-    <div class="bt-controls">
-      <button id="runBt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบกฎกับข้อมูลจริงย้อนหลัง</button>
-      <span id="btStatus" class="tiny"></span>
-    </div>
-    <!-- วิธีบริหารไม้กับเกณฑ์คะแนน ไม่ให้เลือกเองแล้ว — ระบบวัดเองว่าอันไหนดีที่สุด
-         แล้วใช้อันนั้น การให้เลือกเองทั้งที่วัดได้ คือการโยนการตัดสินใจกลับไปให้ผู้ใช้เดา -->
-    <details class="adv-box">
-      <summary>ตั้งค่าขั้นสูง (ปกติไม่ต้องแตะ)</summary>
-      <div class="bt-controls">
-        <label>ถือได้สูงสุด (แท่ง) <input type="number" id="maxHoldInput" value="60" min="5" max="300" step="5"></label>
-        <label>สเปรด (USD) <input type="number" id="spreadInput" value="0.30" min="0" max="3" step="0.05"></label>
-      </div>
-    </details>
-    <div id="wfBox" class="wf-box"></div>
-    <div id="btSummary" class="bt-summary"></div>
-    <div class="bt-grid">
-      <div><h3>ความน่าจะเป็นตามระดับคะแนน</h3><div id="btBands"></div></div>
-      <div><h3>อัตราชนะตามช่วงเวลา (เวลาไทย)</h3><div id="btSessions"></div></div>
-      <div><h3>เส้นทุน (หน่วย R)</h3><canvas id="equityCanvas" height="150"></canvas></div>
-      <div><h3>ปัจจัยไหนทำนายได้จริง</h3><div id="btFactors"></div></div>
-    </div>
-    <details class="learn-box">
-      <summary>ข่าว + กราฟ ช่วยให้แม่นขึ้นจริงไหม</summary>
-      <p class="tiny">
-        คำถาม: ถ้าเอา<b>ข่าว</b>มาผสมกับ<b>กราฟ</b> จะคาดการณ์ได้แน่นอนกว่าเดิมไหม
-        ปุ่มนี้ตอบด้วยการวัด ไม่ใช่ด้วยความรู้สึก —
-        ดึงข่าวย้อนหลังในช่วงเวลาเดียวกับแท่งเทียนที่โหลดมา จัดเรียงตามเวลาแบบ<b>หน่วง 15 นาที</b>
-        (กันการใช้ข่าวที่ตอนนั้นยังไม่มีใครรู้) แล้วแบ่งไม้เทรดเป็นสามกลุ่ม:
-        <b>ข่าวหนุน · ข่าวค้าน · ข่าวเงียบ</b> แล้วเทียบผลกันตรง ๆ<br><br>
-        ถ้าตัดไม้ที่ข่าวค้านออกแล้วผลดีขึ้นอย่างมีนัย ระบบจะบอกว่าใช้ได้ ถ้าไม่ ก็จะบอกตรง ๆ ว่าไม่ช่วย
-      </p>
-      <div class="bt-controls">
-        <button id="runNewsTest" class="btn primary">ทดสอบว่าข่าวช่วยได้จริงไหม</button>
-        <span id="newsTestStatus" class="tiny"></span>
-      </div>
-      <div id="newsTestBox"></div>
-    </details>
+    <fieldset>
+      <legend>ทุนและความเสี่ยง</legend>
+      <label>ทุนในบัญชี (USD)<input id="setAccount" inputmode="decimal"></label>
+      <label>ยอมเสียต่อไม้ (% ของทุน)<input id="setRisk" inputmode="decimal"></label>
+      <p class="help">ระบบเคยแพ้ติดกัน 5 ไม้ในข้อมูล 4 ปี · ที่ 2% ต่อไม้ แพ้ 5 ไม้ติด = ทุนหาย ~10%</p>
+    </fieldset>
 
-    <details class="learn-box" id="adaptBoxWrap" open>
-      <summary><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.2v9.6M8 4.4a2.2 2.2 0 0 0-4 1.3c-1 .4-1.4 1.6-.8 2.5-.6 1 0 2.4 1.2 2.6.2 1.1 1.5 1.7 2.5 1.1M8 4.4a2.2 2.2 0 0 1 4 1.3c1 .4 1.4 1.6.8 2.5.6 1 0 2.4-1.2 2.6-.2 1.1-1.5 1.7-2.5 1.1"/></svg> ให้ระบบศึกษาตลาดนี้เอง แล้วปรับกลยุทธ์ตามที่เรียนรู้</summary>
-      <p class="tiny">
-        ค่าตั้งต้นทุกตัว (คะแนนขั้นต่ำ 35, จุดตัดขาดทุน 1.5 เท่า ATR, เป้า 2 เท่า) เป็นค่ากลาง ๆ ที่ตั้งไว้ล่วงหน้า
-        ไม่ได้ดูตลาดที่คุณโหลดมาเลย ปุ่มนี้จะให้ระบบ<b>ศึกษาตลาดนี้เอง</b>:
-        แบ่งข้อมูลเป็นหลายช่วงตามเวลา แล้ว<b>จูนใหม่ทุกช่วงโดยดูได้แค่อดีตของช่วงนั้น</b>
-        เอาผลทุกช่วงมาต่อกันเป็นผลจริงของ "ระบบที่ปรับตัวเอง"
-        แล้ว<b>เทียบกับค่าคงที่บนช่วงเดียวกัน</b> — จึงตอบได้ว่าการปรับตัวเองช่วยจริงหรือไม่
-      </p>
-      <div class="bt-controls">
-        <button id="runAdapt" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ให้ระบบศึกษาตลาดแล้วปรับกลยุทธ์เอง</button>
-        <button id="applyAdapt" class="btn" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg> ใช้ค่าที่ระบบเรียนรู้มา</button>
-        <button id="resetAdapt" class="btn" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2v3h3"/></svg> กลับไปใช้ค่าตั้งต้น</button>
-        <label class="chk"><input type="checkbox" id="togAnchored" checked> จำอดีตทั้งหมด (ไม่ติ๊ก = ลืมอดีตไกล ๆ)</label>
-        <span id="adaptStatus" class="tiny"></span>
-      </div>
-      <div id="adaptBox"></div>
-    </details>
-
-    <details class="learn-box">
-      <summary><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.4 2h3.2M7 2v4.2L3.6 12a1.2 1.2 0 0 0 1 1.9h6.8a1.2 1.2 0 0 0 1-1.9L9 6.2V2M5.3 9.5h5.4"/></svg> ตรวจสอบน้ำหนักปัจจัย — น้ำหนักที่ตั้งไว้ถูกจริงไหม?</summary>
-      <p class="tiny">
-        คะแนนสัญญาณมาจากการถ่วงน้ำหนัก 12 ปัจจัย (เส้นค่าเฉลี่ย 16, ความแรงแนวโน้ม 12, …)
-        ตัวเลขชุดนี้ตั้งจากตำราและประสบการณ์ ไม่ใช่จากข้อมูลของคุณ
-        ปุ่มนี้จะ <b>เรียนรู้น้ำหนักใหม่จากผลเทรดจริงในช่วงแรกของข้อมูล</b>
-        แล้ว <b>เอาไปสอบกับช่วงหลังที่ตอนเรียนรู้ไม่เคยเห็น</b>
-        ถ้าสอบไม่ผ่าน ระบบจะไม่ให้ใช้ — ไม่ว่าตัวเลขตอนเรียนรู้จะสวยแค่ไหน
-      </p>
-      <div class="bt-controls">
-        <button id="runLearn" class="btn"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> เรียนรู้แล้วสอบน้ำหนักชุดใหม่</button>
-        <button id="applyLearn" class="btn primary" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg> ใช้น้ำหนักชุดใหม่</button>
-        <button id="resetLearn" class="btn" hidden><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2v3h3"/></svg> กลับไปใช้น้ำหนักเดิม</button>
-        <span id="learnStatus" class="tiny"></span>
-      </div>
-      <div id="learnBox"></div>
-    </details>
-    <div id="btTrades"></div>
-  </div>
-
-  <div class="tab-panel" id="tab-alerts">
-    <div class="alert-config">
-      <button id="enableNotif" class="btn">เปิดแจ้งเตือนหน้าจอ</button>
-      <label class="chk"><input type="checkbox" id="togSound" checked> เสียงเตือน</label>
-      <label class="chk"><input type="checkbox" id="togSpeak"> อ่านออกเสียงไทย</label>
-      <label>จังหวะแจ้งเตือน
-        <select id="alertMode">
-          <option value="early">เตือนล่วงหน้า + ยืนยันตอนแท่งปิด (แนะนำ)</option>
-          <option value="instant">ทันทีที่คะแนนถึงเกณฑ์ (เร็วสุด)</option>
-          <option value="closed">เฉพาะตอนแท่งปิด (นิ่งสุด)</option>
+    <fieldset>
+      <legend>สเปกของโบรกเกอร์</legend>
+      <label>1 ล็อต = กี่ออนซ์
+        <select id="setContract">
+          <option value="100">100 ออนซ์ (บัญชีมาตรฐานส่วนใหญ่)</option>
+          <option value="10">10 ออนซ์</option>
+          <option value="1">1 ออนซ์ (บัญชีเซนต์/ไมโคร)</option>
         </select>
       </label>
-      <label>เว้นระยะเตือน (นาที) <input type="number" id="cooldownInput" value="5" min="0" max="120"></label>
-      <label class="wide">Webhook (Discord) <input type="text" id="webhookInput" placeholder="https://discord.com/api/webhooks/..."></label>
-      <button id="testWebhook" class="btn">ส่งข้อความทดสอบ</button>
-      <span id="webhookStatus" class="tiny"></span>
-    </div>
-    <div class="rule-builder">
-      <h3>กฎเตือนส่วนตัว</h3>
-      <div class="rule-form">
-        <select id="ruleType">
-          <option value="price_above">ราคาทะลุขึ้นเหนือ</option>
-          <option value="price_below">ราคาหลุดลงต่ำกว่า</option>
-          <option value="rsi_above">RSI สูงกว่า</option>
-          <option value="rsi_below">RSI ต่ำกว่า</option>
+      <label>ล็อตเล็กสุดที่ส่งได้<input id="setMinLot" inputmode="decimal"></label>
+      <label>ขั้นของล็อต<input id="setLotStep" inputmode="decimal"></label>
+      <label>ค่าสเปรดทองของโบรก (USD/ออนซ์)<input id="setSpread" inputmode="decimal"></label>
+      <p class="help">ดูได้ในโปรแกรมเทรด: ขนาดสัญญา (contract size), ล็อตขั้นต่ำ (min volume) และขั้นล็อต (volume step)</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>กติกา</legend>
+      <label>ฝั่งที่เทรด
+        <select id="setSides">
+          <option value="both">ทั้งซื้อและขาย (ตามที่ทดสอบ)</option>
+          <option value="long">เฉพาะฝั่งซื้อ</option>
         </select>
-        <input type="number" id="ruleValue" step="0.01" placeholder="ค่า">
-        <label class="chk"><input type="checkbox" id="ruleOnce" checked> เตือนครั้งเดียว</label>
-        <button id="addRule" class="btn small">+ เพิ่มกฎ</button>
-      </div>
-      <div id="ruleList"></div>
-    </div>
-    <div class="alert-log">
-      <h3>ประวัติการแจ้งเตือน <button id="clearLog" class="btn tiny-btn">ล้าง</button></h3>
-      <div id="logList"></div>
-    </div>
-  </div>
+      </label>
+      <p class="help" id="sidesHelp"></p>
+    </fieldset>
 
-  <div class="tab-panel" id="tab-context">
-    <div class="card news-panel">
-      <div class="news-top">
-        <h2>ข่าวโลกที่กระทบราคาทอง</h2>
-        <div class="news-actions">
-          <span id="newsMeta" class="tiny"></span>
-          <label class="chk"><input type="checkbox" id="newsAuto" checked> อัปเดตเอง</label>
-          <button id="refreshNews" class="btn small">ดึงข่าวใหม่</button>
-        </div>
-      </div>
-      <div id="newsClimate"></div>
-      <div id="newsFeed"></div>
-      <details class="news-limits">
-        <summary>ระบบนี้ "วิเคราะห์" ข่าวยังไง และเชื่อได้แค่ไหน</summary>
-        <p class="tiny">
-          หน้าเว็บนี้เป็นไฟล์นิ่ง ๆ ไม่มีเซิร์ฟเวอร์หลังบ้าน จึง<b>ไม่มีปัญญาประดิษฐ์อ่านข่าวให้</b>
-          สิ่งที่ทำได้จริงคือจับคำสำคัญในหัวข้อข่าว แล้วเทียบกับฐานความรู้ 12 ตัวขับราคาทอง
-          ว่าเรื่องนั้น<b>ตามทฤษฎี</b>ควรดันทองไปทางไหน<br><br>
-          <b>ทำได้:</b> บอกว่าข่าวนี้แตะเรื่องที่มีผลกับทอง ทิศไหน และกลไกคืออะไร<br>
-          <b>ทำไม่ได้:</b> อ่านบริบท · แยกประชด · รู้ว่าตลาดรับข่าวนี้ไปแล้วหรือยัง ·
-          วัดขนาดผลกระทบจริง<br><br>
-          <b>ตัวอย่างที่มันพลาดแน่ ๆ:</b> ข่าวเก่าที่ถูกเล่าซ้ำจะถูกนับเป็นข่าวใหม่ และ
-          "เงินเฟ้อสูง" ถูกนับเป็นบวกกับทองเสมอ ทั้งที่ถ้าสูงจนเฟดต้องขึ้นดอกเบี้ยแรง ผลจริงจะกลับเป็นลบ<br><br>
-          <b>ใช้เป็นบริบทประกอบเท่านั้น อย่าใช้ตัดสินใจเข้าออกไม้โดยลำพัง</b>
-        </p>
-      </details>
-    </div>
-    <div class="ctx-grid">
-      <div class="card"><h2>ช่วงตลาดตอนนี้</h2><div id="sessionBox"></div></div>
-      <div class="card"><h2>ปฏิทินข่าวเสี่ยง</h2>
-        <div id="newsBox"></div>
-        <div class="news-form">
-          <input type="text" id="evTitle" placeholder="ชื่อข่าว เช่น US CPI">
-          <input type="datetime-local" id="evTime">
-          <button id="addEvent" class="btn small">+ เพิ่ม</button>
-        </div>
-        <p class="tiny">NFP (ศุกร์แรกของเดือน) คำนวณอัตโนมัติ ส่วน CPI/FOMC ที่วันเวลาไม่ตายตัว ให้กรอกเองจากปฏิทินเศรษฐกิจที่คุณใช้</p>
-      </div>
-      <div class="card"><h2>สภาพตลาด</h2><div id="regimeBox"></div></div>
-      <div class="card"><h2>สถิติราคาช่วงที่โหลดมา</h2><div id="statsBox"></div></div>
-    </div>
-  </div>
+    <fieldset>
+      <legend>แหล่งราคา</legend>
+      <label>ดึงราคาจาก<select id="setSource"></select></label>
+      <label id="apiKeyRow" hidden>API key ของ Twelve Data<input id="setApiKey" autocomplete="off" spellcheck="false" placeholder="เก็บไว้ในเครื่องนี้เท่านั้น"></label>
+      <p class="help" id="sourceHelp"></p>
+    </fieldset>
 
-  <div class="tab-panel" id="tab-settings">
-    <div class="card" style="margin-bottom:16px">
-      <h2><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.3 12.1a4.8 4.8 0 1 0 0-9.6 4.8 4.8 0 0 0 0 9.6M13.5 13.5l-2.8-2.8"/></svg> ทดสอบแหล่งราคาทอง — อันไหนใช้ได้จากเครื่องคุณ</h2>
-      <p class="tiny">
-        ราคาทองคำสปอต (XAU/USD) เป็นข้อมูลมีลิขสิทธิ์ เจ้าที่แจกฟรีจึงต้องขอให้สมัครคีย์เสมอ
-        ส่วนที่ฟรีจริงไม่ต้องใช้คีย์คือ<b>โทเคนที่หนุนด้วยทองคำ</b>ในตลาดคริปโต
-        ซึ่งวิ่งเกาะทองจริงแต่ไม่เท่ากันเป๊ะ<br><br>
-        <b>จุดที่คนมักมองข้าม:</b> คู่ที่เทียบกับ <b>USD จริง</b> (Kraken, Bitfinex)
-        ใกล้ราคาทองมากกว่าคู่ที่เทียบ <b>USDT</b> (Binance, OKX) เพราะตัดความคลาดเคลื่อนของ USDT ออกไปอีกชั้น<br><br>
-        แต่ละเจ้าจะยอมให้เว็บอื่นเรียกหรือไม่ และเครือข่ายบ้านคุณบล็อกอันไหน
-        <b>ผมทดสอบแทนไม่ได้</b> — ปุ่มนี้จะยิงทดสอบจากเบราว์เซอร์คุณเองแล้วรายงานว่าอันไหนใช้ได้จริง
-      </p>
-      <div class="bt-controls">
-        <button id="testSources" class="btn primary"><svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg> ทดสอบทุกแหล่งเดี๋ยวนี้</button>
-        <span id="srcStatus" class="tiny"></span>
-      </div>
-      <div id="srcResults"></div>
-    </div>
-    <div class="settings-grid">
-      <div class="card">
-        <h2>เกณฑ์สัญญาณ</h2>
-        <!-- เกณฑ์คะแนนกลับมาให้ตั้งเองแล้ว — เคยให้ระบบตั้งทับอัตโนมัติจากผลทดสอบ
-             แต่วัดแล้วพบว่ามันเลือกเลขต่ำสุด (20) เจ็ดในสิบครั้ง ซึ่งยิงสัญญาณอ่อน ๆ
-             มากกว่าเกณฑ์ 35 ถึง 2.5 เท่า และเปลี่ยนไปมาทุกครั้งที่กดทดสอบ -->
-        <label>คะแนนขั้นต่ำที่ถือว่าเป็นสัญญาณ <input type="number" id="setThreshold" value="35" min="10" max="90" step="1"></label>
-        <label>ตัวคูณ ATR สำหรับ Stop Loss <input type="number" id="setSlAtr" value="1.5" min="0.5" max="5" step="0.1"></label>
-        <label>ADX ขั้นต่ำที่ถือว่ามีเทรนด์ <input type="number" id="setAdx" value="22" min="10" max="40"></label>
-        <label>กรอบเวลาใหญ่ที่ 1 <select id="setHtf1"></select></label>
-        <label>กรอบเวลาใหญ่ที่ 2 <select id="setHtf2"></select></label>
-      </div>
-      <div class="card">
-        <h2>ตัวกรองความปลอดภัย</h2>
-        <label class="chk"><input type="checkbox" id="setNewsFilter" checked> ระงับสัญญาณช่วง ±30 นาทีรอบข่าวแรง</label>
-        <label class="chk"><input type="checkbox" id="setVolFilter" checked> ระงับเมื่อผันผวนต่ำ/สูงผิดปกติ</label>
-        <label class="chk"><input type="checkbox" id="setSessionFilter"> เตือนเมื่ออยู่นอกช่วงตลาดหลัก</label>
-        <label class="chk"><input type="checkbox" id="setSmartSession" checked> เทรดเฉพาะช่วงเวลาที่สถิติของระบบเองบอกว่าทำกำไรได้</label>
-        <label>โหลดข้อมูลย้อนหลัง
-          <select id="historyBars">
-            <option value="1000">1,000 แท่ง (เร็ว · สถิติน้อย)</option>
-            <option value="3000" selected>3,000 แท่ง (แนะนำ)</option>
-            <option value="6000">6,000 แท่ง</option>
-            <option value="10000">10,000 แท่ง (ช้า · สถิติแน่นสุด)</option>
-          </select>
-        </label>
-        <label>อัตราแลกเปลี่ยน USD/THB <input type="number" id="setUsdThb" value="36.5" step="0.05"></label>
-      </div>
-      <div class="card" id="spotCard">
-        <h2>อยากได้ราคาทองคำสปอตจริง (XAU/USD)</h2>
-        <p class="tiny" style="margin-top:0">ค่าเริ่มต้นใช้ PAXG ซึ่งเป็นโทเคนอิงทองคำ ราคาวิ่งเกาะทองจริงแต่<b>ไม่เท่ากันเป๊ะ</b>
-          ถ้าเอาไปเทียบกับกราฟทองของโบรกเกอร์แล้วตัวเลขไม่ตรง สาเหตุคือตรงนี้</p>
-        <ol class="spot-steps">
-          <li>สมัครฟรีที่ <b>twelvedata.com</b> (แผนฟรีพอใช้งาน)</li>
-          <li>คัดลอก API key มาวางในช่องข้างล่าง</li>
-          <li>เปลี่ยน "แหล่งข้อมูล" ด้านบนเป็น <b>Twelve Data XAU/USD</b></li>
-        </ol>
-        <label>API key (Twelve Data) <input type="password" id="setApiKey" placeholder="วาง API key ที่นี่"></label>
-        <p class="tiny">แผนฟรีจำกัด 8 คำขอ/นาที ระบบจึงดึงราคาใหม่ทุก 15 วินาที (ไม่ใช่เรียลไทม์เท่า Binance)
-          และ API key เก็บอยู่ในเบราว์เซอร์ของคุณเท่านั้น ไม่ได้ส่งไปไหน</p>
-      </div>
-      <div class="card">
-        <h2>น้ำหนักปัจจัย</h2>
-        <p class="tiny">คะแนนรวม = Σ (น้ำหนัก × ความแรง × ทิศทาง) ÷ น้ำหนักรวม × 100</p>
-        <div id="weightBox"></div>
-      </div>
-    </div>
-  </div>
+    <fieldset>
+      <legend>การแจ้งเตือน</legend>
+      <label class="switch"><input type="checkbox" id="setSound"><span>เสียงเตือนเมื่อมีสัญญาณ</span></label>
+      <label class="switch"><input type="checkbox" id="setDesktop"><span>แจ้งเตือนของเบราว์เซอร์</span></label>
+      <label>Discord webhook<input id="setWebhook" inputmode="url" placeholder="https://discord.com/api/webhooks/..."></label>
+      <div class="row-btns"><button type="button" class="btn" id="btnTestWebhook">ส่งข้อความทดสอบ</button></div>
+      <p class="help" id="webhookStatus">หน้าเว็บเตือนได้เฉพาะตอนเปิดค้างไว้ · ถ้าอยากได้แจ้งเตือนตลอดเวลา ให้ตั้งบอท Discord ตามคู่มือใน README</p>
+    </fieldset>
 
-  <div class="tab-panel" id="tab-howto">
-    <div class="howto">
-      <div class="tv-cta">
-        <h2 style="margin-top:0">อยากได้ราคาทองจริงจากโบรกเกอร์? ใช้กับ TradingView ได้</h2>
-        <p>เว็บนี้ต้องหาข้อมูลราคาเอง ซึ่งของฟรีมีข้อจำกัดเสมอ
-          แต่มีเวอร์ชัน Pine Script ที่รันใน TradingView ได้ — ได้ XAUUSD จริงจากโบรกเกอร์คุณ
-          ไม่มีโควตา มีเครื่องทดสอบย้อนหลังในตัว และแจ้งเตือนเข้ามือถือได้</p>
-        <a class="btn primary" href="tradingview.html"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 1.8h6a1.2 1.2 0 0 1 1.2 1.2v10a1.2 1.2 0 0 1-1.2 1.2H5a1.2 1.2 0 0 1-1.2-1.2V3A1.2 1.2 0 0 1 5 1.8M7 12.4h2"/></svg> ดูวิธีใส่ใน TradingView (ทำบนมือถือได้)</a>
-      </div>
-      <h2>ระบบนี้ทำงานอย่างไร</h2>
-      <ol>
-        <li><b>ดึงราคาเรียลไทม์</b> — ค่าเริ่มต้นใช้ PAXG/USDT บน Binance ผ่าน WebSocket (โทเคนหนุนด้วยทองคำจริง 1 เหรียญ = 1 ทรอยออนซ์ เก็บในตู้นิรภัยลอนดอน) ราคาจึงวิ่งเกาะ XAU/USD และมีข้อมูล 24 ชม. ไม่ต้องใช้ API key ถ้าต้องการ XAU/USD ของจริง ให้ใส่ API key ของ Twelve Data ในแท็บตั้งค่า</li>
-        <li><b>คำนวณตัวชี้วัด</b> — EMA20/50/200, RSI, MACD, Bollinger, ATR, ADX/DI, Stochastic, OBV, VWAP, swing pivot, แนวรับ-แนวต้านจากจุดกลับตัวจริง และรูปแบบแท่งเทียน</li>
-        <li><b>ให้แต่ละปัจจัยโหวต</b> — ทุกปัจจัยให้ทิศทาง (+ซื้อ/−ขาย) และความแรง 0–1 พร้อมเหตุผลภาษาไทย รวมกันเป็นคะแนน −100 ถึง +100</li>
-        <li><b>ตรวจสอบข้ามกรอบเวลา</b> — ถ้ากรอบเล็กสวนกรอบใหญ่ คะแนนจะถูกตัดลง 40%</li>
-        <li><b>แปลงเป็นแผนเทรด</b> — SL วางจาก ATR และ swing ล่าสุด (กว้างพอไม่ให้ noise เขี่ยออก) เป้าหมายคิดเป็น R และปรับให้ไม่ชนแนวต้าน/แนวรับใหญ่</li>
-        <li><b>วัดความน่าจะเป็นจากสถิติจริง</b> — กดปุ่มทดสอบย้อนหลัง ระบบจะเดินกฎเดียวกันนี้ทุกแท่งในอดีต แล้วนับว่า "แตะ 1R ก่อนโดน SL" กี่ครั้ง ตัวเลข % ที่แสดงคือสถิติจริงของกฎชุดนี้ ไม่ใช่ตัวเลขที่ตั้งขึ้นมาลอย ๆ</li>
-      </ol>
+    <fieldset>
+      <legend>ราคาทองไทย</legend>
+      <label>อัตราแลกเปลี่ยน (บาทต่อดอลลาร์)<input id="setUsdThb" inputmode="decimal"></label>
+      <p class="help">ใช้แปลงเป็นราคาบาทละ (ทอง 96.5%) โดยประมาณ ไม่รวมค่ากำเหน็จหรือส่วนต่างของร้านทอง</p>
+    </fieldset>
 
-      <h2>ข้อจำกัดที่ต้องรู้ก่อนใช้เงินจริง</h2>
-      <ul class="warn-list">
-        <li>Backtest ใช้ข้อมูลระดับแท่งเทียน ไม่ใช่ tick — ถ้าแท่งเดียวแตะทั้ง SL และ TP ระบบนับเป็น "แพ้" เสมอ (อนุรักษ์นิยม แต่ก็ยังไม่เท่าการเทรดจริง)</li>
-        <li>ไม่ได้รวมค่า swap ข้ามคืน ค่าคอมมิชชัน หรือการที่สเปรดถ่างตอนข่าว — ของจริงต้นทุนสูงกว่านี้</li>
-        <li>ตัวเลขอัตราชนะมาจากข้อมูลเท่าที่โหลดมา (ไม่กี่ร้อยแท่ง) ตลาดเปลี่ยนพฤติกรรมได้ อดีตไม่รับประกันอนาคต</li>
-        <li>PAXG ≠ XAU/USD เป๊ะ ๆ มีส่วนต่างพรีเมียม/ดิสเคานต์ได้ 0.1–1% และช่วงตลาด spot ปิด ราคาจะเคลื่อนตาม flow คริปโต</li>
-        <li>ระบบนี้เป็นเครื่องมือช่วยตัดสินใจและให้ข้อมูลประกอบ ไม่ใช่คำแนะนำการลงทุน การเทรดทองมีเลเวอเรจสูงและขาดทุนเกินเงินต้นได้</li>
-      </ul>
+    <fieldset>
+      <legend>หน้าตา</legend>
+      <label>ธีม
+        <select id="setTheme">
+          <option value="auto">ตามเครื่อง</option>
+          <option value="dark">มืด</option>
+          <option value="light">สว่าง</option>
+        </select>
+      </label>
+    </fieldset>
 
-      <h2>วิธีใช้ให้ได้ผลที่สุด</h2>
-      <ol>
-        <li>เลือกกรอบเวลาที่ตรงกับสไตล์ตัวเอง (สแกล์ป 5m · เดย์เทรด 15m–1h · สวิง 4h–1d)</li>
-        <li>กด "ทดสอบกฎกับข้อมูลจริงย้อนหลัง" ก่อนเสมอ ดูว่าคะแนนขั้นต่ำระดับไหนให้อัตราชนะและค่าคาดหวัง (Expectancy) เป็นบวก แล้วค่อยตั้งเกณฑ์ตามนั้น</li>
-        <li>ดูตาราง "อัตราชนะตามช่วงเวลา" เพื่อรู้ว่าควรเทรดชั่วโมงไหน — นี่คือส่วน "จังหวะ" ที่คนส่วนใหญ่มองข้าม</li>
-        <li>เข้าเฉพาะไม้ที่คะแนนสูงและกรอบเวลาไปทางเดียวกัน อย่าไล่ราคาเมื่อ RSI ร้อนจัด</li>
-        <li>ยึดขนาดไม้ตามช่อง "ความเสี่ยง/ไม้" เสมอ — ระบบคำนวณ lot ให้แล้วจากระยะ SL จริง</li>
-        <li>เมื่อกำไรถึง 1R ให้ปิดครึ่งและเลื่อน SL มาที่ทุน (นี่คือสมมติฐานเดียวกับที่ backtest ใช้ ตัวเลขจึงตรงกับพฤติกรรมที่แนะนำ)</li>
-      </ol>
-    </div>
-  </div>
-</section>
+    <div class="row-btns sticky-foot"><button class="btn primary" value="save" id="btnSaveSettings">บันทึก</button></div>
+  </form>
+</dialog>
 
-<div id="toastWrap" class="toast-wrap"></div>
-
-<footer>
-  <p><svg class="ico ico-h" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.6L14.4 13H1.6zM8 6.6v3M8 11.4v.01"/></svg> เครื่องมือให้ข้อมูลเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน · ราคาจากผู้ให้บริการภายนอกอาจล่าช้าหรือคลาดเคลื่อน · ผู้ใช้รับความเสี่ยงเองทั้งหมด</p>
-</footer>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script type="module" src="js/app.js"></script>
 </body>

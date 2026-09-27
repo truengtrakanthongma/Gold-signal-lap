@@ -5,7 +5,7 @@
 
 const LS_KEY = 'goldtrader.alerts.v1';
 
-import { sendDiscord, webhookProblem, buildSignalMessage } from './discord.js';
+import { sendDiscord, webhookProblem } from './discord.js';
 
 export class AlertCenter {
   constructor() {
@@ -102,16 +102,9 @@ export class AlertCenter {
    *
    * ตอนนี้เก็บผลครั้งล่าสุดไว้ให้หน้าจอแสดงได้ว่าส่งผ่านหรือไม่ผ่าน เพราะอะไร
    */
-  async sendWebhook(payload) {
-    if (!this.webhookUrl) return null;
-    const msg = payload.discord || buildSignalMessage({
-      action: payload.kind === 'buy' ? 'buy' : payload.kind === 'sell' ? 'sell' : 'wait',
-      score: payload.score, price: payload.price,
-      instrument: payload.instrument, tf: payload.tf,
-      setup: payload.setup, prob: payload.prob,
-      reasons: payload.reasons || [], blocks: payload.blocks || [],
-    });
-    const res = await sendDiscord(this.webhookUrl, msg);
+  async sendWebhook(message) {
+    if (!this.webhookUrl || !message) return null;
+    const res = await sendDiscord(this.webhookUrl, message);
     this.lastWebhook = { ...res, at: Date.now() };
     if (this.onWebhookResult) this.onWebhookResult(this.lastWebhook);
     return res;
@@ -133,8 +126,8 @@ export class AlertCenter {
   }
 
   /** ยิงแจ้งเตือน 1 รายการ (บันทึกลง log + เสียง + desktop + webhook) */
-  fire({ kind = 'info', title, body, price, score, meta }) {
-    const entry = { id: Date.now() + Math.random(), ts: Date.now(), kind, title, body, price, score, meta };
+  fire({ kind = 'info', title, body, price, meta, discord }) {
+    const entry = { id: Date.now() + Math.random(), ts: Date.now(), kind, title, body, price, meta };
     this.log.unshift(entry);
     this.log = this.log.slice(0, 200);
     this.save();
@@ -144,7 +137,9 @@ export class AlertCenter {
     if (this.desktop && 'Notification' in window && Notification.permission === 'granted') {
       try { new Notification(title, { body, tag: 'gold-' + kind, silent: false }); } catch (e) { /* ignore */ }
     }
-    this.sendWebhook({ text: `**${title}**\n${body}` });
+    /* ส่ง Discord เฉพาะเมื่อมีข้อความที่จัดรูปแล้ว — ห้ามแต่งหัวข้อเองจากชนิดเตือน
+       เดิมส่งสัญญาณซื้อออกไปพร้อมหัวข้อ "ยังไม่มีสัญญาณ" เพราะเดาชนิดผิด */
+    if (discord) this.sendWebhook(discord);
     this.onUpdate(entry);
     return entry;
   }
@@ -171,22 +166,18 @@ export class AlertCenter {
   }
 
   /**
-   * ตรวจกฎเตือนส่วนตัวกับสถานะล่าสุด
-   * @param {{price:number, rsi:number, score:number}} state
+   * เตือนเมื่อราคาถึงระดับที่ตั้งไว้ — ใช้ตอนรอราคาย่อมาถึงจุดเข้า จะได้ไม่ต้องนั่งเฝ้า
+   * @param {{price:number}} state
    */
   checkRules(state) {
     for (const r of this.rules) {
-      if (!r.active) continue;
-      let hit = false, label = '';
-      if (r.type === 'price_above' && state.price >= r.value) { hit = true; label = `ราคาทะลุขึ้นเหนือ ${r.value}`; }
-      if (r.type === 'price_below' && state.price <= r.value) { hit = true; label = `ราคาหลุดลงต่ำกว่า ${r.value}`; }
-      if (r.type === 'rsi_above' && state.rsi !== null && state.rsi >= r.value) { hit = true; label = `RSI ขึ้นเหนือ ${r.value} (ตอนนี้ ${state.rsi.toFixed(1)})`; }
-      if (r.type === 'rsi_below' && state.rsi !== null && state.rsi <= r.value) { hit = true; label = `RSI ลงต่ำกว่า ${r.value} (ตอนนี้ ${state.rsi.toFixed(1)})`; }
+      if (!r.active || !Number.isFinite(state.price)) continue;
+      const hit = (r.type === 'price_above' && state.price >= r.value) || (r.type === 'price_below' && state.price <= r.value);
       if (!hit) continue;
-      if (r.lastFired && Date.now() - r.lastFired < 60000) continue;
-      r.lastFired = Date.now();
-      if (r.once) r.active = false;
-      this.fire({ kind: 'rule', title: '🔔 กฎเตือนส่วนตัวทำงาน', body: `${label} · ราคาปัจจุบัน ${state.price.toFixed(2)}`, price: state.price });
+      r.active = false;   // เตือนครั้งเดียวพอ ราคาแกว่งรอบเส้นจะได้ไม่ดังรัว
+      this.fire({ kind: 'rule', title: '🔔 ราคาถึงระดับที่ตั้งไว้',
+        body: `${r.type === 'price_above' ? 'ขึ้นถึง' : 'ลงถึง'} ${r.value.toFixed(2)} · ราคาตอนนี้ ${state.price.toFixed(2)}`
+          + (r.note ? `\n${r.note}` : ''), price: state.price });
       this.save();
     }
   }

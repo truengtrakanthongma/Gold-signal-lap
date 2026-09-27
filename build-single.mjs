@@ -10,7 +10,7 @@
  */
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
-const ORDER = ['indicators', 'patterns', 'classic', 'levels', 'macro', 'signals', 'narrate', 'backtest', 'strategy', 'position', 'sources', 'chart', 'discord', 'alerts', 'feed', 'tour', 'glossary', 'instrument', 'news', 'newsfactor', 'learn', 'adapt', 'app'];
+const ORDER = ['indicators', 'macro', 'system', 'reference', 'position', 'sources', 'instrument', 'chart', 'discord', 'alerts', 'feed', 'app'];
 const IMPORT_RE = /^import\s+(?:\*\s+as\s+(\w+)|\{([^}]+)\})\s+from\s+['"]\.\/(\w+)\.js['"];?[ \t]*$/gm;
 const EXPORT_RE = /^export\s+(async\s+function|function|const|let|class)\s+(\w+)/gm;
 
@@ -133,13 +133,18 @@ try {
   const cur = JSON.parse(localStorage.getItem(k) || '{}');
   localStorage.setItem(k, JSON.stringify({ ...cur, source: 'demo' }));
 } catch (e) { /* โหมดส่วนตัวเขียน localStorage ไม่ได้ ก็ยังใช้ค่าเริ่มต้นได้ */ }
+/* ช่องเลือกแหล่งราคาถูกเติมตอนเปิดหน้าตั้งค่า — ล็อกทุกครั้งที่เปิด ไม่ใช่ครั้งเดียวตอนโหลดหน้า */
 addEventListener('DOMContentLoaded', () => {
-  const sel = document.getElementById('sourceSel');
-  if (!sel) return;
-  for (const o of sel.options) {
-    if (o.value !== 'demo') { o.disabled = true; o.textContent = o.textContent + ' — ใช้ในหน้านี้ไม่ได้'; }
-  }
-  sel.value = 'demo';
+  const btn = document.getElementById('btnSettings');
+  if (!btn) return;
+  btn.addEventListener('click', () => setTimeout(() => {
+    const sel = document.getElementById('setSource');
+    if (!sel) return;
+    for (const o of sel.options) {
+      if (o.value !== 'demo' && !o.disabled) { o.disabled = true; o.textContent = o.textContent + ' — ใช้ในหน้านี้ไม่ได้'; }
+    }
+    sel.value = 'demo';
+  }, 0));
 });
 </script>
 <script>
@@ -230,7 +235,7 @@ const tvPage = `<!DOCTYPE html>
 <body>
 <div class="wrap">
   <h1>ใส่ Gold Signal Lab ใน TradingView</h1>
-  <p class="sub">ได้ราคา XAUUSD จริงจากโบรกเกอร์คุณ ไม่มีโควตา ทดสอบย้อนหลังในตัว และแจ้งเตือนเข้ามือถือ</p>
+  <p class="sub">กติกาเดียวกับเว็บแอป — ตามเทรนด์กราฟรายวัน รอราคาย่อบนกราฟ 4 ชั่วโมง · ได้ราคา XAUUSD จริงจากโบรกเกอร์คุณ ทดสอบย้อนหลังในตัว และแจ้งเตือนเข้ามือถือ</p>
 
   <div class="copy-bar">
     <button class="copy" id="copyBtn">📋 คัดลอกโค้ดทั้งหมด (${pineLines} บรรทัด)</button>
@@ -254,7 +259,7 @@ const tvPage = `<!DOCTYPE html>
         • <b>Chrome</b> → จุดสามจุดมุมขวาบน → ติ๊ก <code>เว็บไซต์เดสก์ท็อป</code><br>
         • <b>Safari</b> → ไอคอน <code>ᴀA</code> ซ้ายช่อง URL → <code>ขอเว็บไซต์เดสก์ท็อป</code></li>
       <li>ไปที่ <a href="https://www.tradingview.com/chart/" target="_blank" rel="noopener">tradingview.com/chart</a> แล้วเข้าสู่ระบบ (สมัครฟรีได้)</li>
-      <li>ค้นหาสัญลักษณ์ <code>XAUUSD</code> แล้วเลือกกรอบเวลา <b>15 นาที</b></li>
+      <li>ค้นหาสัญลักษณ์ <code>XAUUSD</code> แล้วเลือกกรอบเวลา <b>4 ชั่วโมง</b> (4h)</li>
       <li>ล่างจอมีแถบ <b>Pine Editor</b> — แตะเพื่อกางขึ้นมา
         <div class="note">หมุนมือถือเป็น<b>แนวนอน</b>ตรงนี้จะง่ายขึ้นมาก</div></li>
       <li>ลบโค้ดตัวอย่างที่มีอยู่ให้หมด แล้ว<b>วาง</b>โค้ดที่คัดลอกมา</li>
@@ -268,7 +273,7 @@ const tvPage = `<!DOCTYPE html>
     <ol class="steps">
       <li>กดปุ่ม <b>คัดลอกโค้ดทั้งหมด</b> ข้างบน</li>
       <li>เปิด <a href="https://www.tradingview.com/chart/" target="_blank" rel="noopener">tradingview.com/chart</a> แล้วเข้าสู่ระบบ</li>
-      <li>ค้นหา <code>XAUUSD</code> เลือกกรอบเวลา <b>15 นาที</b></li>
+      <li>ค้นหา <code>XAUUSD</code> เลือกกรอบเวลา <b>4 ชั่วโมง</b> (4h)</li>
       <li>ล่างจอ กด <b>Pine Editor</b></li>
       <li>ลบโค้ดเดิมทั้งหมด แล้ววางโค้ดที่คัดลอกมา</li>
       <li>กด <b>Save</b> ตั้งชื่อ แล้วกด <b>Add to chart</b></li>
@@ -292,10 +297,13 @@ const tvPage = `<!DOCTYPE html>
     • <b>Total Closed Trades</b> — ต่ำกว่า 30 ไม้ ยังสรุปอะไรไม่ได้ ให้ถือว่าเป็นแค่ตัวอย่าง<br>
     • <b>Max Drawdown</b> — เคยติดลบลึกสุดเท่าไร ถ้าคุณทนไม่ไหว ก็ใช้ระบบนี้ไม่ได้ ต่อให้สุดท้ายมันกำไร
   </div>
+  <div class="note">
+    ผลที่ควรเห็นโดยประมาณ (ทดสอบบนทองจริง 2022-2025): ราว 3-4 ไม้ต่อเดือน · ชนะราว 45% · <b>Profit Factor ราว 1.5</b>
+    ถ้าผลบนโบรกเกอร์คุณต่างไปมาก ให้เช็คว่าใช้กราฟ <b>4 ชั่วโมง</b> และสัญลักษณ์ทองจริง (XAUUSD)
+  </div>
   <div class="note warn">
-    <b>ค่าเริ่มต้นเป็นค่ากลาง ๆ ไม่ได้จูนมาเพื่อทองคำโดยเฉพาะ</b>
-    ถ้าผลออกมาไม่ดี อย่าเพิ่งสรุปว่ากฎใช้ไม่ได้ — ลองปรับ <b>คะแนนขั้นต่ำ</b> และ <b>เป้าทำกำไร</b> ในหน้าตั้งค่าของสคริปต์ดูก่อน
-    และอย่าเชื่อค่าที่จูนจนสวยที่สุด เพราะนั่นคือการฟิตกับอดีต
+    <b>อย่าจูนค่าให้ผลสวยที่สุด</b> — ค่าตั้งต้นคือค่าที่ทดสอบแล้ว และทนต่อการเปลี่ยนค่า
+    การไล่ปรับจนกราฟกำไรสวยคือการฟิตกับอดีต ซึ่งมักพังทันทีที่ใช้จริง
   </div>
 
   <h2>โค้ดทั้งหมด</h2>

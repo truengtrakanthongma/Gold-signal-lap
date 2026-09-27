@@ -218,6 +218,20 @@ export class MarketFeed {
     throw new Error(`ลองครบทุกแหล่งแล้วยังโหลดไม่ได้ —\n${tried.join('\n')}`);
   }
 
+  /**
+   * โหลดจากแหล่งที่ระบุตรง ๆ โดยไม่ไล่หาแหล่งสำรอง
+   *
+   * ใช้หลังจาก loadHistory เลือกแหล่งที่ใช้ได้แล้ว — กรอบเวลาอื่นต้องมาจากเจ้าเดียวกัน
+   * ถ้าให้แต่ละกรอบไล่หาแหล่งเองอิสระ อาจได้กราฟรายวันจากเจ้าหนึ่งกับกราฟ 4 ชม. จากอีกเจ้า
+   * แล้วเอาราคาคนละตลาดมาเทียบกันโดยไม่มีใครรู้
+   */
+  async loadFrom(key, interval, limit = 700) {
+    if (key === 'demo') return this._demoHistory(interval, limit);
+    if (key === 'twelvedata') return this._tdHistory(interval, limit);
+    if (SOURCES[key]) return this._genericHistory(interval, limit, key);
+    return this._binanceHistory(interval, limit);
+  }
+
   /** ยิงคำขอไป Binance โดยสลับโฮสต์อัตโนมัติถ้าโฮสต์แรกใช้ไม่ได้ */
   async _binanceGet(path) {
     let lastErr;
